@@ -1,6 +1,8 @@
 # Development database for running the server and tests locally.
 #   docker compose -f dev/compose.yaml up -d
-#   export DATABASE_URL=postgres://parlour:parlour@localhost:54329/parlour
+#   export DATABASE_URL="postgres://parlour:parlour@localhost:54329/parlour?sslmode=disable"
+# (The server has no TLS; sslmode=disable avoids an intermittent "unexpected
+# response from SSLRequest" when sqlx tries TLS first.)
 services:
   postgres:
     image: postgres:18

@@ -62,20 +62,17 @@ impl CachedPage {
 /// rendered page anyway, so hashing it is cheap and is always exactly right,
 /// however many things the page depends on.
 pub fn etag_for(body: &[u8]) -> String {
-    // FNV-1a, 64 bit, twice with different offsets for 128 bits.
-    fn fnv(body: &[u8], offset: u64) -> u64 {
-        let mut hash = offset;
-        for byte in body {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        hash
+    use sha2::{Digest, Sha256};
+    // The first 128 bits of SHA-256: a cryptographic hash, so nobody can
+    // write a post that makes a page's new version share its old ETag.
+    let digest = Sha256::digest(body);
+    let mut etag = String::with_capacity(34);
+    etag.push('"');
+    for byte in &digest[..16] {
+        etag.push_str(&format!("{byte:02x}"));
     }
-    format!(
-        "\"{:016x}{:016x}\"",
-        fnv(body, 0xcbf2_9ce4_8422_2325),
-        fnv(body, 0x6c62_272e_07bb_0142)
-    )
+    etag.push('"');
+    etag
 }
 
 /// Proof that a render started at a particular moment; see the module docs.
@@ -422,5 +419,9 @@ mod tests {
         assert!(a.starts_with('"') && a.ends_with('"'));
         assert_eq!(a, etag_for(b"hello"));
         assert_ne!(a, etag_for(b"hellp"));
+        // A cryptographic hash, so a poster can't craft a page whose ETag
+        // matches an earlier version's and leave readers on the old one:
+        // the first 128 bits of SHA-256.
+        assert_eq!(a, "\"2cf24dba5fb0a30e26e83b2ac5b9e29e\"");
     }
 }
