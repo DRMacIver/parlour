@@ -680,6 +680,8 @@ async fn pages_have_no_inline_styles_or_scripts_and_set_no_cookies(pool: PgPool)
         assert!(!response.body.contains("<script"), "{path} has scripts");
         assert!(!response.headers.contains_key("set-cookie"), "{path}");
         assert!(response.body.contains("name=\"viewport\""), "{path}");
+        // Times are shown in UTC, and every page says so.
+        assert!(response.body.contains("All times are UTC"), "{path}");
     }
 }
 

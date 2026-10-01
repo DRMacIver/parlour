@@ -2,7 +2,8 @@
 //!
 //! Times are shown as absolute UTC dates rather than "today" or "5 minutes
 //! ago": anonymous pages are cached until something they show changes, and a
-//! relative time would go stale without anything changing.
+//! relative time would go stale without anything changing. The footer of
+//! every page says that times are UTC.
 
 use std::borrow::Borrow;
 
