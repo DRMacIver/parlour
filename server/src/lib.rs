@@ -1,4 +1,5 @@
 mod assets;
+pub mod cache;
 mod error;
 mod pages;
 mod settings;
