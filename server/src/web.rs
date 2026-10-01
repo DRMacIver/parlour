@@ -71,12 +71,14 @@ pub fn cacheable(template: &impl Template, deps: &Deps) -> Result<Response, AppE
 }
 
 /// A page whose URL holds a secret (a login, reset or verification
-/// token): the browser is told not to send the URL to anything the page
-/// links to.
+/// token): the browser is told not to send the URL to other sites.
+///
+/// Not `no-referrer`: with that policy browsers send `Origin: null` with
+/// the page's own form, which the CSRF check rightly refuses.
 pub fn secret_url(mut response: Response) -> Response {
     response
         .headers_mut()
-        .insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+        .insert(REFERRER_POLICY, HeaderValue::from_static("same-origin"));
     response
 }
 

@@ -1,8 +1,14 @@
-# Development database for running the server and tests locally.
+# Development services for running the server and tests locally: Postgres,
+# and Mailpit, which catches the email the server sends.
 #   docker compose -f dev/compose.yaml up -d
 #   export DATABASE_URL="postgres://parlour:parlour@localhost:54329/parlour?sslmode=disable"
 # (The server has no TLS; sslmode=disable avoids an intermittent "unexpected
 # response from SSLRequest" when sqlx tries TLS first.)
+#
+# To send email to Mailpit, also set
+#   PARLOUR_SMTP_HOST=localhost PARLOUR_SMTP_PORT=1025 PARLOUR_SMTP_SECURITY=none
+#   PARLOUR_MAIL_FROM="Parlour <forum@localhost>"
+# and read it at http://localhost:8025.
 services:
   postgres:
     image: postgres:18
@@ -14,5 +20,10 @@ services:
       - "127.0.0.1:54329:5432"
     volumes:
       - parlour-dev-pg:/var/lib/postgresql
+  mailpit:
+    image: axllent/mailpit:v1.31.3
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
 volumes:
   parlour-dev-pg:

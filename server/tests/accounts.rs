@@ -430,7 +430,7 @@ async fn magic_links_log_in_once(db: PgPool) {
         page.header(header::CACHE_CONTROL),
         Some(PRIVATE_CACHE_CONTROL)
     );
-    assert_eq!(page.header(header::REFERRER_POLICY), Some("no-referrer"));
+    assert_eq!(page.header(header::REFERRER_POLICY), Some("same-origin"));
     let path = link.split('?').next().unwrap();
     assert_eq!(hidden_field(&page.body, "next"), "/invites");
 
@@ -621,7 +621,7 @@ async fn resetting_a_password(db: PgPool) {
 
     let page = forum.get(&link).await;
     assert_eq!(page.status, StatusCode::OK);
-    assert_eq!(page.header(header::REFERRER_POLICY), Some("no-referrer"));
+    assert_eq!(page.header(header::REFERRER_POLICY), Some("same-origin"));
     let mismatch = forum
         .submit(
             &link,
@@ -825,7 +825,7 @@ async fn changing_email_takes_effect_when_the_new_address_is_confirmed(db: PgPoo
     );
     let page = forum.get(&link).await;
     assert_eq!(page.status, StatusCode::OK);
-    assert_eq!(page.header(header::REFERRER_POLICY), Some("no-referrer"));
+    assert_eq!(page.header(header::REFERRER_POLICY), Some("same-origin"));
     let confirmed = forum.submit(&link, &[], Some(&cookie)).await;
     assert_eq!(confirmed.location(), "/settings?done=verified");
     let settings = forum.page_as("/settings", &cookie).await;

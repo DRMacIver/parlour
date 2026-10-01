@@ -53,7 +53,7 @@ async fn setup_creates_the_admin_with_the_printed_token(db: PgPool) {
 
     let page = forum.get(&format!("/setup?token={token}")).await;
     assert_eq!(page.status, StatusCode::OK);
-    assert_eq!(page.header(header::REFERRER_POLICY), Some("no-referrer"));
+    assert_eq!(page.header(header::REFERRER_POLICY), Some("same-origin"));
     assert!(page.header(header::SET_COOKIE).is_none());
     assert_eq!(hidden_field(&page.body, "token"), token);
 
