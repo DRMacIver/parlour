@@ -1,0 +1,159 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT p.id, p.seq, p.created_at, p.edited_at,\n               (p.deleted_at IS NOT NULL) AS \"deleted!\", (p.hidden_at IS NOT NULL) AS \"hidden!\",\n               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.body_html END AS body_html,\n               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.author_id END AS author_id,\n               r.id AS \"reply_id?\", r.seq AS \"reply_seq?\",\n               ru.id AS \"reply_user_id?\", ru.username AS \"reply_username?\", ru.display_name AS \"reply_display_name?\"\n        FROM posts p\n        LEFT JOIN posts r ON r.id = p.reply_to_post_id\n        LEFT JOIN users ru ON ru.id = r.author_id AND r.deleted_at IS NULL AND r.hidden_at IS NULL\n        WHERE p.thread_id = $1 AND p.seq BETWEEN $2 AND $3\n        ORDER BY p.seq\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "seq",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "edited_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "edited_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "deleted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "hidden!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "body_html",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "author_id",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "reply_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "reply_seq?",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "reply_user_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "reply_username?",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "reply_display_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      null,
+      null,
+      null,
+      null,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "46efda2c1269090e219e3f5dbbf734609df8b8b13af367940b7e43faa0831981"
+}

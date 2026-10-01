@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE threads\n           SET last_seq = last_seq + 1, last_post_at = greatest(last_post_at, $2), version = version + 1\n           WHERE id = $1\n           RETURNING last_seq",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "last_seq",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "last_seq"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "782d76981fdc1f992ea752951c8ad0bb863ebba58de3b65551ac58e121a726b9"
+}

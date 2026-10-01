@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO settings (key, value) VALUES ('site_name', to_jsonb('The Tuesday Club'::text))\n             ON CONFLICT (key) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "17fdfdcdac0ad73e472dd2498274b9efac01f1a767327b8617c612b900dc05cf"
+}

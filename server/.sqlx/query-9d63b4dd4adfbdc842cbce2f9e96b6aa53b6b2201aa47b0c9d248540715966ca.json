@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE posts SET edited_at = created_at + interval '8 minutes' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9d63b4dd4adfbdc842cbce2f9e96b6aa53b6b2201aa47b0c9d248540715966ca"
+}

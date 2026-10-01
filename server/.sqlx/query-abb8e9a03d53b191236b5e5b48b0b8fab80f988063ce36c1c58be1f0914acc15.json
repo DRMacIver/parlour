@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.thread_id, p.author_id, t.category_id,\n                  (SELECT sp.thread_id FROM posts sp WHERE sp.id = t.forked_from_post_id) AS forked_from_thread_id\n           FROM posts p JOIN threads t ON t.id = p.thread_id\n           WHERE p.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "thread_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "author_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "author_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "category_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "category_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "forked_from_thread_id",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "abb8e9a03d53b191236b5e5b48b0b8fab80f988063ce36c1c58be1f0914acc15"
+}

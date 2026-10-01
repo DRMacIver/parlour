@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO threads (category_id, visibility, title, slug, author_id, forked_from_post_id,\n                                pinned, locked, created_at, last_post_at)\n           VALUES ($1, 'public', $2, $3, $4, $5, $6, $7, $8, $8)\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8",
+        "Bool",
+        "Bool",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "73419b99685708ce9941d3bd205b1b3e805a17e943be2c3c05d63aa1f764e623"
+}
