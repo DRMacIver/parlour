@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE jobs SET failed_at = now(), locked_until = NULL, last_error = $2, payload = $3\n                     WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0db3f0a8af27b648c0cb7a9fb73e03c83b6a2529f83ca4d627b2efd713f6ef97"
+}

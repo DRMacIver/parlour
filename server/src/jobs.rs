@@ -10,7 +10,8 @@
 //! (`locked_until`): if a worker dies mid-job, the job becomes due again
 //! when the lease runs out. A job that succeeds is deleted. One that fails
 //! is retried with exponential backoff until it has had `max_attempts`
-//! tries, and then kept with `failed_at` set for an admin to look at.
+//! tries, and then kept with `failed_at` set for an admin to look at, with
+//! anything secret removed from its payload ([`Jobs::scrub_on_failure`]).
 //!
 //! Handlers are registered by kind with [`Jobs::register`]. They must
 //! tolerate running more than once, since a lease can expire while a slow
@@ -40,10 +41,14 @@ const POLL: Duration = Duration::from_secs(5);
 pub type JobFuture = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>;
 type Handler = Arc<dyn Fn(AppState, Value) -> JobFuture + Send + Sync>;
 
+/// Rewrites the payload of a job that has failed for the last time.
+pub type Scrubber = fn(Value) -> Value;
+
 /// The registered job kinds and the signal that wakes workers.
 #[derive(Default)]
 pub struct Jobs {
     handlers: RwLock<HashMap<String, Handler>>,
+    scrubbers: RwLock<HashMap<String, Scrubber>>,
     notify: Notify,
 }
 
@@ -59,6 +64,24 @@ impl Jobs {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .insert(kind.to_owned(), handler);
+    }
+
+    /// Has jobs of `kind` that fail for the last time keep only what
+    /// `scrub` leaves of their payload, for payloads holding secrets that
+    /// shouldn't outlive the job's purpose.
+    pub fn scrub_on_failure(&self, kind: &str, scrub: Scrubber) {
+        self.scrubbers
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(kind.to_owned(), scrub);
+    }
+
+    fn scrubber(&self, kind: &str) -> Option<Scrubber> {
+        self.scrubbers
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(kind)
+            .copied()
     }
 
     fn handler(&self, kind: &str) -> Option<Handler> {
@@ -157,7 +180,7 @@ pub async fn run_next(state: &AppState) -> sqlx::Result<Option<Outcome>> {
             job.kind
         )),
         Some(handler) => {
-            match tokio::time::timeout(TIMEOUT, handler(state.clone(), job.payload)).await {
+            match tokio::time::timeout(TIMEOUT, handler(state.clone(), job.payload.clone())).await {
                 Ok(result) => result,
                 Err(_) => Err(anyhow::anyhow!("timed out after {TIMEOUT:?}")),
             }
@@ -175,10 +198,16 @@ pub async fn run_next(state: &AppState) -> sqlx::Result<Option<Outcome>> {
             let error = format!("{err:#}");
             if attempts >= job.max_attempts {
                 tracing::error!(job = job.id, kind = job.kind, %error, "job failed for the last time");
+                let payload = match state.jobs().scrubber(&job.kind) {
+                    Some(scrub) => scrub(job.payload),
+                    None => job.payload,
+                };
                 sqlx::query!(
-                    "UPDATE jobs SET failed_at = now(), locked_until = NULL, last_error = $2 WHERE id = $1",
+                    "UPDATE jobs SET failed_at = now(), locked_until = NULL, last_error = $2, payload = $3
+                     WHERE id = $1",
                     job.id,
                     error,
+                    payload,
                 )
                 .execute(db)
                 .await?;

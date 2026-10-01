@@ -3,6 +3,11 @@
 //! URL-safe base64. Only a SHA-256 of each is stored, so a copy of the
 //! database can't be used to log in or redeem anything; the secrets have
 //! enough entropy that a fast hash is enough.
+//!
+//! The one exception is email waiting to be sent: a queued email holds its
+//! link in plain text until it is sent, or until it has failed for the
+//! last time (about an hour of retries), when the link is removed. See
+//! [`crate::mail::scrub`].
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

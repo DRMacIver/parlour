@@ -75,6 +75,7 @@ impl AppState {
     pub fn with_cache(db: PgPool, cache: PageCache) -> Self {
         let jobs = Jobs::default();
         jobs.register(mail::JOB_KIND, mail::run_job);
+        jobs.scrub_on_failure(mail::JOB_KIND, mail::scrub);
         AppState {
             db,
             cache: Arc::new(cache),

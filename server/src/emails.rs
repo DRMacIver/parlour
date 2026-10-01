@@ -26,6 +26,7 @@ pub fn invite(to: &str, site_name: &str, inviter: &str, url: &str, expires: &str
         }
         .render()
         .expect("email templates render"),
+        secret: true,
     }
 }
 
@@ -48,6 +49,7 @@ pub fn verify(to: &str, site_name: &str, name: &str, url: &str) -> Email {
         }
         .render()
         .expect("email templates render"),
+        secret: true,
     }
 }
 
@@ -72,6 +74,7 @@ pub fn magic_link(to: &str, site_name: &str, name: &str, url: &str, code: &str) 
         }
         .render()
         .expect("email templates render"),
+        secret: true,
     }
 }
 
@@ -94,6 +97,7 @@ pub fn reset(to: &str, site_name: &str, name: &str, url: &str) -> Email {
         }
         .render()
         .expect("email templates render"),
+        secret: true,
     }
 }
 
@@ -117,6 +121,7 @@ pub fn join(to: &str, site_name: &str, name: &str, url: &str) -> Email {
         }
         .render()
         .expect("email templates render"),
+        secret: true,
     }
 }
 
@@ -170,6 +175,7 @@ pub fn already_member(
         }
         .render()
         .expect("email templates render"),
+        secret: false,
     }
 }
 
@@ -186,6 +192,7 @@ pub fn test(to: &str, site_name: &str) -> Email {
         body: TestText { site_name }
             .render()
             .expect("email templates render"),
+        secret: false,
     }
 }
 
@@ -217,5 +224,35 @@ mod tests {
         );
         assert!(!email.subject.contains("012345"));
         assert!(email.body.contains("012345"));
+    }
+
+    /// Emails with links that work like passwords say so, so that the job
+    /// queue doesn't keep them once they can't be sent.
+    #[test]
+    fn emails_with_live_links_are_secret() {
+        let url = "https://x/y";
+        for email in [
+            invite("a@x", "Club", "Ruth", url, "today"),
+            verify("a@x", "Club", "Ruth", url),
+            magic_link("a@x", "Club", "Ruth", url, "012345"),
+            reset("a@x", "Club", "Ruth", url),
+            join("a@x", "Club", "Ruth", url),
+        ] {
+            assert!(email.secret, "{}", email.subject);
+        }
+        for email in [
+            already_member(
+                "a@x",
+                "Club",
+                "Ruth",
+                "ruth",
+                AlreadyMember::Joining,
+                url,
+                url,
+            ),
+            test("a@x", "Club"),
+        ] {
+            assert!(!email.secret, "{}", email.subject);
+        }
     }
 }

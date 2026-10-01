@@ -116,6 +116,12 @@ pub struct Email {
     pub to: String,
     pub subject: String,
     pub body: String,
+    /// Whether the body holds something that works like a password: a link
+    /// that logs in, resets a password, confirms an address or joins. The
+    /// database otherwise holds only hashes of these, so such an email is
+    /// kept only while it might still be sent (see [`scrub`]).
+    #[serde(default)]
+    pub secret: bool,
 }
 
 /// Where email goes: an SMTP server, or (in tests) a list in memory.
@@ -146,6 +152,25 @@ pub async fn queue(db: &mut PgConnection, email: &Email) -> sqlx::Result<()> {
     let payload = serde_json::to_value(email).expect("emails serialise");
     jobs::enqueue(db, JOB_KIND, &payload).await?;
     Ok(())
+}
+
+/// What a failed email job keeps: everything but the body of an email with
+/// a secret in it. Registered with [`crate::jobs::Jobs::scrub_on_failure`].
+///
+/// While an email waits to be sent (retries take about an hour in all),
+/// its job does hold the link, as plain text in `jobs.payload`; a copy of
+/// the database taken then could use it until the link expires.
+pub fn scrub(payload: serde_json::Value) -> serde_json::Value {
+    match serde_json::from_value::<Email>(payload.clone()) {
+        Ok(email) if email.secret => serde_json::to_value(Email {
+            body: "(Removed: it held a link that could be used to log in, reset a password, \
+                   confirm an address or join, and couldn't be sent.)"
+                .to_owned(),
+            ..email
+        })
+        .expect("emails serialise"),
+        _ => payload,
+    }
 }
 
 /// The job handler for queued emails.

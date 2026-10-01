@@ -272,6 +272,7 @@ async fn queued_email_is_sent_over_smtp(db: PgPool) {
         to: "ruth@example.com".into(),
         subject: "Hello there".into(),
         body: "A message for Ruth.".into(),
+        secret: false,
     };
     let mut conn = db.acquire().await.unwrap();
     mail::queue(&mut conn, &email).await.unwrap();
@@ -314,6 +315,7 @@ async fn saved_smtp_settings_take_precedence(db: PgPool) {
             to: "ruth@example.com".into(),
             subject: "Hi".into(),
             body: "Hi".into(),
+            secret: false,
         },
     )
     .await
@@ -341,6 +343,7 @@ async fn email_is_retried_when_the_server_is_unreachable(db: PgPool) {
             to: "ruth@example.com".into(),
             subject: "Hi".into(),
             body: "Hi".into(),
+            secret: false,
         },
     )
     .await
@@ -362,6 +365,7 @@ async fn without_an_smtp_server_email_waits(db: PgPool) {
             to: "ruth@example.com".into(),
             subject: "Hi".into(),
             body: "Hi".into(),
+            secret: false,
         },
     )
     .await
@@ -372,4 +376,49 @@ async fn without_an_smtp_server_email_waits(db: PgPool) {
         "{outcomes:?}"
     );
     assert!(matches!(state.mailer(), Mailer::Smtp));
+}
+
+/// Session tokens, login tokens and invite codes are stored only as
+/// hashes, so a copy of the database can't be used to log in or join. An
+/// email holding such a link is kept in the queue only while it might
+/// still be sent: once it has failed for the last time, the link is
+/// removed. Other failed emails are kept whole for an admin to look at.
+#[sqlx::test]
+async fn failed_emails_dont_keep_their_secrets(db: PgPool) {
+    let state = AppState::new(db.clone());
+    let link = "http://localhost:8080/reset/SECRETSECRETSECRETSECRETSECRETSECRETSECRET1";
+    let mut conn = db.acquire().await.unwrap();
+    mail::queue(
+        &mut conn,
+        &parlour::emails::reset("ruth@example.com", "Club", "Ruth", link),
+    )
+    .await
+    .unwrap();
+    mail::queue(
+        &mut conn,
+        &parlour::emails::test("ruth@example.com", "Club"),
+    )
+    .await
+    .unwrap();
+    let mut failed = 0;
+    for _ in 0..20 {
+        fast_forward(&db).await;
+        for outcome in jobs::run_due(&state).await.unwrap() {
+            if matches!(outcome, Outcome::Failed { .. }) {
+                failed += 1;
+            }
+        }
+    }
+    assert_eq!(failed, 2);
+    let payloads: Vec<serde_json::Value> =
+        sqlx::query_scalar("SELECT payload FROM jobs WHERE failed_at IS NOT NULL ORDER BY id")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert_eq!(payloads.len(), 2);
+    let reset = payloads[0].to_string();
+    assert!(!reset.contains("SECRET"), "{reset}");
+    assert!(reset.contains("ruth@example.com"));
+    let test = payloads[1].to_string();
+    assert!(test.contains("Test email"), "{test}");
 }
