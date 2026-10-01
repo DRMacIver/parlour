@@ -16,7 +16,7 @@ Items marked **[proposal]** are choices I made while drafting this document that
 
 ### v1
 
-- Categories with three visibility levels: public, members-only, and restricted to groups.
+- A flat list of categories with three visibility levels: public, members-only, and restricted to groups. Categories can optionally be grouped under **sections**: headings on the index page with no permissions or threads of their own. There are no subforums.
 - Flat, chronological, paginated threads, with a stable permalink for every post.
 - Markdown posts with a preview; editing and deleting your own posts.
 - Replying with a quote, which records an "in reply to" link to the quoted post.
@@ -166,7 +166,8 @@ users(id, username UNIQUE citext, display_name, email UNIQUE citext, email_verif
       dm_policy, email_prefs jsonb, created_at, deleted_at?)
 groups(id, slug, name, description)
 group_members(group_id, user_id, added_by, added_at)
-categories(id, slug, name, description, position, read_level, write_level, version)
+sections(id, name, position)                  -- display-only headings on the index
+categories(id, section_id?, slug, name, description, position, read_level, write_level, version)
 category_groups(category_id, group_id, access {read, write})
 threads(id, category_id?, visibility, title, slug, author_id, forked_from_post_id?,
         last_seq, last_post_at, pinned, locked, deleted_at?, version, created_at)
@@ -332,7 +333,6 @@ research/      background research
 ## 14. Open questions
 
 1. Which **[proposal]** items do you want to change?
-2. **Category layout:** a flat list, a flat list with optional display-only sections, or real subforums? (Recommendation: a flat list with optional sections.)
-3. **Name:** "forumal" is a placeholder. Choose a real name before the first public release.
+2. **Name:** "forumal" is a placeholder. Choose a real name before the first public release.
 
-Resolved: no signatures, but a customisable post-info column; no time limit on editing; edit history in v1.
+Resolved: a flat category list with optional sections; no signatures, but a customisable post-info column; no time limit on editing; edit history in v1.
