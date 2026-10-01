@@ -567,6 +567,7 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
 .member-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 8px 14px; border-top: 1px solid var(--rule); }
 .member-list li:first-child { border-top: none; }
 .created-invites li { margin: 6px 0; }
+.notice .created-invites { padding-left: 0; }
 
 .avatar-tiny { --avatar-size: 28px; font-size: 15px; margin: 0; }
 .avatar-large { --avatar-size: 96px; font-size: 46px; margin: 0; }
