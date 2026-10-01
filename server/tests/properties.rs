@@ -6,9 +6,12 @@
 //!
 //! - every page served through the anonymous cache is identical to the same
 //!   page rendered fresh, so invalidation never leaves a stale page behind;
-//! - no anonymous page contains text from anything that isn't public,
-//!   judged by a reference permission function written separately here, and
-//!   every public post can be found on the page its number says.
+//! - no page contains text from anything its viewer may not read, judged
+//!   by a reference permission function written separately here, and
+//!   every post the viewer may read can be found on the page its number
+//!   says. This is checked for anonymous visitors, a logged-in member and a
+//!   moderator; while the logged-in viewers browse, anonymous pages must
+//!   still show only public content, so nothing leaks through the cache.
 
 mod common;
 
@@ -28,6 +31,23 @@ use sqlx::PgPool;
 use tokio::runtime::Handle;
 
 const LEVELS: [&str; 3] = ["public", "members", "groups"];
+
+/// Who is looking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Who {
+    Anonymous,
+    Member,
+    Staff,
+}
+
+/// What a run checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    /// Cached pages match freshly rendered ones.
+    Coherence,
+    /// Pages show exactly what this viewer may see.
+    Visibility(Who),
+}
 
 struct CategoryModel {
     id: i64,
@@ -66,12 +86,14 @@ struct World {
     /// Every token ever used, including ones edited or renamed away.
     all_tokens: Vec<String>,
     next_token: u32,
-    /// Check cache coherence (true) or anonymous visibility (false).
-    coherence: bool,
+    mode: Mode,
+    /// Session cookies for the logged-in viewers.
+    member_cookie: String,
+    staff_cookie: String,
 }
 
 impl World {
-    fn new(rt: Handle, db: PgPool, coherence: bool) -> World {
+    fn new(rt: Handle, db: PgPool, mode: Mode) -> World {
         rt.block_on(async {
             sqlx::raw_sql(
                 "TRUNCATE settings, posts, threads, categories, sections, users RESTART IDENTITY CASCADE",
@@ -96,7 +118,9 @@ impl World {
             posts: Vec::new(),
             all_tokens: Vec::new(),
             next_token: 0,
-            coherence,
+            mode,
+            member_cookie: String::new(),
+            staff_cookie: String::new(),
         };
         for name in ["ruth", "jonah", "maya"] {
             let id = world
@@ -111,6 +135,28 @@ impl World {
                 ))
                 .unwrap();
             world.users.push(id);
+        }
+        // Viewers who log in. They write nothing, so they don't appear on
+        // any page.
+        for (name, role) in [("viewer", "user"), ("watcher", "moderator")] {
+            let id = world
+                .block(store::create_user(
+                    &world.cached.db,
+                    &NewUser {
+                        username: name.into(),
+                        display_name: common::capitalise(name),
+                        email: format!("{name}@example.com"),
+                        role: Some(role.into()),
+                        ..NewUser::default()
+                    },
+                ))
+                .unwrap();
+            let cookie = world.block(world.cached.session(id));
+            if role == "user" {
+                world.member_cookie = cookie;
+            } else {
+                world.staff_cookie = cookie;
+            }
         }
         for level in ["public", "public", "members", "groups"] {
             world.add_category(level);
@@ -195,45 +241,62 @@ impl World {
 
     // -- The reference permission function, independent of the app's SQL.
 
-    fn category_public(&self, category: usize) -> bool {
-        self.categories[category].read_level == "public"
+    /// DESIGN.md §3.1: anyone reads public categories, members also read
+    /// members-only ones, and staff read everything. (Group membership
+    /// arrives in M5; until then only staff read group categories.)
+    fn category_readable(&self, category: usize, who: Who) -> bool {
+        matches!(
+            (self.categories[category].read_level, who),
+            ("public", _) | ("members", Who::Member | Who::Staff) | (_, Who::Staff)
+        )
     }
 
-    fn thread_public(&self, thread: usize) -> bool {
+    fn thread_readable(&self, thread: usize, who: Who) -> bool {
         let t = &self.threads[thread];
-        !t.deleted && self.category_public(t.category)
+        !t.deleted && self.category_readable(t.category, who)
     }
 
-    fn post_public(&self, post: usize) -> bool {
+    fn post_readable(&self, post: usize, who: Who) -> bool {
         let p = &self.posts[post];
-        !p.deleted && !p.hidden && self.thread_public(p.thread)
+        !p.deleted && !p.hidden && self.thread_readable(p.thread, who)
     }
 
-    /// Tokens an anonymous visitor may see somewhere.
-    fn visible_tokens(&self) -> BTreeSet<&str> {
+    /// Tokens this viewer may see somewhere.
+    fn visible_tokens(&self, who: Who) -> BTreeSet<&str> {
         let mut tokens = BTreeSet::new();
         for (i, c) in self.categories.iter().enumerate() {
-            if self.category_public(i) {
+            if self.category_readable(i, who) {
                 tokens.insert(c.token.as_str());
             }
         }
         for (i, t) in self.threads.iter().enumerate() {
-            if self.thread_public(i) {
+            if self.thread_readable(i, who) {
                 tokens.insert(t.title_token.as_str());
             }
         }
         for (i, p) in self.posts.iter().enumerate() {
-            if self.post_public(i) {
+            if self.post_readable(i, who) {
                 tokens.insert(p.body_token.as_str());
             }
         }
         tokens
     }
 
-    fn paths(&self) -> Vec<String> {
-        let mut paths = vec!["/".to_owned()];
+    fn cookie(&self, who: Who) -> Option<&str> {
+        match who {
+            Who::Anonymous => None,
+            Who::Member => Some(&self.member_cookie),
+            Who::Staff => Some(&self.staff_cookie),
+        }
+    }
+
+    fn paths(&self, who: Who) -> Vec<String> {
+        let mut paths = vec!["/".to_owned(), "/users/tree".to_owned()];
+        for name in ["ruth", "jonah", "maya"] {
+            paths.push(format!("/u/{name}"));
+        }
         let visible_threads = (0..self.threads.len())
-            .filter(|&t| self.thread_public(t))
+            .filter(|&t| self.thread_readable(t, who))
             .count() as i64;
         for page in 1..=page_count(visible_threads, THREADS_PER_PAGE) + 1 {
             paths.push(page_href("/latest", page));
@@ -269,16 +332,26 @@ impl World {
         self.block(forum.get(path))
     }
 
+    fn get_as(&self, who: Who, path: &str) -> Response {
+        self.block(self.cached.get_as(path, self.cookie(who)))
+    }
+
     fn check(&self) {
-        if self.coherence {
-            self.check_coherence();
-        } else {
-            self.check_visibility();
+        match self.mode {
+            Mode::Coherence => self.check_coherence(),
+            Mode::Visibility(who) => {
+                self.check_visibility(who);
+                if who != Who::Anonymous {
+                    // Logged-in browsing never leaks into what the anonymous
+                    // cache serves.
+                    self.check_visibility(Who::Anonymous);
+                }
+            }
         }
     }
 
     fn check_coherence(&self) {
-        for path in self.paths() {
+        for path in self.paths(Who::Anonymous) {
             let cached = self.get(&self.cached, &path);
             let fresh = self.get(&self.fresh, &path);
             assert_eq!(cached.status, fresh.status, "{path}");
@@ -296,24 +369,32 @@ impl World {
         }
     }
 
-    fn check_visibility(&self) {
-        let visible = self.visible_tokens();
+    fn check_visibility(&self, who: Who) {
+        let visible = self.visible_tokens(who);
         let forbidden: Vec<&String> = self
             .all_tokens
             .iter()
             .filter(|t| !visible.contains(t.as_str()))
             .collect();
-        for path in self.paths() {
-            let response = self.get(&self.cached, &path);
+        for path in self.paths(who) {
+            let response = self.get_as(who, &path);
             assert!(
                 !response
                     .headers
-                    .contains_key(axum::http::header::SET_COOKIE)
+                    .contains_key(axum::http::header::SET_COOKIE),
+                "{who:?} {path}"
             );
+            if who != Who::Anonymous {
+                assert_eq!(
+                    response.header(axum::http::header::CACHE_CONTROL),
+                    Some(parlour::http_cache::PRIVATE_CACHE_CONTROL),
+                    "{path}"
+                );
+            }
             for token in &forbidden {
                 assert!(
                     !response.body.contains(token.as_str()),
-                    "{path} shows {token}:\n{}",
+                    "{path} shows {token} to {who:?}:\n{}",
                     response.body
                 );
             }
@@ -321,8 +402,8 @@ impl World {
         // Visible things can be found where they should be, and invisible
         // things are not found at all.
         for (i, t) in self.threads.iter().enumerate() {
-            let response = self.get(&self.cached, &format!("/t/{}/{}", t.id, self.slug_of(t)));
-            if self.thread_public(i) {
+            let response = self.get_as(who, &format!("/t/{}/{}", t.id, self.slug_of(t)));
+            if self.thread_readable(i, who) {
                 assert_eq!(response.status, StatusCode::OK);
                 assert!(response.body.contains(&t.title_token));
             } else {
@@ -330,8 +411,8 @@ impl World {
             }
         }
         for (i, p) in self.posts.iter().enumerate() {
-            let permalink = self.get(&self.cached, &format!("/p/{}", p.id));
-            if !self.thread_public(p.thread) {
+            let permalink = self.get_as(who, &format!("/p/{}", p.id));
+            if !self.thread_readable(p.thread, who) {
                 assert_eq!(permalink.status, StatusCode::NOT_FOUND);
                 continue;
             }
@@ -343,10 +424,8 @@ impl World {
                 format!("/t/{}/{}?page={page}#p{}", t.id, self.slug_of(t), p.id)
             };
             assert_eq!(permalink.location(), expected);
-            if self.post_public(i) {
-                let body = self
-                    .get(&self.cached, expected.split('#').next().unwrap())
-                    .body;
+            if self.post_readable(i, who) {
+                let body = self.get_as(who, expected.split('#').next().unwrap()).body;
                 assert!(
                     body.contains(&p.body_token),
                     "post {} missing from {expected}",
@@ -355,8 +434,8 @@ impl World {
             }
         }
         for (i, c) in self.categories.iter().enumerate() {
-            let response = self.get(&self.cached, &format!("/c/{}", c.slug));
-            let expected = if self.category_public(i) {
+            let response = self.get_as(who, &format!("/c/{}", c.slug));
+            let expected = if self.category_readable(i, who) {
                 StatusCode::OK
             } else {
                 StatusCode::NOT_FOUND
@@ -595,8 +674,15 @@ impl World {
     /// something to invalidate.
     #[rule]
     fn warm(&mut self, _: TestCase) {
-        for path in self.paths() {
+        for path in self.paths(Who::Anonymous) {
             self.get(&self.cached, &path);
+        }
+        if let Mode::Visibility(who) = self.mode
+            && who != Who::Anonymous
+        {
+            for path in self.paths(who) {
+                self.get_as(who, &path);
+            }
         }
     }
 
@@ -621,26 +707,49 @@ impl<F: Future<Output = Result<T, sqlx::Error>>, T> AwaitBlocking for F {
 }
 
 #[hegel::standalone_function(test_cases = 100)]
-fn run_machine(tc: TestCase, rt: &Handle, db: &PgPool, coherence: bool) {
-    let world = World::new(rt.clone(), db.clone(), coherence);
+fn run_machine(tc: TestCase, rt: &Handle, db: &PgPool, mode: Mode) {
+    let world = World::new(rt.clone(), db.clone(), mode);
     hegel::stateful::machine(world).steps(25).run(tc);
 }
 
-async fn run_in_blocking_thread(pool: PgPool, coherence: bool) {
+#[hegel::standalone_function(test_cases = 50)]
+fn run_machine_briefly(tc: TestCase, rt: &Handle, db: &PgPool, mode: Mode) {
+    let world = World::new(rt.clone(), db.clone(), mode);
+    hegel::stateful::machine(world).steps(25).run(tc);
+}
+
+async fn run_in_blocking_thread(pool: PgPool, mode: Mode) {
     let rt = Handle::current();
-    tokio::task::spawn_blocking(move || run_machine(&rt, &pool, coherence))
-        .await
-        .unwrap();
+    tokio::task::spawn_blocking(move || match mode {
+        Mode::Visibility(Who::Member | Who::Staff) => run_machine_briefly(&rt, &pool, mode),
+        _ => run_machine(&rt, &pool, mode),
+    })
+    .await
+    .unwrap();
 }
 
 /// Cached pages always match freshly rendered ones.
 #[sqlx::test]
 async fn cache_is_coherent(pool: PgPool) {
-    run_in_blocking_thread(pool, true).await;
+    run_in_blocking_thread(pool, Mode::Coherence).await;
 }
 
 /// Anonymous pages show exactly what the reference function allows.
 #[sqlx::test]
 async fn anonymous_pages_show_only_public_content(pool: PgPool) {
-    run_in_blocking_thread(pool, false).await;
+    run_in_blocking_thread(pool, Mode::Visibility(Who::Anonymous)).await;
+}
+
+/// A logged-in member sees public and members-only content and nothing
+/// else, and their browsing never reaches anonymous visitors.
+#[sqlx::test]
+async fn members_see_only_what_members_may(pool: PgPool) {
+    run_in_blocking_thread(pool, Mode::Visibility(Who::Member)).await;
+}
+
+/// Staff see every category, and their browsing never reaches anonymous
+/// visitors either.
+#[sqlx::test]
+async fn staff_see_every_category(pool: PgPool) {
+    run_in_blocking_thread(pool, Mode::Visibility(Who::Staff)).await;
 }

@@ -638,3 +638,307 @@ async fn profile_post_counts_depend_on_who_is_looking(db: PgPool) {
     let member = forum.page_as("/u/ruth", &cookie).await;
     assert!(member.contains("<dt>Posts</dt><dd>2</dd>"));
 }
+
+// ---------------------------------------------------------------------------
+// A model of invites, checked against random histories
+
+mod model {
+    use super::common::Forum;
+    use hegel::TestCase;
+    use hegel::generators as gs;
+    use parlour::invites::{self, InviteStatus, NewInvite, RedeemError, Registration};
+    use parlour::viewer::UserCtx;
+    use sqlx::PgPool;
+    use tokio::runtime::Handle;
+
+    #[derive(Clone, Debug)]
+    struct Invite {
+        id: i64,
+        code: String,
+        creator: usize,
+        email: Option<String>,
+        max_uses: i32,
+        uses: i32,
+        revoked: bool,
+        expired: bool,
+    }
+
+    impl Invite {
+        fn status(&self) -> InviteStatus {
+            if self.revoked {
+                InviteStatus::Revoked
+            } else if self.uses >= self.max_uses {
+                InviteStatus::Used
+            } else if self.expired {
+                InviteStatus::Expired
+            } else {
+                InviteStatus::Valid
+            }
+        }
+    }
+
+    pub struct World {
+        rt: Handle,
+        forum: Forum,
+        /// An admin and two ordinary members, who make the invites.
+        creators: Vec<UserCtx>,
+        invites: Vec<Invite>,
+        /// (username, email) of everyone, lowercased.
+        taken: Vec<(String, String)>,
+        /// Who joined, with the invite they used.
+        joined: Vec<(i64, usize)>,
+        closed: bool,
+    }
+
+    const USERNAMES: &[&str] = &["alex", "Alex", "bea", "cal", "dee", "ruth"];
+    const EMAILS: &[&str] = &[
+        "a@x.example",
+        "A@X.example",
+        "b@x.example",
+        "c@x.example",
+        "ruth@example.com",
+    ];
+
+    impl World {
+        pub fn new(rt: Handle, db: PgPool) -> World {
+            let forum = Forum::new(db);
+            let creators = rt.block_on(async {
+                sqlx::raw_sql("TRUNCATE settings, users RESTART IDENTITY CASCADE")
+                    .execute(&forum.db)
+                    .await
+                    .unwrap();
+                let mut creators = Vec::new();
+                for (name, role) in [("sam", "admin"), ("ruth", "user"), ("jonah", "user")] {
+                    let id = forum.member(name, role, None).await;
+                    let cookie = forum.session(id).await;
+                    let token = cookie.trim_start_matches("parlour_session=");
+                    creators.push(
+                        parlour::sessions::lookup(&forum.db, token)
+                            .await
+                            .unwrap()
+                            .unwrap(),
+                    );
+                }
+                creators
+            });
+            let taken = creators
+                .iter()
+                .map(|c| (c.username.to_lowercase(), c.email.to_lowercase()))
+                .collect();
+            World {
+                rt,
+                forum,
+                creators,
+                invites: Vec::new(),
+                taken,
+                joined: Vec::new(),
+                closed: false,
+            }
+        }
+
+        fn pending(&self, creator: usize) -> usize {
+            self.invites
+                .iter()
+                .filter(|i| i.creator == creator && i.status() == InviteStatus::Valid)
+                .count()
+        }
+
+        fn email_taken(&self, email: &str) -> bool {
+            self.taken.iter().any(|(_, e)| e == &email.to_lowercase())
+        }
+    }
+
+    #[hegel::state_machine]
+    impl World {
+        #[rule]
+        fn create_invite(&mut self, tc: TestCase) {
+            let creator = tc.draw(gs::integers::<usize>().max_value(2));
+            let staff = creator == 0;
+            let email = if tc.draw(gs::booleans()) {
+                Some(tc.draw(gs::sampled_from(EMAILS.to_vec())).to_owned())
+            } else {
+                None
+            };
+            let max_uses = if staff && email.is_none() {
+                tc.draw(gs::integers::<i32>().min_value(1).max_value(3))
+            } else {
+                1
+            };
+            let new = NewInvite {
+                email: email.clone(),
+                note: String::new(),
+                expires_in_days: 7,
+                max_uses,
+                grant_group_ids: Vec::new(),
+            };
+            let result = self
+                .rt
+                .block_on(invites::create(
+                    &self.forum.state,
+                    &self.creators[creator],
+                    &new,
+                ))
+                .unwrap();
+            let expected_ok = (staff || !self.closed)
+                && !email.as_deref().is_some_and(|e| self.email_taken(e))
+                && (staff || self.pending(creator) < invites::MAX_PENDING as usize);
+            assert_eq!(result.is_ok(), expected_ok, "{result:?}");
+            if let Ok(created) = result {
+                self.invites.push(Invite {
+                    id: created.id,
+                    code: created.code,
+                    creator,
+                    email,
+                    max_uses,
+                    uses: 0,
+                    revoked: false,
+                    expired: false,
+                });
+            }
+        }
+
+        #[rule]
+        fn redeem(&mut self, tc: TestCase) {
+            tc.assume(!self.invites.is_empty());
+            let index = tc.draw(gs::integers::<usize>().max_value(self.invites.len() - 1));
+            let username = tc.draw(gs::sampled_from(USERNAMES.to_vec())).to_owned();
+            let typed_email = tc.draw(gs::sampled_from(EMAILS.to_vec())).to_owned();
+            let invite = self.invites[index].clone();
+            let registration = Registration {
+                username: username.clone(),
+                display_name: "Newcomer".into(),
+                email: typed_email.clone(),
+                password: None,
+            };
+            let result = self
+                .rt
+                .block_on(invites::redeem(
+                    &self.forum.state,
+                    &invite.code,
+                    &registration,
+                ))
+                .unwrap();
+            let email = invite.email.clone().unwrap_or(typed_email);
+            let username_taken = self
+                .taken
+                .iter()
+                .any(|(u, _)| u == &username.to_lowercase());
+            match result {
+                Err(RedeemError::Closed) => assert!(self.closed),
+                Err(RedeemError::Unusable(status)) => {
+                    assert!(!self.closed);
+                    assert_ne!(invite.status(), InviteStatus::Valid);
+                    assert_eq!(status, invite.status());
+                }
+                Err(RedeemError::Invalid(problems)) => {
+                    assert!(!self.closed && invite.status() == InviteStatus::Valid);
+                    assert!(username_taken || self.email_taken(&email), "{problems:?}");
+                }
+                Err(RedeemError::NotFound) => panic!("invite {} not found", invite.id),
+                Ok(joined) => {
+                    assert!(!self.closed && invite.status() == InviteStatus::Valid);
+                    assert!(!username_taken && !self.email_taken(&email));
+                    assert_eq!(joined.invite_id, invite.id);
+                    assert_eq!(joined.email_verified, invite.email.is_some());
+                    self.invites[index].uses += 1;
+                    self.taken
+                        .push((username.to_lowercase(), email.to_lowercase()));
+                    self.joined.push((joined.user_id, index));
+                }
+            }
+        }
+
+        #[rule]
+        fn revoke(&mut self, tc: TestCase) {
+            tc.assume(!self.invites.is_empty());
+            let index = tc.draw(gs::integers::<usize>().max_value(self.invites.len() - 1));
+            let actor = tc.draw(gs::integers::<usize>().max_value(2));
+            let revoked = self
+                .rt
+                .block_on(invites::revoke(
+                    &self.forum.db,
+                    &self.creators[actor],
+                    self.invites[index].id,
+                ))
+                .unwrap();
+            let allowed = actor == 0 || actor == self.invites[index].creator;
+            assert_eq!(revoked, allowed);
+            if allowed {
+                self.invites[index].revoked = true;
+            }
+        }
+
+        #[rule]
+        fn expire(&mut self, tc: TestCase) {
+            tc.assume(!self.invites.is_empty());
+            let index = tc.draw(gs::integers::<usize>().max_value(self.invites.len() - 1));
+            self.rt.block_on(self.forum.exec(&format!(
+                "UPDATE invites SET expires_at = now() - interval '1 second' WHERE id = {}",
+                self.invites[index].id
+            )));
+            self.invites[index].expired = true;
+        }
+
+        #[rule]
+        fn toggle_registration(&mut self, _: TestCase) {
+            self.closed = !self.closed;
+            let mode = if self.closed { "closed" } else { "invite_only" };
+            self.rt.block_on(self.forum.exec(&format!(
+                "INSERT INTO settings (key, value) VALUES ('registration_mode', '\"{mode}\"')
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value"
+            )));
+        }
+
+        /// Uses never exceed the limit and always match who joined, and
+        /// everyone who joined is recorded as invited by the invite's maker.
+        #[invariant]
+        fn records_agree(&self, _: TestCase) {
+            let rows: Vec<(i64, i32, i32, i64)> = self.rt.block_on(
+                sqlx::query_as(
+                    "SELECT i.id, i.uses, i.max_uses, (SELECT count(*) FROM users u WHERE u.invite_id = i.id)
+                     FROM invites i ORDER BY i.id",
+                )
+                .fetch_all(&self.forum.db),
+            )
+            .unwrap();
+            assert_eq!(rows.len(), self.invites.len());
+            for ((id, uses, max_uses, members), model) in rows.iter().zip(&self.invites) {
+                assert_eq!(*id, model.id);
+                assert_eq!(*uses, model.uses);
+                assert_eq!(i64::from(*uses), *members);
+                assert!(uses <= max_uses);
+            }
+            for (user_id, index) in &self.joined {
+                let (invited_by, invite_id): (Option<i64>, Option<i64>) = self
+                    .rt
+                    .block_on(
+                        sqlx::query_as(
+                            "SELECT invited_by_user_id, invite_id FROM users WHERE id = $1",
+                        )
+                        .bind(user_id)
+                        .fetch_one(&self.forum.db),
+                    )
+                    .unwrap();
+                let invite = &self.invites[*index];
+                assert_eq!(invited_by, Some(self.creators[invite.creator].id));
+                assert_eq!(invite_id, Some(invite.id));
+            }
+        }
+    }
+
+    #[hegel::standalone_function(test_cases = 100)]
+    pub fn run(tc: TestCase, rt: &Handle, db: &PgPool) {
+        let world = World::new(rt.clone(), db.clone());
+        hegel::stateful::machine(world).steps(30).run(tc);
+    }
+}
+
+/// Random histories of making, revoking, expiring and using invites, with
+/// registration opening and closing, agree with a simple model.
+#[sqlx::test]
+async fn invites_behave_like_the_model(db: PgPool) {
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || model::run(&rt, &db))
+        .await
+        .unwrap();
+}

@@ -883,3 +883,64 @@ async fn logging_out_everywhere_else(db: PgPool) {
         StatusCode::SEE_OTHER
     );
 }
+
+// ---------------------------------------------------------------------------
+// Properties
+
+/// Whatever a session cookie says, only a real session's token logs in:
+/// near misses (a real token with a character changed, cut short, or with
+/// a different case) and junk are all anonymous.
+#[hegel::standalone_function(test_cases = 200)]
+fn only_real_tokens_log_in(
+    tc: hegel::TestCase,
+    rt: &tokio::runtime::Handle,
+    forum: &Forum,
+    real: &str,
+) {
+    use hegel::generators as gs;
+    let value = match tc.draw(gs::integers::<u8>().max_value(3)) {
+        0 => tc.draw(gs::from_regex("[A-Za-z0-9_-]{0,60}").fullmatch(true)),
+        1 => {
+            let i = tc.draw(gs::integers::<usize>().max_value(real.len() - 1));
+            let c = tc.draw(gs::from_regex("[A-Za-z0-9_-]").fullmatch(true));
+            tc.assume(real[i..i + 1] != c);
+            format!("{}{}{}", &real[..i], c, &real[i + 1..])
+        }
+        2 => {
+            let n = tc.draw(gs::integers::<usize>().max_value(real.len() - 1));
+            real[..n].to_owned()
+        }
+        _ => {
+            let flipped: String = real
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_lowercase() {
+                        c.to_ascii_uppercase()
+                    } else {
+                        c.to_ascii_lowercase()
+                    }
+                })
+                .collect();
+            tc.assume(flipped != real);
+            flipped
+        }
+    };
+    let cookie = format!("parlour_session={value}");
+    let response = rt.block_on(forum.get_as("/settings", Some(&cookie)));
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{value:?}");
+}
+
+#[sqlx::test]
+async fn only_real_session_tokens_log_in(db: PgPool) {
+    let (forum, ruth) = forum_with_ruth(db).await;
+    let cookie = forum.session(ruth).await;
+    let real = cookie.trim_start_matches("parlour_session=").to_owned();
+    assert_eq!(
+        forum.get_as("/settings", Some(&cookie)).await.status,
+        StatusCode::OK
+    );
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || only_real_tokens_log_in(&rt, &forum, &real))
+        .await
+        .unwrap();
+}
