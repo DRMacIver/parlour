@@ -113,7 +113,19 @@ The essentials report's "MVP" list is large. To keep v1 minimal, I would trim it
 - Reply-by-email and running a mail server.
 - A plugin API, at least initially, because most upgrade pain in other forums comes from plugins.
 
-## Decisions needed
+## Decisions made (2026-10-01)
+
+1. Frontend: every page rendered on the server, with React components for the interactive parts.
+2. Licence: MIT.
+3. Quote-into-new-thread works like a quote tweet: the original post is embedded. It is refused outright if the new thread would be visible to anyone who can't see the original.
+4. Reactions are in v1.
+5. Registration defaults to invite-only. Invites are a first-class concept from the start, with a public tree of who invited whom (as on lobste.rs).
+6. Read tracking uses a per-thread marker.
+7. No Discord integration in v1, and the design does not depend on Discord.
+
+See [../DESIGN.md](../DESIGN.md) for the resulting design.
+
+## Decisions needed (original list, now resolved above)
 
 1. **Frontend shape.** Option A (recommended by 03): every page is rendered by the server, with React components for interactive parts. Option B: a full React app for logged-in users, with server-rendered HTML only for logged-out visitors. A is faster and keeps one set of markup. B is a "real" React app but means maintaining two renderings of every page.
 2. **Licence.** AGPL (most newer community projects, and it keeps hosted forks open) or MIT/Apache (easier to adopt).
