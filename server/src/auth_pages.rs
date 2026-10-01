@@ -443,9 +443,12 @@ pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    if let Some(token) = session_cookie(&headers) {
-        sessions::delete(state.db(), token).await?;
-    }
+    // Without a session cookie there is nothing to clear, and anonymous
+    // visitors are never sent cookies.
+    let Some(token) = session_cookie(&headers) else {
+        return Ok(see_other("/"));
+    };
+    sessions::delete(state.db(), token).await?;
     Ok(web::end_session(see_other("/"), &state))
 }
 

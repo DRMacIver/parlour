@@ -203,6 +203,16 @@ async fn logging_out_ends_the_session(db: PgPool) {
     );
 }
 
+/// Logging out without being logged in has nothing to clear, so it sets
+/// no cookie either.
+#[sqlx::test]
+async fn logging_out_anonymously_sets_no_cookie(db: PgPool) {
+    let forum = Forum::new(db);
+    let response = forum.submit("/logout", &[], None).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert!(response.header(header::SET_COOKIE).is_none());
+}
+
 #[sqlx::test]
 async fn unknown_session_cookies_are_cleared(db: PgPool) {
     let forum = Forum::new(db);
