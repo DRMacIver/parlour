@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Log in · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Log in to {{ layout.site_name }}</h1>
+<p>You followed a login link. Press the button to finish logging in.</p>
+<form class="form-inline" method="post" action="/login/{{ token }}">
+  <input type="hidden" name="next" value="{{ next }}">
+  <button class="button" type="submit">Log in</button>
+</form>
+</div>
+{% endblock %}

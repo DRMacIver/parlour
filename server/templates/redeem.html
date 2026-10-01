@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{%- import "_forms.html" as f -%}
+{% block title %}Join {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Join {{ layout.site_name }}</h1>
+<p class="lede"><a href="/u/{{ inviter_username }}">{{ inviter_name }}</a> has invited you. Choose a name and you’re in. The invitation expires {% call m::time(expires_at) %}{% endcall %}.</p>
+{% call f::errors(errors) %}{% endcall %}
+<section class="panel" aria-labelledby="join-heading">
+  <h2 class="panel-bar" id="join-heading">Your account</h2>
+  <form class="form" method="post" action="/invite/{{ code }}">
+    <div class="field">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="2" maxlength="24" pattern="[A-Za-z0-9_]+" value="{{ username }}">
+      <span class="field-hint">2 to 24 letters, digits or underscores. People mention you with it, as @username.</span>
+    </div>
+    <div class="field">
+      <label for="display_name">Name</label>
+      <input id="display_name" name="display_name" type="text" autocomplete="name" required maxlength="50" value="{{ display_name }}">
+      <span class="field-hint">Shown next to your posts. You can use your real name or not.</span>
+    </div>
+    <div class="field">
+      <label for="email">Email address</label>
+      {% if let Some(email) = fixed_email %}
+      <input id="email" type="email" value="{{ email }}" readonly>
+      <span class="field-hint">This invitation was sent to this address.</span>
+      {% else %}
+      <input id="email" name="email" type="email" autocomplete="email" required value="{{ email }}">
+      <span class="field-hint">For logging in and notifications. Never shown to other members.</span>
+      {% endif %}
+    </div>
+    <div class="field">
+      <label for="password">Password <span class="field-hint">(optional)</span></label>
+      <input id="password" name="password" type="password" autocomplete="new-password" minlength="10">
+      <span class="field-hint">At least 10 characters. Leave it blank to log in with emailed links instead.</span>
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Join</button></div>
+  </form>
+</section>
+</div>
+{% endblock %}

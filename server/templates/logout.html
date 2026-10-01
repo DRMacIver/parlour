@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Log out · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Log out</h1>
+<p>Log out of {{ layout.site_name }} in this browser?</p>
+<form class="form-inline" method="post" action="/logout">
+  <button class="button" type="submit">Log out</button>
+</form>
+</div>
+{% endblock %}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM login_tokens\n         WHERE user_id = $1 AND (expires_at < now() OR used_at IS NOT NULL OR ($2 <> 'magic_link' AND purpose = $2))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "19385682a97c1df85e4873cc259c2775d7b2daadca6834538f467e0f512b722c"
+}

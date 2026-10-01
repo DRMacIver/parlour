@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE login_tokens SET attempts = attempts + 1 WHERE token_hash = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fb5d13ed57b47ee74b3116b9263269e6b9a0a982b27f8ea6feb019c171c036cd"
+}

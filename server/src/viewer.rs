@@ -3,9 +3,14 @@
 //! and `category_readable`, which take the parameters [`Viewer::filter`]
 //! produces.
 //!
-//! Until accounts exist (M3) every visitor is anonymous. Groups, members-only
-//! and staff access (M5) extend [`Viewer`] and [`ReadFilter`] without changing
-//! the queries' shape.
+//! The session middleware ([`crate::sessions::middleware`]) works out the
+//! viewer from the session cookie and leaves it in the request's
+//! extensions, where the [`Viewer`] extractor finds it.
+//!
+//! Logged-in members can read public and members-only categories; staff can
+//! read every category (DESIGN.md §3.1). Group membership (M5) adds the
+//! group-restricted categories a member can read to [`ReadFilter`] without
+//! changing the queries' shape.
 
 use std::convert::Infallible;
 
@@ -13,6 +18,9 @@ use axum::extract::FromRequestParts;
 use axum::http::HeaderMap;
 use axum::http::header::COOKIE;
 use axum::http::request::Parts;
+use chrono::{DateTime, Utc};
+
+use crate::accounts::Role;
 
 /// The name of the session cookie. A request carrying it is never answered
 /// from the anonymous cache.
@@ -21,6 +29,19 @@ pub const SESSION_COOKIE: &str = "parlour_session";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Viewer {
     Anonymous,
+    User(UserCtx),
+}
+
+/// A logged-in member.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UserCtx {
+    pub id: i64,
+    pub username: String,
+    pub display_name: String,
+    pub email: String,
+    pub email_verified: bool,
+    pub role: Role,
+    pub created_at: DateTime<Utc>,
 }
 
 /// The bind parameters for the visibility condition in SQL.
@@ -34,34 +55,64 @@ pub struct ReadFilter {
 
 impl Viewer {
     pub fn filter(&self) -> ReadFilter {
-        match self {
-            Viewer::Anonymous => ReadFilter {
-                visibilities: vec!["public".to_owned()],
-                group_category_ids: Vec::new(),
-            },
+        let levels: &[&str] = match self {
+            Viewer::Anonymous => &["public"],
+            Viewer::User(user) if user.role.is_staff() => &["public", "members", "groups"],
+            Viewer::User(_) => &["public", "members"],
+        };
+        ReadFilter {
+            visibilities: levels.iter().map(|level| (*level).to_owned()).collect(),
+            group_category_ids: Vec::new(),
         }
+    }
+
+    pub fn user(&self) -> Option<&UserCtx> {
+        match self {
+            Viewer::Anonymous => None,
+            Viewer::User(user) => Some(user),
+        }
+    }
+
+    pub fn user_id(&self) -> Option<i64> {
+        self.user().map(|user| user.id)
+    }
+
+    pub fn is_staff(&self) -> bool {
+        self.user().is_some_and(|user| user.role.is_staff())
+    }
+
+    pub fn is_admin(&self) -> bool {
+        self.user().is_some_and(|user| user.role == Role::Admin)
     }
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for Viewer {
     type Rejection = Infallible;
 
-    async fn from_request_parts(_parts: &mut Parts, _state: &S) -> Result<Viewer, Infallible> {
-        Ok(Viewer::Anonymous)
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Viewer, Infallible> {
+        Ok(parts
+            .extensions
+            .get::<Viewer>()
+            .cloned()
+            .unwrap_or(Viewer::Anonymous))
     }
 }
 
 /// Whether the request carries a session cookie, valid or not.
 pub fn has_session_cookie(headers: &HeaderMap) -> bool {
+    session_cookie(headers).is_some()
+}
+
+/// The value of the session cookie, if the request has one.
+pub fn session_cookie(headers: &HeaderMap) -> Option<&str> {
     headers
         .get_all(COOKIE)
         .iter()
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(';'))
-        .any(|pair| {
-            pair.trim()
-                .split_once('=')
-                .is_some_and(|(name, _)| name.trim() == SESSION_COOKIE)
+        .find_map(|pair| {
+            let (name, value) = pair.trim().split_once('=')?;
+            (name.trim() == SESSION_COOKIE).then(|| value.trim())
         })
 }
 
@@ -78,6 +129,18 @@ mod tests {
         map
     }
 
+    fn user(role: Role) -> Viewer {
+        Viewer::User(UserCtx {
+            id: 1,
+            username: "ruth".into(),
+            display_name: "Ruth".into(),
+            email: "ruth@example.com".into(),
+            email_verified: true,
+            role,
+            created_at: Utc::now(),
+        })
+    }
+
     #[test]
     fn detects_session_cookie() {
         assert!(!has_session_cookie(&headers(&[])));
@@ -91,6 +154,10 @@ mod tests {
         ])));
         assert!(!has_session_cookie(&headers(&["parlour_session_old=abc"])));
         assert!(!has_session_cookie(&headers(&["theme=parlour_session"])));
+        assert_eq!(
+            session_cookie(&headers(&["a=b; parlour_session=tok ; c=d"])),
+            Some("tok")
+        );
     }
 
     #[test]
@@ -102,5 +169,23 @@ mod tests {
                 group_category_ids: vec![]
             }
         );
+    }
+
+    #[test]
+    fn members_read_members_only_content_and_staff_read_everything() {
+        assert_eq!(
+            user(Role::User).filter().visibilities,
+            vec!["public", "members"]
+        );
+        for role in [Role::Moderator, Role::Admin] {
+            assert_eq!(
+                user(role).filter().visibilities,
+                vec!["public", "members", "groups"]
+            );
+        }
+        assert!(!user(Role::User).is_staff());
+        assert!(user(Role::Moderator).is_staff());
+        assert!(!user(Role::Moderator).is_admin());
+        assert!(user(Role::Admin).is_admin());
     }
 }

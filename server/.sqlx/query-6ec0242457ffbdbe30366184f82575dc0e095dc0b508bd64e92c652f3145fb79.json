@@ -1,0 +1,145 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT i.id, i.email AS \"email: String\", i.note, i.max_uses, i.uses, i.grant_group_ids,\n                  i.created_at, i.expires_at, invite_status(i.revoked_at, i.uses, i.max_uses, i.expires_at) AS \"status!\",\n                  coalesce((SELECT array_agg(u.username::text ORDER BY u.created_at) FROM users u WHERE u.invite_id = i.id), '{}') AS \"usernames!\",\n                  coalesce((SELECT array_agg(u.display_name ORDER BY u.created_at) FROM users u WHERE u.invite_id = i.id), '{}') AS \"names!\",\n                  coalesce((SELECT array_agg(u.created_at ORDER BY u.created_at) FROM users u WHERE u.invite_id = i.id), '{}') AS \"joined!: Vec<DateTime<Utc>>\"\n           FROM invites i\n           WHERE i.created_by = $1\n           ORDER BY i.created_at DESC, i.id DESC\n           LIMIT 200",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "email: String",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "email"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "note",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "note"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "max_uses",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "max_uses"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "uses",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "uses"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "grant_group_ids",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "grant_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "status!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "usernames!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "joined!: Vec<DateTime<Utc>>",
+        "type_info": "TimestamptzArray",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "6ec0242457ffbdbe30366184f82575dc0e095dc0b508bd64e92c652f3145fb79"
+}

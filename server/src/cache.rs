@@ -26,6 +26,10 @@ pub enum Tag {
     Thread(i64),
     /// Per-user data shown next to posts, such as post counts.
     User(i64),
+    /// The membership list: the invite tree, and who each member invited.
+    Members,
+    /// An invite's registration page.
+    Invite(i64),
 }
 
 impl fmt::Display for Tag {
@@ -35,6 +39,8 @@ impl fmt::Display for Tag {
             Tag::Category(id) => write!(f, "category:{id}"),
             Tag::Thread(id) => write!(f, "thread:{id}"),
             Tag::User(id) => write!(f, "user:{id}"),
+            Tag::Members => write!(f, "members"),
+            Tag::Invite(id) => write!(f, "invite:{id}"),
         }
     }
 }
@@ -262,6 +268,8 @@ mod tests {
             Tag::Thread(2),
             Tag::Thread(3),
             Tag::User(1),
+            Tag::Members,
+            Tag::Invite(1),
         ]))
         .max_size(4)
         .print_as_debug()

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE invites SET revoked_at = coalesce(revoked_at, now())\n         WHERE id = $1 AND (created_by = $2 OR $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cf22261bec0d10b5b071e1252492dc4fbf0165a540be4b2bad494ba5742e4606"
+}

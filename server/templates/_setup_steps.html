@@ -1,0 +1,7 @@
+{% macro steps(current) %}
+<ol class="steps" aria-label="Setup steps">
+  <li{% if current == 1 %} aria-current="step"{% endif %}>Admin account</li>
+  <li{% if current == 2 %} aria-current="step"{% endif %}>Email</li>
+  <li{% if current == 3 %} aria-current="step"{% endif %}>First invites</li>
+</ol>
+{% endmacro %}

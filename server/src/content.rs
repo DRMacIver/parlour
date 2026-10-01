@@ -819,6 +819,25 @@ async fn embed(db: &PgPool, viewer: &Viewer, post_id: i64, deps: &mut Deps) -> s
 }
 
 // ---------------------------------------------------------------------------
+// Profiles
+
+/// How many of a member's posts the viewer can see. Pages showing it
+/// depend on `user:N`, which new posts and thread moves clear.
+pub async fn visible_post_count(db: &PgPool, viewer: &Viewer, user_id: i64) -> sqlx::Result<i64> {
+    let filter = viewer.filter();
+    sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM posts p JOIN threads t ON t.id = p.thread_id
+           WHERE p.author_id = $1 AND p.deleted_at IS NULL AND p.hidden_at IS NULL
+             AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $2, $3)"#,
+        user_id,
+        &filter.visibilities,
+        &filter.group_category_ids,
+    )
+    .fetch_one(db)
+    .await
+}
+
+// ---------------------------------------------------------------------------
 // Permalinks
 
 pub struct PostLocation {

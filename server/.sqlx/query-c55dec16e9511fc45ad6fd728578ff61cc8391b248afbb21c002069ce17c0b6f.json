@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE jobs SET attempts = $2, locked_until = now() + make_interval(secs => $3) WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c55dec16e9511fc45ad6fd728578ff61cc8391b248afbb21c002069ce17c0b6f"
+}

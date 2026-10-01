@@ -1,0 +1,10 @@
+{% macro tree_node(member, viewer_id) %}
+<span class="avatar avatar-tiny {{ crate::format::avatar_class(member.id) }}" aria-hidden="true">{{ crate::format::initial(member.display_name) }}</span>
+<span class="tree-names">
+  <a href="/u/{{ member.username }}">{{ member.display_name }}</a>
+  <span class="tree-username">@{{ member.username }}</span>
+  {% if let Some(badge) = member.role.badge() %}<span class="badge">{{ badge }}</span>{% endif %}
+  {% if crate::format::is_viewer(viewer_id, member.id) %}<span class="badge badge-you">You</span>{% endif %}
+  <span class="row-meta">joined {{ crate::format::month_year(member.joined_at) }}{% if member.descendants > 0 %} · {{ crate::format::plural(member.descendants as i64, "person", "people") }} below{% endif %}</span>
+</span>
+{% endmacro %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{%- import "_member.html" as mm -%}
+{% block title %}Invite tree · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <span aria-current="page">Members</span></nav>
+<h1 class="page-title">Invite tree</h1>
+<p class="lede">Everyone here was invited by someone. This tree is public, so you can see how the club grew and who vouched for whom. {{ crate::format::plural(count as i64, "member", "members") }}.</p>
+<div class="with-sidebar">
+  <section class="panel" aria-labelledby="tree-heading">
+    <h2 class="panel-bar" id="tree-heading">Members, by who invited them</h2>
+    {% if items.is_empty() %}
+    <p class="empty">Nobody has joined yet.</p>
+    {% else %}
+    <ul class="tree">
+    {%- for item in items -%}
+      {%- match item -%}
+      {%- when TreeItem::Leaf(member) -%}
+      <li><div class="tree-node">{% call mm::tree_node(member, viewer_id) %}{% endcall %}</div></li>
+      {%- when TreeItem::Open(member) -%}
+      <li><details open><summary class="tree-node">{% call mm::tree_node(member, viewer_id) %}{% endcall %}</summary><ul>
+      {%- when TreeItem::Close -%}
+      </ul></details></li>
+      {%- endmatch -%}
+    {%- endfor -%}
+    </ul>
+    {% endif %}
+  </section>
+  <aside class="panel" aria-labelledby="join-heading">
+    <h2 class="panel-bar" id="join-heading">Joining</h2>
+    <div class="panel-text">
+    {% if may_invite %}
+      <p>You can invite people: they’ll appear under you in the tree.</p>
+      <p><a href="/invites">Invite someone →</a></p>
+    {% else if layout.user.is_some() %}
+      <p>Membership is by invitation. <a href="/invites">Your invites</a> page says when you can invite people.</p>
+    {% else %}
+      <p>Membership is by invitation. If you know someone here, ask them for an invite.</p>
+    {% endif %}
+    </div>
+  </aside>
+</div>
+{% endblock %}

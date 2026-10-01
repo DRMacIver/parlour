@@ -6,15 +6,21 @@ edition = "2024"
 [dependencies]
 ammonia = "4.2.0"
 anyhow = "1.0.104"
+argon2 = "0.6.0"
 askama = "0.16.1"
 axum = "0.8.9"
+base64 = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 comrak = { version = "0.55.0", default-features = false }
+getrandom = { version = "0.4.3", features = ["sys_rng"] }
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "rustls-platform-verifier", "ring", "hostname"] }
 mime_guess = "2.0.5"
 rust-embed = "8.12.0"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.151"
 sha2 = "0.11.0"
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "chrono"] }
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "chrono", "json"] }
+subtle = "2.6.1"
 tokio = { version = "1.53.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
@@ -23,3 +29,12 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 hegeltest = "0.48.1"
 http-body-util = "0.1.5"
 tower = { version = "0.5.3", features = ["util"] }
+url = "2.5.8"
+
+# Password hashing is deliberately expensive; unoptimised it takes seconds,
+# which makes tests and local logins crawl.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

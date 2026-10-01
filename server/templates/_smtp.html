@@ -1,0 +1,34 @@
+{% macro smtp_fields(smtp, has_password) %}
+<div class="field">
+  <label for="smtp_host">SMTP server</label>
+  <input id="smtp_host" name="smtp_host" type="text" autocapitalize="none" spellcheck="false" placeholder="smtp.example.com" value="{{ smtp.smtp_host }}">
+  <span class="field-hint">The mail server or relay that sends email for the forum. Leave it blank to use the server set in the environment, if any.</span>
+</div>
+<div class="field-row">
+  <div class="field">
+    <label for="smtp_security">Security</label>
+    <select id="smtp_security" name="smtp_security">
+      <option value="starttls"{% if smtp.smtp_security == "starttls" %} selected{% endif %}>STARTTLS (port 587)</option>
+      <option value="tls"{% if smtp.smtp_security == "tls" %} selected{% endif %}>TLS (port 465)</option>
+      <option value="none"{% if smtp.smtp_security == "none" %} selected{% endif %}>None (local relays only)</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="smtp_port">Port</label>
+    <input id="smtp_port" name="smtp_port" type="text" inputmode="numeric" placeholder="default" value="{{ smtp.smtp_port }}">
+  </div>
+</div>
+<div class="field">
+  <label for="smtp_username">Username <span class="field-hint">(if the server needs one)</span></label>
+  <input id="smtp_username" name="smtp_username" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" value="{{ smtp.smtp_username }}">
+</div>
+<div class="field">
+  <label for="smtp_password">Password</label>
+  <input id="smtp_password" name="smtp_password" type="password" autocomplete="new-password">
+  {% if has_password %}<span class="field-hint">A password is saved. Leave this blank to keep it.</span>{% endif %}
+</div>
+<div class="field">
+  <label for="smtp_from">From address</label>
+  <input id="smtp_from" name="smtp_from" type="text" placeholder="The Tuesday Club &lt;forum@example.com&gt;" value="{{ smtp.smtp_from }}">
+</div>
+{% endmacro %}

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{%- import "_setup_steps.html" as st -%}
+{% block title %}Invite the first members · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Invite the first members</h1>
+{% call st::steps(3) %}{% endcall %}
+<p class="lede">Invite people by email, or make a link that several people can use. Everyone who joins appears under you in the invite tree. You can make more invites at any time from the Invites page.</p>
+{% if !created.is_empty() %}
+<div class="notice notice-success" role="status">
+  <p>Invitations made:</p>
+  <ul class="created-invites">
+  {% for invite in created %}
+    <li>{% if let Some(email) = invite.emailed_to %}Emailing {{ email }}: {% else %}A link anyone can use: {% endif %}<input class="link-box" type="text" readonly value="{{ invite.url }}" aria-label="Invitation link"></li>
+  {% endfor %}
+  </ul>
+  <p>Copy any links you need now: they aren’t shown again.</p>
+</div>
+{% endif %}
+{% call f::errors(errors) %}{% endcall %}
+<section class="panel" aria-labelledby="invite-heading">
+  <h2 class="panel-bar" id="invite-heading">Invitations</h2>
+  <form class="form" method="post" action="/setup/invites">
+    <div class="field">
+      <label for="emails">Email addresses <span class="field-hint">(one per line)</span></label>
+      <textarea id="emails" name="emails" rows="5">{{ emails }}</textarea>
+      <span class="field-hint">Each gets their own single-use invitation, valid for 30 days.</span>
+    </div>
+    <div class="field">
+      <label for="uses">A shared link for this many people <span class="field-hint">(optional)</span></label>
+      <input id="uses" class="input-short" name="uses" type="number" min="0" max="1000" value="{{ uses }}">
+      <span class="field-hint">For posting somewhere your community already gathers. Valid for 30 days.</span>
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Create invitations</button></div>
+  </form>
+</section>
+<p class="form-actions-page"><a class="button button-quiet" href="/">Finish: go to the forum</a></p>
+</div>
+{% endblock %}

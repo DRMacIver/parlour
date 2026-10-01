@@ -288,8 +288,16 @@ async fn other_methods_and_responses_are_private(pool: PgPool) {
     let s = setup(pool).await;
     for (request, status) in [
         (
-            Request::post(&s.path).body(Body::empty()).unwrap(),
+            Request::post(&s.path)
+                .header(header::ORIGIN, "http://localhost:8080")
+                .body(Body::empty())
+                .unwrap(),
             StatusCode::METHOD_NOT_ALLOWED,
+        ),
+        // From another site, any form post is refused.
+        (
+            Request::post(&s.path).body(Body::empty()).unwrap(),
+            StatusCode::FORBIDDEN,
         ),
         (
             Request::get("/no-such-page").body(Body::empty()).unwrap(),

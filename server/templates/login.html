@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{% block title %}Log in · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Log in</h1>
+{% call f::error(error) %}{% endcall %}
+<section class="panel" aria-labelledby="password-heading">
+  <h2 class="panel-bar" id="password-heading">With your password</h2>
+  <form class="form" method="post" action="/login">
+    <input type="hidden" name="next" value="{{ next }}">
+    <div class="field">
+      <label for="identifier">Username or email address</label>
+      <input id="identifier" name="identifier" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required value="{{ identifier }}">
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <div class="form-actions">
+      <button class="button" type="submit">Log in</button>
+      <a href="/reset">Forgotten your password?</a>
+    </div>
+  </form>
+</section>
+<section class="panel" aria-labelledby="link-heading">
+  <h2 class="panel-bar" id="link-heading">Or with a link by email</h2>
+  <form class="form" method="post" action="/login/email">
+    <input type="hidden" name="next" value="{{ next }}">
+    <p class="form-note">We’ll email you a link that logs you in, and a code you can type in here instead.</p>
+    <div class="field">
+      <label for="email">Email address or username</label>
+      <input id="email" name="email" type="text" autocomplete="email" autocapitalize="none" spellcheck="false" required value="{{ email }}">
+    </div>
+    <div class="form-actions">
+      <button class="button button-quiet" type="submit">Email me a link</button>
+    </div>
+  </form>
+</section>
+<p class="form-note">Membership is by invitation. If someone has invited you, follow the link in their invitation.</p>
+</div>
+{% endblock %}

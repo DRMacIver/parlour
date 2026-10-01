@@ -27,6 +27,10 @@ pub enum Change {
     CategoryChanged { category_id: i64 },
     /// A user was renamed or changed their post-info column.
     UserChanged { user_id: i64 },
+    /// Someone joined. Changes the invite tree and the inviter's profile.
+    UserCreated { user_id: i64 },
+    /// An invite was used or revoked.
+    InviteChanged { invite_id: i64 },
     /// Site settings or sections changed.
     SiteChanged,
 }
@@ -87,6 +91,19 @@ pub async fn tags_for(db: &PgPool, change: Change) -> sqlx::Result<Vec<Tag>> {
             tags.push(Tag::User(user_id));
             tags.push(Tag::Site);
         }
+        Change::UserCreated { user_id } => {
+            tags.push(Tag::Members);
+            tags.push(Tag::User(user_id));
+            let inviter = sqlx::query_scalar!(
+                "SELECT invited_by_user_id FROM users WHERE id = $1",
+                user_id
+            )
+            .fetch_optional(db)
+            .await?
+            .flatten();
+            tags.extend(inviter.map(Tag::User));
+        }
+        Change::InviteChanged { invite_id } => tags.push(Tag::Invite(invite_id)),
         Change::SiteChanged => tags.push(Tag::Site),
     }
     Ok(tags)

@@ -1,0 +1,6 @@
+This is a test email from {{ site_name }}.
+
+If you can read this, {{ site_name }} can send email: login links, invitations and notifications will reach people.
+
+-- 
+{{ site_name }}

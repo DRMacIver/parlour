@@ -1,0 +1,14 @@
+Hello {{ name }},
+
+Here is your link to log in to {{ site_name }}:
+
+  {{ url }}
+
+Or type this code into the page where you asked for it:
+
+  {{ code }}
+
+The link and the code work once, for the next 15 minutes. If you didn't ask to log in, you can ignore this email: nobody can use it without access to your inbox.
+
+-- 
+{{ site_name }}

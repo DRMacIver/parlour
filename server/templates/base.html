@@ -17,6 +17,16 @@
   <div class="wrap">
     <a href="/"{% if layout.nav == Nav::Index %} aria-current="page"{% endif %}>Forum index</a>
     <a href="/latest"{% if layout.nav == Nav::Latest %} aria-current="page"{% endif %}>Latest</a>
+    <a href="/users/tree"{% if layout.nav == Nav::Members %} aria-current="page"{% endif %}>Members</a>
+    <span class="spacer"></span>
+    {% if let Some(user) = layout.user %}
+    <a href="/invites"{% if layout.nav == Nav::Invites %} aria-current="page"{% endif %}>Invites</a>
+    {% if user.is_admin %}<a href="/admin/settings"{% if layout.nav == Nav::Admin %} aria-current="page"{% endif %}>Admin</a>{% endif %}
+    <a class="nav-user" href="/settings"{% if layout.nav == Nav::Account %} aria-current="page"{% endif %} title="Your account settings">{{ user.username }}</a>
+    <form class="nav-form" method="post" action="/logout"><button class="nav-button" type="submit">Log out</button></form>
+    {% else %}
+    <a href="/login"{% if layout.nav == Nav::Login %} aria-current="page"{% endif %}>Log in</a>
+    {% endif %}
   </div>
 </nav>
 <main class="wrap" id="content">

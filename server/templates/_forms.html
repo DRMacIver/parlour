@@ -1,0 +1,11 @@
+{% macro errors(list) %}
+{% if !list.is_empty() %}
+<div class="notice notice-error" role="alert">
+  {% if list.len() == 1 %}<p>{{ list[0] }}</p>{% else %}<ul>{% for e in list %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+</div>
+{% endif %}
+{% endmacro %}
+
+{% macro error(message) %}
+{% if let Some(text) = message %}<div class="notice notice-error" role="alert"><p>{{ text }}</p></div>{% endif %}
+{% endmacro %}

@@ -4,8 +4,8 @@
 
 use askama::Template;
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, Uri};
-use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::http::Uri;
+use axum::response::{IntoResponse, Redirect, Response};
 
 use crate::AppState;
 use crate::content::{
@@ -14,40 +14,9 @@ use crate::content::{
 };
 use crate::error::AppError;
 use crate::format;
-use crate::http_cache::CacheTags;
 use crate::pagination::{PageItem, Pagination, page_href, thread_list_pages};
-use crate::settings;
 use crate::viewer::Viewer;
-
-/// Which item in the top navigation is the current page.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Nav {
-    Index,
-    Latest,
-    None,
-}
-
-/// Fields every page needs for the shared layout in `base.html`.
-pub struct Layout {
-    pub site_name: String,
-    pub nav: Nav,
-}
-
-impl Layout {
-    async fn load(state: &AppState, nav: Nav) -> sqlx::Result<Layout> {
-        Ok(Layout {
-            site_name: settings::site_name(&state.db).await?,
-            nav,
-        })
-    }
-}
-
-/// A rendered page that anonymous visitors may be served from the cache.
-fn cacheable(template: &impl Template, deps: &Deps) -> Result<Response, AppError> {
-    let mut response = Html(template.render()?).into_response();
-    response.extensions_mut().insert(CacheTags(deps.tags()));
-    Ok(response)
-}
+use crate::web::{self, Layout, Nav, cacheable};
 
 /// The `?page=` number the request asks for: 1 if there is none, or `None`
 /// (a 404) if it isn't a positive integer or is given more than once.
@@ -122,7 +91,7 @@ pub async fn index(
     let latest = content::latest(&state.db, &viewer, 1, LATEST_ON_INDEX, &mut deps).await?;
     cacheable(
         &IndexTemplate {
-            layout: Layout::load(&state, Nav::Index).await?,
+            layout: Layout::load(&state, &viewer, Nav::Index).await?,
             sections,
             latest: latest.threads,
         },
@@ -147,7 +116,7 @@ pub async fn latest(
     uri: Uri,
 ) -> Result<Response, AppError> {
     let Some(page) = requested_page(&uri) else {
-        return not_found_response(&state).await;
+        return web::not_found(&state, &viewer).await;
     };
     if let Some(redirect) = redirect_unless_canonical(&uri, &page_href("/latest", page)) {
         return Ok(redirect);
@@ -156,11 +125,11 @@ pub async fn latest(
     let latest = content::latest(&state.db, &viewer, page, THREADS_PER_PAGE, &mut deps).await?;
     let total = page_count(latest.thread_count, THREADS_PER_PAGE);
     if page > total {
-        return not_found_response(&state).await;
+        return web::not_found(&state, &viewer).await;
     }
     cacheable(
         &LatestTemplate {
-            layout: Layout::load(&state, Nav::Latest).await?,
+            layout: Layout::load(&state, &viewer, Nav::Latest).await?,
             threads: latest.threads,
             pagination: Pagination::new("/latest", page, total),
             show_category: true,
@@ -188,7 +157,7 @@ pub async fn category(
     uri: Uri,
 ) -> Result<Response, AppError> {
     let Some(page) = requested_page(&uri).filter(|_| well_formed_slug(&slug)) else {
-        return not_found_response(&state).await;
+        return web::not_found(&state, &viewer).await;
     };
     if let Some(redirect) = redirect_unless_canonical(&uri, &page_href(&format!("/c/{slug}"), page))
     {
@@ -198,17 +167,17 @@ pub async fn category(
     let Some(mut category) =
         content::category_page(&state.db, &viewer, &slug, page, &mut deps).await?
     else {
-        return not_found_response(&state).await;
+        return web::not_found(&state, &viewer).await;
     };
     let total = page_count(category.thread_count, THREADS_PER_PAGE);
     if page > total {
-        return not_found_response(&state).await;
+        return web::not_found(&state, &viewer).await;
     }
     let threads = std::mem::take(&mut category.threads);
     let base = format!("/c/{}", category.category.slug);
     cacheable(
         &CategoryTemplate {
-            layout: Layout::load(&state, Nav::None).await?,
+            layout: Layout::load(&state, &viewer, Nav::None).await?,
             category,
             threads,
             pagination: Pagination::new(base, page, total),
@@ -247,12 +216,12 @@ pub async fn thread(
     uri: Uri,
 ) -> Result<Response, AppError> {
     let (Some(id), Some(page)) = (parse_id(&id), requested_page(&uri)) else {
-        return not_found_response(&state).await;
+        return web::not_found(&state, &viewer).await;
     };
     // The slug is checked first with a cheap query, so that a wrong one
     // costs no more than any other non-canonical URL.
     let Some(canonical_slug) = content::thread_slug(&state.db, &viewer, id).await? else {
-        return not_found_response(&state).await;
+        return web::not_found(&state, &viewer).await;
     };
     let canonical = page_href(&format::thread_href(&id, &canonical_slug), page);
     if let Some(redirect) = redirect_unless_canonical(&uri, &canonical) {
@@ -260,7 +229,7 @@ pub async fn thread(
     }
     let mut deps = Deps::new();
     let Some(thread) = content::thread_page(&state.db, &viewer, id, page, &mut deps).await? else {
-        return not_found_response(&state).await;
+        return web::not_found(&state, &viewer).await;
     };
     if thread.thread.slug != slug {
         let canonical = page_href(&format::thread_href(&id, &thread.thread.slug), page);
@@ -268,12 +237,12 @@ pub async fn thread(
     }
     let total = page_count(thread.last_seq, POSTS_PER_PAGE);
     if page > total {
-        return not_found_response(&state).await;
+        return web::not_found(&state, &viewer).await;
     }
     let base = format::thread_href(&id, &thread.thread.slug);
     cacheable(
         &ThreadTemplate {
-            layout: Layout::load(&state, Nav::None).await?,
+            layout: Layout::load(&state, &viewer, Nav::None).await?,
             thread,
             pagination: Pagination::new(base, page, total),
         },
@@ -306,11 +275,11 @@ async fn redirect_to_thread(
     redirect: impl FnOnce(&str) -> Redirect,
 ) -> Result<Response, AppError> {
     let Some(id) = parse_id(id) else {
-        return not_found_response(state).await;
+        return web::not_found(state, viewer).await;
     };
     match content::thread_slug(&state.db, viewer, id).await? {
         Some(slug) => Ok(redirect(&format::thread_href(&id, &slug)).into_response()),
-        None => not_found_response(state).await,
+        None => web::not_found(state, viewer).await,
     }
 }
 
@@ -320,7 +289,7 @@ pub async fn permalink(
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
     let Some(id) = parse_id(&id) else {
-        return not_found_response(&state).await;
+        return web::not_found(&state, &viewer).await;
     };
     match content::post_location(&state.db, &viewer, id).await? {
         Some(location) => {
@@ -330,28 +299,15 @@ pub async fn permalink(
             );
             Ok(Redirect::temporary(&format!("{href}#p{id}")).into_response())
         }
-        None => not_found_response(&state).await,
+        None => web::not_found(&state, &viewer).await,
     }
 }
 
 // ---------------------------------------------------------------------------
 
-#[derive(Template)]
-#[template(path = "not_found.html")]
-struct NotFoundTemplate {
-    layout: Layout,
-}
-
-async fn not_found_response(state: &AppState) -> Result<Response, AppError> {
-    let page = Html(
-        NotFoundTemplate {
-            layout: Layout::load(state, Nav::None).await?,
-        }
-        .render()?,
-    );
-    Ok((StatusCode::NOT_FOUND, page).into_response())
-}
-
-pub async fn not_found(State(state): State<AppState>) -> Result<Response, AppError> {
-    not_found_response(&state).await
+pub async fn not_found(
+    State(state): State<AppState>,
+    viewer: Viewer,
+) -> Result<Response, AppError> {
+    web::not_found(&state, &viewer).await
 }

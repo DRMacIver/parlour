@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{%- import "_forms.html" as f -%}
+{% block title %}Invites · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Invites</h1>
+<p class="lede">Everyone here was invited by someone, and <a href="/users/tree">the invite tree</a> is public. Only invite people you’d be happy to vouch for.</p>
+{% if closed %}<div class="notice" role="status"><p>Registration is closed at the moment, so invitations can’t be used until it reopens.</p></div>{% endif %}
+{% if let Some(created) = created %}
+<div class="notice notice-success" role="status">
+  {% if let Some(email) = created.emailed_to %}
+  <p>We’re emailing an invitation to <strong>{{ email }}</strong>. You can also send them this link yourself:</p>
+  {% else %}
+  <p>Your invitation is ready. Send this link to the person you’re inviting. It is only shown once, so copy it now:</p>
+  {% endif %}
+  <p><input class="link-box" type="text" readonly value="{{ created.url }}" aria-label="Invitation link"></p>
+</div>
+{% endif %}
+{% call f::errors(errors) %}{% endcall %}
+<div class="with-sidebar">
+  <section class="panel" aria-labelledby="mine-heading">
+    <h2 class="panel-bar" id="mine-heading">Your invites</h2>
+    {% if invites.is_empty() %}
+    <p class="empty">You haven’t invited anyone yet.</p>
+    {% else %}
+    <ul class="invite-list">
+    {% for invite in invites %}
+      <li>
+        <div class="invite-head">
+          <strong>{{ invite.status.label() }}</strong>
+          {% if let Some(email) = invite.email %}<span>· {{ email }}</span>{% else %}<span>· link</span>{% endif %}
+          {% if invite.max_uses > 1 %}<span>· used {{ invite.uses }} of {{ invite.max_uses }}</span>{% endif %}
+        </div>
+        <div class="row-meta">
+          Created {% call m::time(invite.created_at) %}{% endcall %}
+          {% if invite.status == crate::invites::InviteStatus::Valid %} · expires {% call m::time(invite.expires_at) %}{% endcall %}{% endif %}
+          {% if !invite.note.is_empty() %} · “{{ invite.note }}”{% endif %}
+          {% if !invite.grant_group_ids.is_empty() %} · adds to {{ crate::format::plural(invite.grant_group_ids.len() as i64, "group", "groups") }}{% endif %}
+        </div>
+        {% if !invite.used_by.is_empty() %}
+        <div class="row-meta">Joined:
+          {% for (username, name, joined) in invite.used_by %}<a href="/u/{{ username }}">{{ name }}</a> ({% call m::time(joined) %}{% endcall %}){% if !loop.last %}, {% endif %}{% endfor %}
+        </div>
+        {% endif %}
+        {% if invite.status == crate::invites::InviteStatus::Valid %}
+        <form class="form-inline" method="post" action="/invites/{{ invite.id }}/revoke">
+          <button class="button button-small button-quiet" type="submit">Revoke</button>
+        </form>
+        {% endif %}
+      </li>
+    {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+
+  <section class="panel" aria-labelledby="new-heading">
+    <h2 class="panel-bar" id="new-heading">Invite someone</h2>
+    {% if let Some(why) = refusal %}
+    <p class="empty">{{ why }}</p>
+    {% else %}
+    <form class="form" method="post" action="/invites">
+      <p class="form-note">They’ll appear under you in the tree.</p>
+      <div class="field">
+        <label for="email">Their email address <span class="field-hint">(optional: leave it blank to get a link to share)</span></label>
+        <input id="email" name="email" type="email" autocomplete="off" value="{{ form.email }}">
+      </div>
+      <div class="field">
+        <label for="note">Note to yourself <span class="field-hint">(optional)</span></label>
+        <input id="note" name="note" type="text" maxlength="200" value="{{ form.note }}">
+      </div>
+      <div class="field">
+        <label for="days">Expires after</label>
+        <select id="days" name="days">
+        {% for days in expiry_days %}
+          <option value="{{ days }}"{% if *days == form.days %} selected{% endif %}>{{ crate::format::plural(**days, "day", "days") }}</option>
+        {% endfor %}
+        </select>
+      </div>
+      {% if staff %}
+      <div class="field">
+        <label for="uses">Number of uses</label>
+        <input id="uses" name="uses" type="number" min="1" max="1000" value="{{ form.uses }}">
+        <span class="field-hint">Staff can make links that several people can use, for bringing in a group at once. An invite sent to an email address is used once.</span>
+      </div>
+      {% else %}
+      <input type="hidden" name="uses" value="1">
+      {% endif %}
+      <div class="form-actions"><button class="button" type="submit">Create invite</button></div>
+    </form>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

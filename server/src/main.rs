@@ -1,7 +1,8 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use parlour::{AppState, MIGRATOR, app, seed};
+use parlour::config::Config;
+use parlour::{AppState, MIGRATOR, app, jobs, seed, setup};
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 
@@ -11,7 +12,19 @@ const USAGE: &str = "usage: parlour [serve]          run the web server
                                 but only if `parlour seed` created them and
                                 nothing has been added since)
 
-Environment: DATABASE_URL (required), PARLOUR_BIND (default 0.0.0.0:8080)";
+Environment:
+  DATABASE_URL           required
+  PARLOUR_BIND           address to listen on (default 0.0.0.0:8080)
+  PARLOUR_BASE_URL       the site's address, e.g. https://forum.example.com
+                         (or PARLOUR_DOMAIN=forum.example.com; default
+                         http://localhost:8080)
+  PARLOUR_COOKIE_SECURE  mark the session cookie Secure (default: true
+                         when the base URL is https)
+  PARLOUR_TRUST_PROXY    take client addresses from X-Forwarded-For
+  PARLOUR_SMTP_HOST, PARLOUR_SMTP_PORT, PARLOUR_SMTP_SECURITY
+  (none|starttls|tls), PARLOUR_SMTP_USERNAME, PARLOUR_SMTP_PASSWORD,
+  PARLOUR_MAIL_FROM      the SMTP server for email, unless one is saved
+                         in the admin settings";
 
 enum Command {
     Serve,
@@ -52,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
         .context("database migration failed")?;
 
     match command {
-        Command::Serve => serve(db).await,
+        Command::Serve => serve(db, Config::from_env()?).await,
         Command::Seed { reset } => {
             if reset {
                 seed::reset(&db).await?;
@@ -68,16 +81,24 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn serve(db: sqlx::PgPool) -> anyhow::Result<()> {
+async fn serve(db: sqlx::PgPool, config: Config) -> anyhow::Result<()> {
     let bind: SocketAddr = std::env::var("PARLOUR_BIND")
         .unwrap_or_else(|_| "0.0.0.0:8080".to_owned())
         .parse()
         .context("PARLOUR_BIND must be an address like 0.0.0.0:8080")?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
-    tracing::info!(%bind, "parlour listening");
-    axum::serve(listener, app(AppState::new(db)))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let state = AppState::new(db).with_config(config);
+    if let Some(link) = setup::prepare(&state).await? {
+        tracing::warn!("This forum has no admin account yet. To set it up, open {link}");
+    }
+    jobs::spawn_workers(&state, 2);
+    tracing::info!(%bind, base_url = state.config().base_url, "parlour listening");
+    axum::serve(
+        listener,
+        app(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 

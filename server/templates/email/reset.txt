@@ -1,0 +1,12 @@
+Hello {{ name }},
+
+Someone (hopefully you) asked to reset the password for your account on {{ site_name }}. To choose a new password, follow this link:
+
+  {{ url }}
+
+The link works once, for the next hour. Resetting your password logs you out everywhere else.
+
+If you didn't ask for this, you can ignore this email and your password won't change.
+
+-- 
+{{ site_name }}

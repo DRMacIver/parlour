@@ -1,0 +1,10 @@
+Hello {{ name }},
+
+Please confirm that this is your email address for {{ site_name }} by following this link:
+
+  {{ url }}
+
+The link works for three days. If you didn't ask for this, you can ignore this email.
+
+-- 
+{{ site_name }}

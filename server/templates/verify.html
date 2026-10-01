@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Confirm your email address · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Confirm your email address</h1>
+<p>Press the button to confirm this address for your account on {{ layout.site_name }}.</p>
+<form class="form-inline" method="post" action="/verify/{{ token }}">
+  <button class="button" type="submit">Confirm</button>
+</form>
+</div>
+{% endblock %}

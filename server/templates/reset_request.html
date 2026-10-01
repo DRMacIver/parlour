@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Reset your password · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Reset your password</h1>
+<section class="panel" aria-labelledby="reset-heading">
+  <h2 class="panel-bar" id="reset-heading">Get a reset link</h2>
+  <form class="form" method="post" action="/reset">
+    <p class="form-note">We’ll email you a link to choose a new password. If you’d rather not have a password at all, you can always <a href="/login">log in with an emailed link</a> instead.</p>
+    <div class="field">
+      <label for="email">Email address or username</label>
+      <input id="email" name="email" type="text" autocomplete="email" autocapitalize="none" spellcheck="false" required>
+    </div>
+    <div class="form-actions">
+      <button class="button" type="submit">Send the link</button>
+    </div>
+  </form>
+</section>
+</div>
+{% endblock %}

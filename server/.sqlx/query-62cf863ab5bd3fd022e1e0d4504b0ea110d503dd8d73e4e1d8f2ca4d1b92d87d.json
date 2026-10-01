@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO login_tokens (token_hash, user_id, purpose, email, request_hash, code_hash, expires_at)\n         VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int8",
+        "Text",
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "Bytea",
+        "Bytea",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "62cf863ab5bd3fd022e1e0d4504b0ea110d503dd8d73e4e1d8f2ca4d1b92d87d"
+}

@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT password_hash IS NOT NULL AS \"has_password!\",\n                  (SELECT count(*) FROM sessions s WHERE s.user_id = u.id AND s.token_hash IS DISTINCT FROM $2\n                     AND s.last_seen_at > now() - make_interval(days => $3)) AS \"sessions!\"\n           FROM users u WHERE u.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "has_password!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "sessions!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bytea",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "9801d10c583a0091ac7409ba332e99b9e227b1cc6ec8fddc57b9b687efeb6251"
+}

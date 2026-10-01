@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{% block title %}{{ profile.user.display_name }} (@{{ profile.user.username }}) · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/users/tree">Members</a> › <span aria-current="page">{{ profile.user.display_name }}</span></nav>
+<div class="profile">
+  {% call m::avatar(profile.user, "avatar-large") %}{% endcall %}
+  <div class="profile-main">
+    <h1 class="page-title">{{ profile.user.display_name }}</h1>
+    <p class="profile-handle">@{{ profile.user.username }}{% if let Some(badge) = profile.role.badge() %} <span class="badge">{{ badge }}</span>{% endif %}</p>
+    {% if profile.title.is_some() || profile.pronouns.is_some() %}
+    <p class="author-title">{% if let Some(title) = profile.title %}{{ title }}{% endif %}{% if profile.title.is_some() && profile.pronouns.is_some() %} · {% endif %}{% if let Some(pronouns) = profile.pronouns %}{{ pronouns }}{% endif %}</p>
+    {% endif %}
+    {% if let Some(status) = profile.status_line %}<p class="author-status">“{{ status }}”</p>{% endif %}
+    {% if own %}<p><a href="/settings">Your account settings</a> · <a href="/invites">your invites</a></p>{% endif %}
+  </div>
+</div>
+<section class="panel" aria-labelledby="about-heading">
+  <h2 class="panel-bar" id="about-heading">About</h2>
+  <dl class="details">
+    <dt>Joined</dt><dd>{% call m::time(profile.joined_at) %}{% endcall %}</dd>
+    <dt>Posts</dt><dd>{{ crate::format::count(profile.post_count) }}</dd>
+    {% if let Some(location) = profile.location %}<dt>Location</dt><dd>{{ location }}</dd>{% endif %}
+    <dt>Invited by</dt>
+    <dd>{% if let Some(inviter) = profile.invited_by %}<a href="/u/{{ inviter.username }}">{{ inviter.display_name }}</a>{% else %}<em>A founding member</em>{% endif %}</dd>
+  </dl>
+</section>
+<section class="panel" aria-labelledby="invited-heading">
+  <h2 class="panel-bar" id="invited-heading">Invited {{ crate::format::plural(profile.invitees.len() as i64, "person", "people") }}</h2>
+  {% if profile.invitees.is_empty() %}
+  <p class="empty">{{ profile.user.display_name }} hasn’t invited anyone yet.</p>
+  {% else %}
+  <ul class="member-list">
+  {% for member in profile.invitees %}
+    <li>{% call m::avatar(member.user, "avatar-tiny") %}{% endcall %}<a href="/u/{{ member.user.username }}">{{ member.user.display_name }}</a> <span class="row-meta">@{{ member.user.username }} · joined {% call m::time(member.joined_at) %}{% endcall %}</span></li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+  <p class="panel-foot"><a href="/users/tree">The whole invite tree →</a></p>
+</section>
+{% endblock %}

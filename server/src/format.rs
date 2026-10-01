@@ -66,6 +66,11 @@ pub fn avatar_class(user_id: &i64) -> String {
     format!("avatar-{}", user_id.rem_euclid(8))
 }
 
+/// Whether `id` is the logged-in viewer's.
+pub fn is_viewer(viewer_id: &Option<i64>, id: &i64) -> bool {
+    *viewer_id == Some(*id)
+}
+
 pub fn thread_href(id: &i64, slug: &str) -> String {
     format!("/t/{id}/{slug}")
 }

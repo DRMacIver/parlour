@@ -1,0 +1,14 @@
+Hello,
+
+{{ inviter }} has invited you to join {{ site_name }}.
+
+To accept, choose a username and you're in:
+
+  {{ url }}
+
+The invitation expires on {{ expires }} (UTC) and can only be used once.
+
+If you weren't expecting this, you can ignore this email.
+
+-- 
+{{ site_name }}
