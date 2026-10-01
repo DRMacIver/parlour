@@ -1,4 +1,4 @@
-# forumal — design (draft v0.1)
+# Parlour — design (draft v0.1)
 
 A minimal, fast, self-hosted web forum in the old-school style. MIT licensed. The background research is in `research/`; start with `research/00-summary.md`.
 
@@ -274,8 +274,8 @@ enum Viewer { Anonymous, User(UserCtx) }  // UserCtx: id, role, group_ids, suspe
 ## 10. Deployment
 
 - **The image:** one static binary with the templates and Vite output embedded, built from a multi-stage Dockerfile into a small final image.
-- **`compose.yaml`** runs `forumal`, `postgres:18` (pinned major version), `caddy` (automatic HTTPS) and `backup` (a nightly `pg_dump` plus the uploads volume, with rotation).
-- **Configuration** comes from environment variables: `FORUMAL_DOMAIN`, `POSTGRES_PASSWORD`, and the SMTP settings. Everything else is set in the admin interface.
+- **`compose.yaml`** runs `parlour`, `postgres:18` (pinned major version), `caddy` (automatic HTTPS) and `backup` (a nightly `pg_dump` plus the uploads volume, with rotation).
+- **Configuration** comes from environment variables: `PARLOUR_DOMAIN`, `POSTGRES_PASSWORD`, and the SMTP settings. Everything else is set in the admin interface.
 - **First run:** the app prints a one-time setup token. `/setup?token=…` creates the admin account, the site name and the SMTP settings (with a test send), then issues the first invites.
 - **Migrations** use sqlx and run on startup, after a pre-migration dump. The app refuses to start if it detects an empty database where it expected existing data, which guards against the postgres:18 data-directory change.
 - **Docs:** how to upgrade the Postgres major version, and how to restore a backup.
@@ -333,6 +333,5 @@ research/      background research
 ## 14. Open questions
 
 1. Which **[proposal]** items do you want to change?
-2. **Name:** "forumal" is a placeholder. Choose a real name before the first public release.
 
-Resolved: a flat category list with optional sections; no signatures, but a customisable post-info column; no time limit on editing; edit history in v1.
+Resolved: the name is **Parlour** (crate/binary `parlour`; the old placeholder was "forumal"); a flat category list with optional sections; no signatures, but a customisable post-info column; no time limit on editing; edit history in v1.
