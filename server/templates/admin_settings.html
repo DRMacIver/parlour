@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {%- import "_forms.html" as f -%}
 {%- import "_smtp.html" as s -%}
+{%- import "_admin_nav.html" as an -%}
 {% block title %}Site settings · {{ layout.site_name }}{% endblock %}
 {% block content %}
 <div class="narrow">
 <h1 class="page-title">Site settings</h1>
+{% call an::admin_nav("settings") %}{% endcall %}
 {% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
 {% call f::errors(errors) %}{% endcall %}
 <form method="post" action="/admin/settings">

@@ -1,18 +1,24 @@
-//! `/admin/settings`: the site name, who can join and invite, and the SMTP
-//! server, with a test send. Admins only.
+//! Admin pages, for admins only:
+//!
+//! - `/admin/settings`: the site name, who can join and invite, and the
+//!   SMTP server, with a test send;
+//! - `/admin/users`: the members, and their roles (DESIGN.md §3.1).
 
 use askama::Template;
 use axum::Form;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
 use serde::Deserialize;
 
 use crate::AppState;
+use crate::accounts::Role;
 use crate::changes::Change;
+use crate::content::page_count;
 use crate::emails;
 use crate::error::AppError;
 use crate::mail::{self, SmtpSecurity, SmtpSettings};
+use crate::pagination::{PageItem, Pagination};
 use crate::settings::{self, InvitePolicy, RegistrationMode};
 use crate::viewer::{UserCtx, Viewer};
 use crate::web::{self, Layout, Nav, render, see_other};
@@ -250,10 +256,7 @@ pub async fn settings_page(
     Query(query): Query<DoneQuery>,
 ) -> Result<Response, AppError> {
     let Some(user) = admin(&viewer) else {
-        return match viewer.user() {
-            None => Ok(web::login_first("/admin/settings")),
-            Some(_) => web::forbidden(&state, &viewer).await,
-        };
+        return not_admin(&state, &viewer, "/admin/settings").await;
     };
     let notice = match query.done.as_str() {
         "saved" => Some("Settings saved.".to_owned()),
@@ -289,10 +292,7 @@ pub async fn save_settings(
     Form(form): Form<SettingsForm>,
 ) -> Result<Response, AppError> {
     let Some(user) = admin(&viewer) else {
-        return match viewer.user() {
-            None => Ok(web::login_first("/admin/settings")),
-            Some(_) => web::forbidden(&state, &viewer).await,
-        };
+        return not_admin(&state, &viewer, "/admin/settings").await;
     };
     let mut problems = Vec::new();
     let site_name = form
@@ -369,10 +369,7 @@ pub async fn test_email(
     viewer: Viewer,
 ) -> Result<Response, AppError> {
     let Some(user) = admin(&viewer) else {
-        return match viewer.user() {
-            None => Ok(web::login_first("/admin/settings")),
-            Some(_) => web::forbidden(&state, &viewer).await,
-        };
+        return not_admin(&state, &viewer, "/admin/settings").await;
     };
     let smtp = mail::smtp_settings(&state).await?;
     match send_test(&state, smtp.as_ref(), &user.email).await {
@@ -390,6 +387,191 @@ pub async fn test_email(
             .await
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Members and roles
+
+/// Members per page of `/admin/users`.
+const MEMBERS_PER_PAGE: i64 = 100;
+
+/// One member in the admin list.
+pub struct AdminMember {
+    pub id: i64,
+    pub username: String,
+    pub display_name: String,
+    pub role: Role,
+    pub joined_at: chrono::DateTime<chrono::Utc>,
+    pub inviter: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "admin_users.html")]
+struct AdminUsersTemplate {
+    layout: Layout,
+    notice: Option<&'static str>,
+    errors: Vec<String>,
+    members: Vec<AdminMember>,
+    pagination: Pagination,
+    roles: &'static [Role],
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct UsersQuery {
+    page: String,
+    done: String,
+}
+
+/// Sends a visitor who isn't an admin away: to log in, if that might help.
+async fn not_admin(state: &AppState, viewer: &Viewer, path: &str) -> Result<Response, AppError> {
+    match viewer.user() {
+        None => Ok(web::login_first(path)),
+        Some(_) => web::forbidden(state, viewer).await,
+    }
+}
+
+async fn render_users(
+    state: &AppState,
+    viewer: &Viewer,
+    status: StatusCode,
+    page: i64,
+    notice: Option<&'static str>,
+    errors: Vec<String>,
+) -> Result<Response, AppError> {
+    let db = state.db();
+    let total =
+        sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM users WHERE deleted_at IS NULL"#)
+            .fetch_one(db)
+            .await?;
+    let pages = page_count(total, MEMBERS_PER_PAGE);
+    if page > pages {
+        return web::not_found(state, viewer).await;
+    }
+    let rows = sqlx::query!(
+        r#"SELECT u.id, u.username AS "username: String", u.display_name, u.role, u.created_at,
+                  i.username AS "inviter?: String"
+           FROM users u LEFT JOIN users i ON i.id = u.invited_by_user_id
+           WHERE u.deleted_at IS NULL
+           ORDER BY u.username
+           LIMIT $1 OFFSET $2"#,
+        MEMBERS_PER_PAGE,
+        (page - 1) * MEMBERS_PER_PAGE,
+    )
+    .fetch_all(db)
+    .await?;
+    let members = rows
+        .into_iter()
+        .map(|row| AdminMember {
+            id: row.id,
+            username: row.username,
+            display_name: row.display_name,
+            role: Role::parse(&row.role).unwrap_or(Role::User),
+            joined_at: row.created_at,
+            inviter: row.inviter,
+        })
+        .collect();
+    render(
+        status,
+        &AdminUsersTemplate {
+            layout: Layout::load(state, viewer, Nav::Admin).await?,
+            notice,
+            errors,
+            members,
+            pagination: Pagination::new("/admin/users", page, pages),
+            roles: &[Role::User, Role::Moderator, Role::Admin],
+        },
+    )
+}
+
+pub async fn users_page(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Query(query): Query<UsersQuery>,
+) -> Result<Response, AppError> {
+    if admin(&viewer).is_none() {
+        return not_admin(&state, &viewer, "/admin/users").await;
+    }
+    let page = match query.page.as_str() {
+        "" => 1,
+        page => match page.parse::<i64>() {
+            Ok(page) if page >= 1 => page,
+            _ => return web::not_found(&state, &viewer).await,
+        },
+    };
+    let notice = (query.done == "role").then_some("Role changed.");
+    render_users(&state, &viewer, StatusCode::OK, page, notice, Vec::new()).await
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct RoleForm {
+    role: String,
+}
+
+pub async fn change_role(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(id): Path<String>,
+    Form(form): Form<RoleForm>,
+) -> Result<Response, AppError> {
+    let Some(user) = admin(&viewer) else {
+        return not_admin(&state, &viewer, "/admin/users").await;
+    };
+    let Some(id) = id.parse::<i64>().ok() else {
+        return web::not_found(&state, &viewer).await;
+    };
+    let refuse = |why: &str| {
+        render_users(
+            &state,
+            &viewer,
+            StatusCode::BAD_REQUEST,
+            1,
+            None,
+            vec![why.to_owned()],
+        )
+    };
+    let Some(role) = Role::parse(&form.role) else {
+        return refuse("Choose a role from the list.").await;
+    };
+    let mut tx = state.db().begin().await?;
+    // Lock the admins first, so that two admins demoting each other at
+    // once can't leave none.
+    let admins = sqlx::query_scalar!(
+        "SELECT id FROM users WHERE role = 'admin' AND deleted_at IS NULL ORDER BY id FOR UPDATE"
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let Some(current) = sqlx::query_scalar!(
+        "SELECT role FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+        id
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    else {
+        return web::not_found(&state, &viewer).await;
+    };
+    if current == Role::Admin.as_str() && role != Role::Admin && admins.len() <= 1 {
+        return refuse(
+            "There must always be at least one admin. Make someone else an admin first.",
+        )
+        .await;
+    }
+    // M7: record this in mod_actions.
+    sqlx::query!(
+        "UPDATE users SET role = $2 WHERE id = $1",
+        id,
+        role.as_str()
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    // Profiles and the invite tree show staff badges.
+    state.changed(Change::UserChanged { user_id: id }).await?;
+    if id == user.id && role != Role::Admin {
+        return Ok(see_other("/"));
+    }
+    Ok(see_other("/admin/users?done=role"))
 }
 
 #[cfg(test)]

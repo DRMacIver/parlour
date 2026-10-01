@@ -37,6 +37,15 @@ impl Role {
         }
     }
 
+    /// The role's name, for choosing one.
+    pub fn label(self) -> &'static str {
+        match self {
+            Role::User => "Member",
+            Role::Moderator => "Moderator",
+            Role::Admin => "Admin",
+        }
+    }
+
     /// Moderators and admins.
     pub fn is_staff(self) -> bool {
         self >= Role::Moderator

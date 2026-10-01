@@ -566,6 +566,20 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
 .invite-head { display: flex; flex-wrap: wrap; gap: 0 6px; }
 .member-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 8px 14px; border-top: 1px solid var(--rule); }
 .member-list li:first-child { border-top: none; }
+.admin-members .tree-names { flex: 1 1 220px; }
+.role-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.role-form select { min-height: 28px; }
+
+/* Links between pages of one area, such as the admin pages. */
+.subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 0 0 12px;
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+}
+.subnav [aria-current="page"] { color: var(--accent); font-weight: 700; text-decoration: none; }
 .created-invites li { margin: 6px 0; }
 .notice .created-invites { padding-left: 0; }
 

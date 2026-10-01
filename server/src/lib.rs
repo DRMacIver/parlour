@@ -201,6 +201,8 @@ pub fn app(state: AppState) -> Router {
             get(admin_pages::settings_page).post(admin_pages::save_settings),
         )
         .route("/admin/settings/test-email", post(admin_pages::test_email))
+        .route("/admin/users", get(admin_pages::users_page))
+        .route("/admin/users/{id}/role", post(admin_pages::change_role))
         .route("/setup", get(setup::setup_page).post(setup::create_admin))
         .route(
             "/setup/email",
