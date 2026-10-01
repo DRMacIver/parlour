@@ -736,3 +736,208 @@ async fn reply_links_never_reveal_posts_in_other_threads(pool: PgPool) {
     assert!(!html.contains("999"), "{html}");
     assert!(!html.contains(&format!("/p/{target}")), "{html}");
 }
+
+// ---------------------------------------------------------------------------
+// Canonical URLs: every page has exactly one URL that serves it, so junk
+// query strings and spellings of numbers can't fill the anonymous cache.
+
+struct Canonical {
+    f: Forum,
+    thread_id: i64,
+    /// Every URL that should serve a page.
+    pages: Vec<String>,
+}
+
+async fn canonical_setup(pool: PgPool) -> Canonical {
+    let f = Forum::new(pool);
+    let ruth = f.user("ruth").await;
+    let games = f.category("games", "public", None, 0).await;
+    let t = f.thread(games, ruth, "Spirit Island", "x").await;
+    for _ in 0..60 {
+        f.post(t.thread_id, ruth, "x").await;
+    }
+    for i in 0..30 {
+        f.thread(games, ruth, &format!("Filler {i}"), "x").await;
+    }
+    let id = t.thread_id;
+    let pages = vec![
+        "/".to_owned(),
+        "/latest".to_owned(),
+        "/latest?page=2".to_owned(),
+        "/c/games".to_owned(),
+        "/c/games?page=2".to_owned(),
+        format!("/t/{id}/spirit-island"),
+        format!("/t/{id}/spirit-island?page=2"),
+    ];
+    Canonical {
+        f,
+        thread_id: id,
+        pages,
+    }
+}
+
+#[sqlx::test]
+async fn non_canonical_urls_redirect_to_the_canonical_one(pool: PgPool) {
+    let c = canonical_setup(pool).await;
+    let id = c.thread_id;
+    let thread = format!("/t/{id}/spirit-island");
+    for (from, to) in [
+        ("/?x=1".to_owned(), "/".to_owned()),
+        ("/latest?page=1".to_owned(), "/latest".to_owned()),
+        ("/latest?x=1&page=2".to_owned(), "/latest?page=2".to_owned()),
+        ("/c/games?x=1".to_owned(), "/c/games".to_owned()),
+        ("/c/games?x=2".to_owned(), "/c/games".to_owned()),
+        ("/c/games?page=01".to_owned(), "/c/games".to_owned()),
+        ("/c/games?page=%2B1".to_owned(), "/c/games".to_owned()),
+        ("/c/games?page=02".to_owned(), "/c/games?page=2".to_owned()),
+        ("/c/games?page=%32".to_owned(), "/c/games?page=2".to_owned()),
+        ("/c/game%73".to_owned(), "/c/games".to_owned()),
+        ("/c/games?".to_owned(), "/c/games".to_owned()),
+        (format!("/t/0{id}/spirit-island"), thread.clone()),
+        (
+            format!("/t/0{id}/spirit-island?page=2"),
+            format!("{thread}?page=2"),
+        ),
+        (format!("{thread}?page=1"), thread.clone()),
+        (format!("{thread}?utm_source=x"), thread.clone()),
+        (format!("/t/{id}/spirit-islan%64"), thread.clone()),
+        (
+            format!("/t/{id}/Spirit%20Island?page=2"),
+            format!("{thread}?page=2"),
+        ),
+    ] {
+        let response = c.f.get(&from).await;
+        assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT, "{from}");
+        assert_eq!(response.location(), to, "{from}");
+    }
+    assert!(c.f.state.cache().is_empty(), "redirects aren't cached");
+}
+
+#[sqlx::test]
+async fn ambiguous_page_numbers_are_not_found(pool: PgPool) {
+    let c = canonical_setup(pool).await;
+    let id = c.thread_id;
+    for path in [
+        "/latest?page=1&page=2".to_owned(),
+        "/c/games?page=2&page=2".to_owned(),
+        format!("/t/{id}/spirit-island?page=1&page=1"),
+        "/c/games?page=".to_owned(),
+        "/c/games?page=%FF".to_owned(),
+    ] {
+        let response = c.f.get(&path).await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "{path}");
+        assert!(response.body.contains("<html"), "{path}: {}", response.body);
+    }
+}
+
+/// Percent-encodes `s`, encoding each byte that doesn't need it only when
+/// `encode_anyway` says so.
+fn percent_encode(s: &str, mut encode_anyway: impl FnMut() -> bool) -> String {
+    let mut out = String::new();
+    for &b in s.as_bytes() {
+        if (b.is_ascii_alphanumeric() || b == b'-') && !encode_anyway() {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+#[hegel::standalone_function(test_cases = 200)]
+fn only_canonical_urls_are_served_or_cached(
+    tc: hegel::TestCase,
+    rt: &tokio::runtime::Handle,
+    c: &Canonical,
+) {
+    use hegel::generators::{self as gs, Generator};
+    let target = tc.draw(gs::sampled_from(c.pages.clone()));
+    let (path, query) = target.split_once('?').unwrap_or((&target, ""));
+    // Respell the path: percent-encode some characters, pad numbers.
+    let mut new_path = String::new();
+    for segment in path.split('/').skip(1) {
+        new_path.push('/');
+        let zeros = if segment.bytes().all(|b| b.is_ascii_digit()) && !segment.is_empty() {
+            tc.draw(gs::integers::<usize>().max_value(3))
+        } else {
+            0
+        };
+        new_path.push_str(&"0".repeat(zeros));
+        new_path.push_str(&percent_encode(segment, || tc.draw(gs::booleans())));
+    }
+    if new_path.is_empty() {
+        new_path.push('/');
+    }
+    // Rebuild the query with extra parameters and respelled values.
+    let mut params: Vec<(String, String)> = query
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let (k, v) = p.split_once('=').unwrap();
+            (k.to_owned(), v.to_owned())
+        })
+        .collect();
+    let extras = tc.draw(gs::integers::<usize>().max_value(3));
+    for _ in 0..extras {
+        let key = tc.draw(gs::sampled_from(vec![
+            "page".to_owned(),
+            "x".to_owned(),
+            tc.draw(gs::text()),
+        ]));
+        let value = tc.draw(hegel::one_of!(
+            gs::text(),
+            gs::integers::<i64>().map(|n| n.to_string()),
+            gs::integers::<u8>().map(|n| format!("+{n}")),
+            gs::integers::<u8>().map(|n| format!("0{n}"))
+        ));
+        let at = tc.draw(gs::integers::<usize>().max_value(params.len()));
+        params.insert(at, (key, value));
+    }
+    let mut url = new_path;
+    if !params.is_empty() || tc.draw(gs::booleans()) {
+        url.push('?');
+        let encoded: Vec<String> = params
+            .iter()
+            .map(|(k, v)| {
+                format!(
+                    "{}={}",
+                    percent_encode(k, || tc.draw(gs::booleans())),
+                    percent_encode(v, || tc.draw(gs::booleans()))
+                )
+            })
+            .collect();
+        url.push_str(&encoded.join("&"));
+    }
+    tc.note(&url);
+
+    let response = rt.block_on(c.f.get(&url));
+    match response.status {
+        StatusCode::OK => assert!(c.pages.contains(&url), "{url} served a page"),
+        StatusCode::PERMANENT_REDIRECT => {
+            assert!(!c.pages.contains(&url), "{url} redirected");
+            let location = response.location().to_owned();
+            let next = rt.block_on(c.f.get(&location));
+            assert!(
+                next.status == StatusCode::OK || next.status == StatusCode::NOT_FOUND,
+                "{url} -> {location}: {}",
+                next.status
+            );
+            if next.status == StatusCode::OK {
+                assert!(c.pages.contains(&location), "{url} -> {location}");
+            }
+        }
+        StatusCode::NOT_FOUND => assert!(!c.pages.contains(&url)),
+        other => panic!("{url}: {other}"),
+    }
+    assert!(c.f.state.cache().len() <= c.pages.len());
+    assert!(rt.block_on(async { c.f.state.cache().get(&url).is_none() }) || c.pages.contains(&url));
+}
+
+#[sqlx::test]
+async fn only_canonical_urls_are_served_or_cached_property(pool: PgPool) {
+    let c = canonical_setup(pool).await;
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || only_canonical_urls_are_served_or_cached(&rt, &c))
+        .await
+        .unwrap();
+}

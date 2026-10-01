@@ -21,6 +21,7 @@ use hegel::generators::{self as gs};
 use parlour::cache::PageCache;
 use parlour::changes::Change;
 use parlour::content::{POSTS_PER_PAGE, THREADS_PER_PAGE, page_count, page_of_seq};
+use parlour::pagination::page_href;
 use parlour::store::{self, NewCategory, NewPost, NewThread, NewUser};
 use parlour::{AppState, markdown};
 use sqlx::PgPool;
@@ -235,7 +236,7 @@ impl World {
             .filter(|&t| self.thread_public(t))
             .count() as i64;
         for page in 1..=page_count(visible_threads, THREADS_PER_PAGE) + 1 {
-            paths.push(format!("/latest?page={page}"));
+            paths.push(page_href("/latest", page));
         }
         for (i, c) in self.categories.iter().enumerate() {
             let threads = self
@@ -244,14 +245,14 @@ impl World {
                 .filter(|t| t.category == i && !t.deleted)
                 .count() as i64;
             for page in 1..=page_count(threads, THREADS_PER_PAGE) + 1 {
-                paths.push(format!("/c/{}?page={page}", c.slug));
+                paths.push(page_href(&format!("/c/{}", c.slug), page));
             }
         }
         for t in &self.threads {
             paths.push(format!("/t/{}", t.id));
             paths.push(format!("/t/{}/unread", t.id));
             for page in 1..=page_count(t.last_seq, POSTS_PER_PAGE) + 1 {
-                paths.push(format!("/t/{}/{}?page={page}", t.id, self.slug_of(t)));
+                paths.push(page_href(&format!("/t/{}/{}", t.id, self.slug_of(t)), page));
             }
         }
         for p in &self.posts {

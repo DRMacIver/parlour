@@ -4,9 +4,8 @@
 
 use askama::Template;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use serde::Deserialize;
 
 use crate::AppState;
 use crate::content::{
@@ -50,24 +49,43 @@ fn cacheable(template: &impl Template, deps: &Deps) -> Result<Response, AppError
     Ok(response)
 }
 
-#[derive(Deserialize)]
-pub struct PageQuery {
-    page: Option<String>,
+/// The `?page=` number the request asks for: 1 if there is none, or `None`
+/// (a 404) if it isn't a positive integer or is given more than once.
+fn requested_page(uri: &Uri) -> Option<i64> {
+    let Query(params) = Query::<Vec<(String, String)>>::try_from_uri(uri).ok()?;
+    let mut pages = params.iter().filter(|(key, _)| key == "page");
+    match (pages.next(), pages.next()) {
+        (None, _) => Some(1),
+        (Some((_, page)), None) => page.parse().ok().filter(|&n: &i64| n >= 1),
+        (Some(_), Some(_)) => None,
+    }
 }
 
-impl PageQuery {
-    /// The requested page number, or `None` if it isn't a positive integer.
-    fn number(&self) -> Option<i64> {
-        match &self.page {
-            None => Some(1),
-            Some(page) => page.parse().ok().filter(|&n: &i64| n >= 1),
-        }
-    }
+/// Every page has exactly one URL. A request for any other spelling of it
+/// (unknown query parameters, `?page=1`, `?page=02`, `/t/049/…`,
+/// percent-encoded letters) is redirected there before any rendering, so
+/// such URLs never cost a render or take up room in the anonymous cache,
+/// which is keyed by the raw path and query.
+fn redirect_unless_canonical(uri: &Uri, canonical: &str) -> Option<Response> {
+    let requested = uri.path_and_query().map_or(uri.path(), |pq| pq.as_str());
+    (requested != canonical).then(|| Redirect::permanent(canonical).into_response())
 }
 
 /// Paths take ids as strings so that a malformed id is a 404, not a 400.
 fn parse_id(id: &str) -> Option<i64> {
     id.parse().ok().filter(|&n: &i64| n >= 1)
+}
+
+/// Whether `slug` has the form the database requires of category and
+/// thread slugs, so that it can appear in a URL unescaped.
+fn well_formed_slug(slug: &str) -> bool {
+    !slug.is_empty()
+        && slug.split('-').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
 }
 
 impl ThreadRow {
@@ -91,7 +109,14 @@ struct IndexTemplate {
     latest: Vec<ThreadRow>,
 }
 
-pub async fn index(State(state): State<AppState>, viewer: Viewer) -> Result<Response, AppError> {
+pub async fn index(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    uri: Uri,
+) -> Result<Response, AppError> {
+    if let Some(redirect) = redirect_unless_canonical(&uri, "/") {
+        return Ok(redirect);
+    }
     let mut deps = Deps::new();
     let sections = content::index_sections(&state.db, &viewer, &mut deps).await?;
     let latest = content::latest(&state.db, &viewer, 1, LATEST_ON_INDEX, &mut deps).await?;
@@ -119,11 +144,14 @@ struct LatestTemplate {
 pub async fn latest(
     State(state): State<AppState>,
     viewer: Viewer,
-    Query(query): Query<PageQuery>,
+    uri: Uri,
 ) -> Result<Response, AppError> {
-    let Some(page) = query.number() else {
+    let Some(page) = requested_page(&uri) else {
         return not_found_response(&state).await;
     };
+    if let Some(redirect) = redirect_unless_canonical(&uri, &page_href("/latest", page)) {
+        return Ok(redirect);
+    }
     let mut deps = Deps::new();
     let latest = content::latest(&state.db, &viewer, page, THREADS_PER_PAGE, &mut deps).await?;
     let total = page_count(latest.thread_count, THREADS_PER_PAGE);
@@ -157,11 +185,15 @@ pub async fn category(
     State(state): State<AppState>,
     viewer: Viewer,
     Path(slug): Path<String>,
-    Query(query): Query<PageQuery>,
+    uri: Uri,
 ) -> Result<Response, AppError> {
-    let Some(page) = query.number() else {
+    let Some(page) = requested_page(&uri).filter(|_| well_formed_slug(&slug)) else {
         return not_found_response(&state).await;
     };
+    if let Some(redirect) = redirect_unless_canonical(&uri, &page_href(&format!("/c/{slug}"), page))
+    {
+        return Ok(redirect);
+    }
     let mut deps = Deps::new();
     let Some(mut category) =
         content::category_page(&state.db, &viewer, &slug, page, &mut deps).await?
@@ -212,11 +244,20 @@ pub async fn thread(
     State(state): State<AppState>,
     viewer: Viewer,
     Path((id, slug)): Path<(String, String)>,
-    Query(query): Query<PageQuery>,
+    uri: Uri,
 ) -> Result<Response, AppError> {
-    let (Some(id), Some(page)) = (parse_id(&id), query.number()) else {
+    let (Some(id), Some(page)) = (parse_id(&id), requested_page(&uri)) else {
         return not_found_response(&state).await;
     };
+    // The slug is checked first with a cheap query, so that a wrong one
+    // costs no more than any other non-canonical URL.
+    let Some(canonical_slug) = content::thread_slug(&state.db, &viewer, id).await? else {
+        return not_found_response(&state).await;
+    };
+    let canonical = page_href(&format::thread_href(&id, &canonical_slug), page);
+    if let Some(redirect) = redirect_unless_canonical(&uri, &canonical) {
+        return Ok(redirect);
+    }
     let mut deps = Deps::new();
     let Some(thread) = content::thread_page(&state.db, &viewer, id, page, &mut deps).await? else {
         return not_found_response(&state).await;

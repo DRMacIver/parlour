@@ -53,7 +53,11 @@ async fn seed_fills_an_empty_forum_with_browsable_content(pool: PgPool) {
     for (id, slug, last_seq) in &threads {
         let pages = (i64::from(*last_seq) + 49) / 50;
         for page in 1..=pages {
-            f.page(&format!("/t/{id}/{slug}?page={page}")).await;
+            f.page(&parlour::pagination::page_href(
+                &format!("/t/{id}/{slug}"),
+                page,
+            ))
+            .await;
         }
     }
 }

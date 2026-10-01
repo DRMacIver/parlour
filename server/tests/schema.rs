@@ -278,3 +278,29 @@ async fn a_post_with_replies_cant_move_away_from_them(pool: PgPool) {
     .unwrap();
     tx.commit().await.unwrap();
 }
+
+#[sqlx::test]
+async fn thread_slugs_are_url_safe(pool: PgPool) {
+    let f = Forum::new(pool);
+    let ruth = f.user("ruth").await;
+    let games = f.category("games", "public", None, 0).await;
+    let t = f.thread(games, ruth, "Spirit Island", "x").await;
+    for bad in [
+        "",
+        "Spirit",
+        "spirit island",
+        "spirit--island",
+        "-x",
+        "x-",
+        "é",
+    ] {
+        let result = sqlx::query!(
+            "UPDATE threads SET slug = $1 WHERE id = $2",
+            bad,
+            t.thread_id
+        )
+        .execute(&f.db)
+        .await;
+        assert!(result.is_err(), "{bad:?}");
+    }
+}
