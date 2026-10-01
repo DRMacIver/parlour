@@ -125,3 +125,97 @@ async fn usernames_are_case_insensitively_unique(pool: PgPool) {
     .await;
     assert!(result.is_err());
 }
+
+async fn read_level(f: &Forum, category_id: i64) -> String {
+    sqlx::query_scalar!(
+        "SELECT read_level FROM categories WHERE id = $1",
+        category_id
+    )
+    .fetch_one(&f.db)
+    .await
+    .unwrap()
+}
+
+/// Runs `first` in an open transaction, then starts `second` on another
+/// connection while that transaction is still open, then commits `first` and
+/// waits for `second`. Whatever order the database serialises them in, the
+/// thread's visibility must end up matching its category's read level.
+async fn race(f: &Forum, first: String, second: String) {
+    let mut a = f.db.begin().await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(first))
+        .execute(&mut *a)
+        .await
+        .unwrap();
+    let db = f.db.clone();
+    let b = tokio::spawn(async move {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(second))
+            .execute(&db)
+            .await
+            .unwrap();
+    });
+    // Give the second statement time to either finish or block on a lock.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    a.commit().await.unwrap();
+    b.await.unwrap();
+}
+
+#[sqlx::test]
+async fn moving_a_thread_while_its_destination_is_tightened_keeps_visibility_in_sync(pool: PgPool) {
+    let f = Forum::new(pool);
+    let ruth = f.user("ruth").await;
+    let games = f.category("games", "public", None, 0).await;
+    let dest = f.category("race-test", "public", None, 1).await;
+    let t = f.thread(games, ruth, "Thread", "x").await;
+    race(
+        &f,
+        format!(
+            "UPDATE threads SET category_id = {dest} WHERE id = {}",
+            t.thread_id
+        ),
+        format!("UPDATE categories SET read_level = 'members' WHERE id = {dest}"),
+    )
+    .await;
+    assert_eq!(read_level(&f, dest).await, "members");
+    assert_eq!(visibility(&f, t.thread_id).await, "members");
+}
+
+#[sqlx::test]
+async fn tightening_a_category_while_a_thread_moves_into_it_keeps_visibility_in_sync(pool: PgPool) {
+    let f = Forum::new(pool);
+    let ruth = f.user("ruth").await;
+    let games = f.category("games", "public", None, 0).await;
+    let dest = f.category("race-test", "public", None, 1).await;
+    let t = f.thread(games, ruth, "Thread", "x").await;
+    race(
+        &f,
+        format!("UPDATE categories SET read_level = 'members' WHERE id = {dest}"),
+        format!(
+            "UPDATE threads SET category_id = {dest} WHERE id = {}",
+            t.thread_id
+        ),
+    )
+    .await;
+    assert_eq!(visibility(&f, t.thread_id).await, "members");
+}
+
+#[sqlx::test]
+async fn creating_a_thread_while_its_category_is_tightened_keeps_visibility_in_sync(pool: PgPool) {
+    let f = Forum::new(pool);
+    let ruth = f.user("ruth").await;
+    let dest = f.category("race-test", "public", None, 1).await;
+    race(
+        &f,
+        format!(
+            "INSERT INTO threads (category_id, visibility, title, slug, author_id)
+             VALUES ({dest}, 'public', 'Racing', 'racing', {ruth})"
+        ),
+        format!("UPDATE categories SET read_level = 'members' WHERE id = {dest}"),
+    )
+    .await;
+    let visibility: String =
+        sqlx::query_scalar!("SELECT visibility FROM threads WHERE slug = 'racing'")
+            .fetch_one(&f.db)
+            .await
+            .unwrap();
+    assert_eq!(visibility, "members");
+}
