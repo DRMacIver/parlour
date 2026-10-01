@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE posts SET thread_id = $1, seq = 999 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d35e4bcda90cd9ecdf3b2f93c11851ff9ab85ddad38ee004560cea0be9f0250e"
+}

@@ -219,3 +219,62 @@ async fn creating_a_thread_while_its_category_is_tightened_keeps_visibility_in_s
             .unwrap();
     assert_eq!(visibility, "members");
 }
+
+#[sqlx::test]
+async fn a_post_with_replies_cant_move_away_from_them(pool: PgPool) {
+    let f = Forum::new(pool);
+    let ruth = f.user("ruth").await;
+    let games = f.category("games", "public", None, 0).await;
+    let a = f.thread(games, ruth, "A", "x").await;
+    let b = f.thread(games, ruth, "B", "x").await;
+    let target = f.post(a.thread_id, ruth, "target").await;
+    let reply = f.reply(a.thread_id, ruth, "reply", Some(target)).await;
+
+    let moved = sqlx::query!(
+        "UPDATE posts SET thread_id = $1, seq = 999 WHERE id = $2",
+        b.thread_id,
+        target
+    )
+    .execute(&f.db)
+    .await;
+    assert!(moved.is_err(), "moved a post away from its replies");
+
+    // Moving the reply away from its target is refused too.
+    let moved = sqlx::query!(
+        "UPDATE posts SET thread_id = $1, seq = 999 WHERE id = $2",
+        b.thread_id,
+        reply
+    )
+    .execute(&f.db)
+    .await;
+    assert!(moved.is_err(), "moved a reply away from its target");
+
+    // Moving both together in one statement is fine (a split).
+    sqlx::query!(
+        "UPDATE posts SET thread_id = $1, seq = 1000 + seq WHERE id = ANY($2)",
+        b.thread_id,
+        &[target, reply][..]
+    )
+    .execute(&f.db)
+    .await
+    .unwrap();
+
+    // So is clearing the link and then moving, in one transaction.
+    let mut tx = f.db.begin().await.unwrap();
+    sqlx::query!(
+        "UPDATE posts SET reply_to_post_id = NULL WHERE id = $1",
+        reply
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query!(
+        "UPDATE posts SET thread_id = $1, seq = 2000 WHERE id = $2",
+        a.thread_id,
+        target
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}

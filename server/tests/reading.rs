@@ -709,3 +709,30 @@ async fn huge_page_numbers_are_not_found(pool: PgPool) {
         }
     }
 }
+
+#[sqlx::test]
+async fn reply_links_never_reveal_posts_in_other_threads(pool: PgPool) {
+    let f = Forum::new(pool);
+    let ruth = f.user("ruth").await;
+    let maya = f.user("maya").await;
+    let games = f.category("games", "public", None, 0).await;
+    let lounge = f.category("lounge", "groups", None, 1).await;
+    let public = f.thread(games, ruth, "Public", "x").await;
+    let secret = f.thread(lounge, maya, "Secret", "x").await;
+    let target = f.post(public.thread_id, maya, "target").await;
+    let reply = f.reply(public.thread_id, ruth, "reply", Some(target)).await;
+    // The schema refuses this; if it ever failed to, the page still mustn't
+    // show who wrote the post or where it is now.
+    f.exec(&format!(
+        "ALTER TABLE posts DISABLE TRIGGER USER;
+         UPDATE posts SET thread_id = {}, seq = 999 WHERE id = {target};
+         ALTER TABLE posts ENABLE TRIGGER USER;",
+        secret.thread_id
+    ))
+    .await;
+    let page = f.page(&format!("/t/{}/public", public.thread_id)).await;
+    let html = post_html(&page, reply);
+    assert!(!html.contains("Maya"), "{html}");
+    assert!(!html.contains("999"), "{html}");
+    assert!(!html.contains(&format!("/p/{target}")), "{html}");
+}

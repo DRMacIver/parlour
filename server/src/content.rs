@@ -561,7 +561,7 @@ pub async fn thread_page(
                r.id AS "reply_id?", r.seq AS "reply_seq?",
                ru.id AS "reply_user_id?", ru.username AS "reply_username?", ru.display_name AS "reply_display_name?"
         FROM posts p
-        LEFT JOIN posts r ON r.id = p.reply_to_post_id
+        LEFT JOIN posts r ON r.id = p.reply_to_post_id AND r.thread_id = p.thread_id
         LEFT JOIN users ru ON ru.id = r.author_id AND r.deleted_at IS NULL AND r.hidden_at IS NULL
         WHERE p.thread_id = $1 AND p.seq BETWEEN $2 AND $3
         ORDER BY p.seq
