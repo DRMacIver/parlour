@@ -944,3 +944,56 @@ async fn only_real_session_tokens_log_in(db: PgPool) {
         .await
         .unwrap();
 }
+
+#[sqlx::test]
+async fn anonymous_visitors_never_get_a_cookie(db: PgPool) {
+    let (forum, ruth) = forum_with_ruth(db).await;
+    let cookie = forum.session(ruth).await;
+    let invite = forum
+        .submit("/invites", &[("days", "7"), ("uses", "1")], Some(&cookie))
+        .await
+        .body;
+    let marker = "readonly value=\"http://localhost:8080";
+    let start = invite.find(marker).unwrap() + marker.len();
+    let invite_path = invite[start..start + invite[start..].find('"').unwrap()].to_owned();
+    forum
+        .submit("/login/email", &[("email", "ruth")], None)
+        .await;
+    forum.submit("/reset", &[("email", "ruth")], None).await;
+    forum
+        .submit(
+            "/settings/email",
+            &[("email", "new@example.com"), ("password", PASSWORD)],
+            Some(&cookie),
+        )
+        .await;
+    let emails = forum.emails().await;
+    let login_link = link_in(&emails[0].body, "/login/");
+    let reset_link = link_in(&emails[1].body, "/reset/");
+    let verify_link = link_in(&emails[2].body, "/verify/");
+    for path in [
+        "/",
+        "/login",
+        "/login?next=/invites",
+        "/reset",
+        "/users/tree",
+        "/u/ruth",
+        "/setup",
+        "/setup?token=nonsense",
+        "/logout",
+        "/settings",
+        "/invites",
+        "/admin/settings",
+        "/invite/AAAAAAAAAAAAAAAAAAAAAA",
+        invite_path.as_str(),
+        login_link.as_str(),
+        reset_link.as_str(),
+        verify_link.as_str(),
+    ] {
+        let response = forum.get(path).await;
+        assert!(
+            response.header(header::SET_COOKIE).is_none(),
+            "{path} set a cookie for an anonymous visitor"
+        );
+    }
+}
