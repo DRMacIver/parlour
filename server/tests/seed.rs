@@ -225,3 +225,37 @@ async fn a_failed_seed_leaves_nothing_behind(pool: PgPool) {
         .unwrap();
     seed::seed(&pool).await.unwrap();
 }
+
+#[sqlx::test]
+async fn seeded_members_log_in_with_the_development_password(pool: PgPool) {
+    seed::seed(&pool).await.unwrap();
+    let f = Forum::new(pool);
+    for (username, role_badge) in [("sam", Some("Admin")), ("priya", None)] {
+        let response = f
+            .submit(
+                "/login",
+                &[("identifier", username), ("password", seed::DEV_PASSWORD)],
+                None,
+            )
+            .await;
+        assert_eq!(response.status, StatusCode::SEE_OTHER, "{username}");
+        let cookie = common::cookie_set_by(&response).unwrap();
+        let settings = f.page_as("/settings", &cookie).await;
+        assert!(settings.contains("Confirmed"), "{username}");
+        if let Some(badge) = role_badge {
+            assert!(settings.contains(badge));
+        }
+        // Members see the members-only section.
+        assert!(f.page_as("/", &cookie).await.contains("Members only"));
+    }
+}
+
+#[sqlx::test]
+async fn the_seeded_invite_tree_has_everyone(pool: PgPool) {
+    let summary = seed::seed(&pool).await.unwrap();
+    let f = Forum::new(pool);
+    let tree = f.page("/users/tree").await;
+    assert!(tree.contains(&format!("{} members.", summary.users)));
+    let profile = f.page("/u/priya").await;
+    assert!(profile.contains("href=\"/u/ruth\">Ruth</a>"));
+}

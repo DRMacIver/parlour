@@ -63,6 +63,11 @@ impl From<sqlx::Error> for SeedError {
     }
 }
 
+/// The password every seeded member has, for logging in during
+/// development. Seeding refuses to touch a database with real members, so
+/// it never reaches a real forum.
+pub const DEV_PASSWORD: &str = "tuesday-club";
+
 #[derive(Debug, Default)]
 pub struct SeedSummary {
     pub users: usize,
@@ -550,6 +555,7 @@ impl Seeder<'_> {
         .execute(&mut *self.db)
         .await?;
 
+        let password_hash = crate::accounts::hash_password(DEV_PASSWORD).await;
         for spec in USERS {
             let invited_by = spec.invited_by.map(|name| self.user(name));
             let id = store::create_user(
@@ -567,6 +573,13 @@ impl Seeder<'_> {
                     created_at: Some(self.now - Duration::days(spec.joined_days_ago)),
                 },
             )
+            .await?;
+            sqlx::query!(
+                "UPDATE users SET password_hash = $2, email_verified_at = created_at WHERE id = $1",
+                id,
+                password_hash
+            )
+            .execute(&mut *self.db)
             .await?;
             self.users.push((spec.username, id));
         }
