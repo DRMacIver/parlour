@@ -17,7 +17,7 @@
       {%- when TreeItem::Leaf(member) -%}
       <li><div class="tree-node">{% call mm::tree_node(member, viewer_id) %}{% endcall %}</div></li>
       {%- when TreeItem::Open(member) -%}
-      <li><details open><summary class="tree-node">{% call mm::tree_node(member, viewer_id) %}{% endcall %}</summary><ul>
+      <li><details open><summary class="tree-node">{% call mm::tree_node(member, viewer_id) %}{% endcall %}</summary><ul{% if !member.indents_wide() %} class="tree-flat"{% else if !member.indents_narrow() %} class="tree-flat-narrow"{% endif %}>
       {%- when TreeItem::Close -%}
       </ul></details></li>
       {%- endmatch -%}

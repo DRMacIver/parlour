@@ -117,6 +117,44 @@ pub struct TreeMember {
     pub joined_at: DateTime<Utc>,
     /// How many members joined below this one, at any depth.
     pub descendants: usize,
+    /// How far down the tree this member is: 0 for a member nobody here
+    /// invited, 1 for someone they invited, and so on.
+    pub depth: usize,
+}
+
+/// Below this depth, the tree stops indenting on narrow screens, and
+/// marks each member's level instead, so that long invite chains fit.
+pub const NARROW_INDENT_DEPTH: usize = 6;
+/// The same for wide screens.
+pub const WIDE_INDENT_DEPTH: usize = 16;
+
+impl TreeMember {
+    /// The level shown next to members below where the tree stops
+    /// indenting, counting from 1.
+    pub fn level(&self) -> usize {
+        self.depth + 1
+    }
+
+    /// Whether this member is deeper than the narrow screen indents.
+    pub fn past_narrow_indent(&self) -> bool {
+        self.depth > NARROW_INDENT_DEPTH
+    }
+
+    /// Whether this member is deeper than wide screens indent.
+    pub fn past_wide_indent(&self) -> bool {
+        self.depth > WIDE_INDENT_DEPTH
+    }
+
+    /// Whether the list of this member's invitees is indented on narrow
+    /// screens.
+    pub fn indents_narrow(&self) -> bool {
+        self.depth < NARROW_INDENT_DEPTH
+    }
+
+    /// The same for wide screens.
+    pub fn indents_wide(&self) -> bool {
+        self.depth < WIDE_INDENT_DEPTH
+    }
 }
 
 /// The tree, flattened for the template: a member with nobody below them
@@ -156,6 +194,7 @@ pub async fn tree(db: &PgPool, deps: &mut Deps) -> sqlx::Result<(Vec<TreeItem>, 
                 role: Role::parse(&r.role).unwrap_or(Role::User),
                 joined_at: r.created_at,
                 descendants: 0,
+                depth: 0,
             },
             invited_by: r.invited_by_user_id,
         })
@@ -217,19 +256,23 @@ pub fn arrange(rows: Vec<TreeRow>) -> Vec<TreeItem> {
     let mut items = Vec::with_capacity(n * 2);
     // (member, whether its subtree has been opened)
     let mut stack: Vec<(usize, bool)> = roots.iter().rev().map(|&r| (r, false)).collect();
+    let mut depth = 0;
     while let Some((i, opened)) = stack.pop() {
         if opened {
             items.push(TreeItem::Close);
+            depth -= 1;
             continue;
         }
         let member = TreeMember {
             descendants: descendants[i],
+            depth,
             ..rows[i].member.clone()
         };
         if tree_children[i].is_empty() {
             items.push(TreeItem::Leaf(member));
         } else {
             items.push(TreeItem::Open(member));
+            depth += 1;
             stack.push((i, true));
             stack.extend(tree_children[i].iter().rev().map(|&k| (k, false)));
         }
@@ -251,6 +294,7 @@ mod tests {
             role: Role::User,
             joined_at: DateTime::UNIX_EPOCH,
             descendants: 0,
+            depth: 0,
         }
     }
 
@@ -320,6 +364,34 @@ mod tests {
                 }
             }
             assert_eq!(*descendants, expected, "member {id}");
+        }
+    }
+
+    #[hegel::test]
+    fn depth_counts_inviters_up_to_the_root(tc: TestCase) {
+        let rows = forest(&tc);
+        let mut open = 0;
+        for item in arrange(rows.clone()) {
+            match item {
+                TreeItem::Leaf(m) => assert_eq!(m.depth, open, "{}", m.id),
+                TreeItem::Open(m) => {
+                    assert_eq!(m.depth, open, "{}", m.id);
+                    // Walk up from the member to a root.
+                    let mut ancestors = 0;
+                    let mut cur = rows
+                        .iter()
+                        .find(|r| r.member.id == m.id)
+                        .unwrap()
+                        .invited_by;
+                    while let Some(p) = cur {
+                        ancestors += 1;
+                        cur = rows.iter().find(|r| r.member.id == p).unwrap().invited_by;
+                    }
+                    assert_eq!(m.depth, ancestors, "{}", m.id);
+                    open += 1;
+                }
+                TreeItem::Close => open -= 1,
+            }
         }
     }
 

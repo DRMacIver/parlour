@@ -608,7 +608,19 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
 .tree li > .tree-node::before { content: ""; flex-shrink: 0; width: 1em; }
 .tree-names { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; }
 .tree-names a { font-weight: 500; }
+.tree-names a, .tree-username { overflow-wrap: anywhere; }
 .tree-username { color: var(--ink-muted); font-size: var(--font-size-small); }
+/* Long invite chains would run off the page, so past a certain depth the
+   tree stops indenting and says how deep each member is instead. */
+.tree ul.tree-flat { margin-left: 0; padding-left: 0; border-left: none; }
+.tree-level {
+  display: none;
+  color: var(--ink-muted);
+  font-size: var(--font-size-small);
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+}
+.tree-level-wide { display: inline; }
 
 /* ------------------------------------------------------------ Profiles */
 
@@ -696,4 +708,6 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
   .avatar-large { --avatar-size: 64px; font-size: 30px; }
   .tree ul { margin-left: 8px; padding-left: 8px; }
   .tree > li > details > ul { margin-left: 20px; }
+  .tree ul.tree-flat-narrow { margin-left: 0; padding-left: 0; border-left: none; }
+  .tree-level { display: inline; }
 }

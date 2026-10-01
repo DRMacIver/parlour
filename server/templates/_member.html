@@ -5,6 +5,7 @@
   <span class="tree-username">@{{ member.username }}</span>
   {% if let Some(badge) = member.role.badge() %}<span class="badge">{{ badge }}</span>{% endif %}
   {% if crate::format::is_viewer(viewer_id, member.id) %}<span class="badge badge-you">You</span>{% endif %}
+  {% if member.past_narrow_indent() %}<span class="tree-level{% if member.past_wide_indent() %} tree-level-wide{% endif %}">level {{ member.level() }}</span>{% endif %}
   <span class="row-meta">joined {{ crate::format::month_year(member.joined_at) }}{% if member.descendants > 0 %} · {{ crate::format::plural(member.descendants as i64, "person", "people") }} below{% endif %}</span>
 </span>
 {% endmacro %}
