@@ -17,7 +17,7 @@ use sqlx::PgPool;
 
 use crate::AppState;
 use crate::accounts;
-use crate::admin_pages::{SmtpFields, save_smtp, send_test};
+use crate::admin_pages::{SmtpFields, choose_smtp, save_smtp, send_test};
 use crate::changes::Change;
 use crate::client::ClientIp;
 use crate::error::AppError;
@@ -330,28 +330,34 @@ pub async fn save_email(
         return not_admin(&state, &viewer, "/setup/email").await;
     };
     let saved = mail::saved_smtp_settings(state.db()).await?;
-    let effective = saved.clone().or_else(|| state.config().smtp.clone());
-    let parsed = form
-        .smtp
-        .parse(effective.as_ref().map(|s| s.password.as_str()));
+    let env = state.config().smtp.clone();
+    let effective = saved.clone().or_else(|| env.clone());
     let mut errors = Vec::new();
     let mut tested = None;
-    match (&parsed, form.action.as_str()) {
-        (Err(problems), _) => errors.extend(problems.iter().cloned()),
-        (Ok(smtp), "test") => {
-            match send_test(&state, smtp.as_ref().or(effective.as_ref()), &user.email).await {
-                Ok(()) => {
-                    tested = Some(format!(
-                        "A test email is on its way to {}. Check that it arrived, then save.",
-                        user.email
-                    ))
+    if form.action == "test" {
+        // A test may use the password in effect, wherever it is from:
+        // nothing is saved.
+        match form.smtp.parse(effective.as_ref()) {
+            Err(problems) => errors.extend(problems),
+            Ok(smtp) => {
+                match send_test(&state, smtp.as_ref().or(effective.as_ref()), &user.email).await {
+                    Ok(()) => {
+                        tested = Some(format!(
+                            "A test email is on its way to {}. Check that it arrived, then save.",
+                            user.email
+                        ))
+                    }
+                    Err(why) => errors.push(format!("The test email couldn’t be sent: {why}")),
                 }
-                Err(why) => errors.push(format!("The test email couldn’t be sent: {why}")),
             }
         }
-        (Ok(smtp), _) => {
-            save_smtp(&mut *state.db().acquire().await?, smtp.as_ref()).await?;
-            return Ok(see_other("/setup/invites"));
+    } else {
+        match choose_smtp(&form.smtp, saved.as_ref(), env.as_ref()) {
+            Err(problems) => errors.extend(problems),
+            Ok(smtp) => {
+                save_smtp(&mut *state.db().acquire().await?, smtp.as_ref()).await?;
+                return Ok(see_other("/setup/invites"));
+            }
         }
     }
     let status = if errors.is_empty() {

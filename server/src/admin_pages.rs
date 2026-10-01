@@ -49,8 +49,10 @@ impl SmtpFields {
     }
 
     /// The settings these fields describe: `Ok(None)` if the host is blank
-    /// (no SMTP server saved). `saved_password` fills in a blank password.
-    pub fn parse(&self, saved_password: Option<&str>) -> Result<Option<SmtpSettings>, Vec<String>> {
+    /// (no SMTP server saved). A blank password is filled in from `base`
+    /// (the settings in use), but only if the server and username are
+    /// still `base`'s: an old password is never sent to a new server.
+    pub fn parse(&self, base: Option<&SmtpSettings>) -> Result<Option<SmtpSettings>, Vec<String>> {
         let host = self.smtp_host.trim();
         if host.is_empty() {
             return Ok(None);
@@ -70,16 +72,22 @@ impl SmtpFields {
                 }
             },
         };
-        let password = if self.smtp_password.is_empty() {
-            saved_password.unwrap_or_default().to_owned()
-        } else {
-            self.smtp_password.clone()
+        let username = self.smtp_username.trim();
+        let password = match base {
+            Some(base)
+                if self.smtp_password.is_empty()
+                    && base.host.eq_ignore_ascii_case(host)
+                    && base.username == username =>
+            {
+                base.password.clone()
+            }
+            _ => self.smtp_password.clone(),
         };
         let settings = SmtpSettings {
             host: host.to_owned(),
             port,
             security,
-            username: self.smtp_username.trim().to_owned(),
+            username: username.to_owned(),
             password,
             from: self.smtp_from.trim().to_owned(),
         };
@@ -93,6 +101,36 @@ impl SmtpFields {
         } else {
             Err(problems)
         }
+    }
+}
+
+/// The SMTP settings to save from a form, given those saved before and
+/// those in the environment: `Ok(None)` means to forget any saved ones and
+/// use the environment's. The environment's password is never copied into
+/// the database: settings that only differ from the environment's by
+/// leaving its password out are the environment's, and anything else
+/// needs the password typed in.
+pub fn choose_smtp(
+    fields: &SmtpFields,
+    saved: Option<&SmtpSettings>,
+    env: Option<&SmtpSettings>,
+) -> Result<Option<SmtpSettings>, Vec<String>> {
+    let Some(settings) = fields.parse(saved.or(env))? else {
+        return Ok(None);
+    };
+    match (saved, env) {
+        (None, Some(env)) if settings == *env => Ok(None),
+        (None, Some(env))
+            if fields.smtp_password.is_empty()
+                && !env.password.is_empty()
+                && settings.password == env.password =>
+        {
+            Err(vec![
+                "Type the SMTP password to save these settings: the password set in the server’s environment isn’t copied into the database."
+                    .to_owned(),
+            ])
+        }
+        _ => Ok(Some(settings)),
     }
 }
 
@@ -285,7 +323,7 @@ pub async fn save_settings(
         }
     };
     let saved = mail::saved_smtp_settings(state.db()).await?;
-    let smtp = match form.smtp.parse(saved.as_ref().map(|s| s.password.as_str())) {
+    let smtp = match choose_smtp(&form.smtp, saved.as_ref(), state.config().smtp.as_ref()) {
         Ok(smtp) => smtp,
         Err(more) => {
             problems.extend(more);
@@ -368,10 +406,42 @@ mod tests {
             smtp_password: "".into(),
             smtp_from: "Club <forum@example.com>".into(),
         };
-        let parsed = fields.parse(Some("saved")).unwrap().unwrap();
+        let saved = SmtpSettings {
+            host: "SMTP.example.com".into(),
+            port: 587,
+            security: SmtpSecurity::StartTls,
+            username: "forum".into(),
+            password: "saved".into(),
+            from: "forum@example.com".into(),
+        };
+        let parsed = fields.parse(Some(&saved)).unwrap().unwrap();
         assert_eq!(parsed.host, "smtp.example.com");
         assert_eq!(parsed.port, 465);
         assert_eq!(parsed.password, "saved");
+        // The saved password belongs to its server and username.
+        for other in [
+            SmtpSettings {
+                host: "smtp.elsewhere.example".into(),
+                ..saved.clone()
+            },
+            SmtpSettings {
+                username: "someone".into(),
+                ..saved.clone()
+            },
+        ] {
+            assert_eq!(fields.parse(Some(&other)).unwrap().unwrap().password, "");
+        }
+        assert_eq!(
+            SmtpFields {
+                smtp_password: "typed".into(),
+                ..fields.clone()
+            }
+            .parse(Some(&saved))
+            .unwrap()
+            .unwrap()
+            .password,
+            "typed"
+        );
         assert_eq!(
             SmtpFields {
                 smtp_host: "".into(),

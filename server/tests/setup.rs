@@ -398,3 +398,137 @@ async fn the_smtp_password_is_never_shown(db: PgPool) {
         .unwrap();
     assert_eq!(saved.password, "hunter2-secret");
 }
+
+/// A saved SMTP password is only reused for the server and username it was
+/// saved with, so changing the server without typing a password doesn't
+/// send the old server's password to the new one.
+#[sqlx::test]
+async fn the_smtp_password_stays_with_its_server(db: PgPool) {
+    let forum = Forum::new(db);
+    let sam = forum.member("sam", "admin", None).await;
+    let cookie = forum.session(sam).await;
+    let fields = |host: &'static str, username: &'static str, password: &'static str| {
+        vec![
+            ("site_name", "Club"),
+            ("registration_mode", "invite_only"),
+            ("invite_who", "everyone"),
+            ("smtp_host", host),
+            ("smtp_port", "587"),
+            ("smtp_security", "starttls"),
+            ("smtp_username", username),
+            ("smtp_password", password),
+            ("smtp_from", "club@example.com"),
+        ]
+    };
+    let saved_password = || async {
+        parlour::mail::saved_smtp_settings(&forum.db)
+            .await
+            .unwrap()
+            .unwrap()
+            .password
+    };
+    forum
+        .submit(
+            "/admin/settings",
+            &fields("smtp.old.example", "club", "old-secret"),
+            Some(&cookie),
+        )
+        .await;
+    // The same server, spelt differently: the password is kept.
+    forum
+        .submit(
+            "/admin/settings",
+            &fields("SMTP.old.example", "club", ""),
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(saved_password().await, "old-secret");
+    for (host, username) in [("smtp.new.example", "club"), ("smtp.old.example", "other")] {
+        forum
+            .submit(
+                "/admin/settings",
+                &fields("smtp.old.example", "club", "old-secret"),
+                Some(&cookie),
+            )
+            .await;
+        let response = forum
+            .submit(
+                "/admin/settings",
+                &fields(host, username, ""),
+                Some(&cookie),
+            )
+            .await;
+        assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+        assert_eq!(saved_password().await, "", "{host} {username}");
+    }
+}
+
+/// Settings from the environment stay there: saving them unchanged in
+/// setup keeps using the environment's, and the environment's password is
+/// never copied into the database.
+#[sqlx::test]
+async fn setup_doesnt_copy_the_environments_smtp_password(db: PgPool) {
+    let mut forum = Forum::new(db);
+    let env = parlour::mail::SmtpSettings {
+        host: "smtp.env.example".into(),
+        port: 587,
+        security: parlour::mail::SmtpSecurity::StartTls,
+        username: "club".into(),
+        password: "env-secret".into(),
+        from: "Club <club@example.com>".into(),
+    };
+    forum.state = forum.state.clone().with_config(parlour::config::Config {
+        smtp: Some(env.clone()),
+        ..parlour::config::Config::development()
+    });
+    let sam = forum.member("sam", "admin", None).await;
+    let cookie = forum.session(sam).await;
+    let page = forum.page_as("/setup/email", &cookie).await;
+    assert!(page.contains("value=\"smtp.env.example\""));
+    assert!(!page.contains("env-secret"));
+    let fields = |from: &'static str| {
+        vec![
+            ("action", "save"),
+            ("smtp_host", "smtp.env.example"),
+            ("smtp_port", "587"),
+            ("smtp_security", "starttls"),
+            ("smtp_username", "club"),
+            ("smtp_password", ""),
+            ("smtp_from", from),
+        ]
+    };
+    let response = forum
+        .submit(
+            "/setup/email",
+            &fields("Club <club@example.com>"),
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(response.location(), "/setup/invites");
+    assert!(
+        parlour::mail::saved_smtp_settings(&forum.db)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Changing something else needs the password typed in.
+    let response = forum
+        .submit(
+            "/setup/email",
+            &fields("Club <hello@example.com>"),
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(
+        response.body.contains("Type the SMTP password"),
+        "{}",
+        response.body
+    );
+    let stored: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM settings WHERE value::text LIKE '%env-secret%'")
+            .fetch_one(&forum.db)
+            .await
+            .unwrap();
+    assert_eq!(stored, 0);
+}
