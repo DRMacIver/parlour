@@ -116,6 +116,30 @@ impl Forum {
         self.submit_from(path, fields, cookie, Some(ORIGIN)).await
     }
 
+    /// Trusts `X-Forwarded-For`, so that [`Forum::submit_as_ip`] can say
+    /// which address a request comes from.
+    pub fn trusting_proxy(mut self) -> Forum {
+        let config = parlour::config::Config {
+            trust_proxy: true,
+            ..self.state.config().clone()
+        };
+        self.state = self.state.clone().with_config(config);
+        self
+    }
+
+    /// Submits a form from the client address `ip` (with
+    /// [`Forum::trusting_proxy`]).
+    pub async fn submit_as_ip(&self, path: &str, fields: &[(&str, &str)], ip: &str) -> Response {
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(fields)
+            .finish();
+        let request = Request::post(path)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(header::ORIGIN, ORIGIN)
+            .header("x-forwarded-for", ip);
+        self.request(request.body(Body::from(body)).unwrap()).await
+    }
+
     /// Submits a form with the given `Origin` header (or none).
     pub async fn submit_from(
         &self,

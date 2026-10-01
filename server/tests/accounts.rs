@@ -401,6 +401,127 @@ async fn magic_link_requests_are_limited_per_address(db: PgPool) {
     assert_eq!(forum.emails().await.len(), 3);
 }
 
+/// The limits per account count the account, however it is named: a
+/// username and an email address for the same account share one allowance.
+#[sqlx::test]
+async fn login_attempts_are_limited_per_account_whichever_name_is_used(db: PgPool) {
+    let (forum, _) = forum_with_ruth(db).await;
+    for _ in 0..10 {
+        assert_eq!(
+            log_in(&forum, "ruth", "wrong password!").await.status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    // Typing the email address instead doesn't give ten more guesses. The
+    // refusal looks like any wrong password, so it doesn't reveal that the
+    // address belongs to ruth.
+    let response = log_in(&forum, "ruth@example.com", PASSWORD).await;
+    assert_eq!(response.status, StatusCode::UNAUTHORIZED);
+    assert!(response.header(header::SET_COOKIE).is_none());
+    assert!(response.body.contains("don’t match an account"));
+}
+
+#[sqlx::test]
+async fn magic_link_requests_are_limited_per_account_whichever_name_is_used(db: PgPool) {
+    let (forum, _) = forum_with_ruth(db).await;
+    let mut pages = Vec::new();
+    for identifier in [
+        "ruth",
+        "ruth",
+        "ruth",
+        "ruth@example.com",
+        "RUTH@example.com",
+    ] {
+        let response = forum
+            .submit("/login/email", &[("email", identifier)], None)
+            .await;
+        assert_eq!(response.status, StatusCode::OK, "{identifier}");
+        pages.push(response.body);
+    }
+    assert_eq!(forum.emails().await.len(), 3);
+    // The requests that sent nothing look the same as those that did.
+    let strip = |body: &str| body.replace(&hidden_field(body, "request"), "");
+    assert_eq!(strip(&pages[0]), strip(&pages[3]));
+}
+
+#[sqlx::test]
+async fn reset_requests_are_limited_per_account_whichever_name_is_used(db: PgPool) {
+    let (forum, _) = forum_with_ruth(db).await;
+    for identifier in ["ruth", "ruth", "ruth", "ruth@example.com"] {
+        let response = forum.submit("/reset", &[("email", identifier)], None).await;
+        assert_eq!(response.status, StatusCode::OK, "{identifier}");
+    }
+    assert_eq!(forum.emails().await.len(), 3);
+}
+
+/// Each magic link allows five guesses at its code, but an account only
+/// allows so many wrong guesses in all, however many links are asked for.
+#[sqlx::test]
+async fn wrong_codes_are_limited_per_account(db: PgPool) {
+    let (forum, _) = forum_with_ruth(db).await;
+    // Every request comes from a different address, so that only the
+    // limits per account apply.
+    let forum = forum.trusting_proxy();
+    let mut addresses = (1..).map(|n| format!("192.0.2.{n}"));
+    let mut requests = Vec::new();
+    for _ in 0..3 {
+        let page = forum
+            .submit_as_ip(
+                "/login/email",
+                &[("email", "ruth")],
+                &addresses.next().unwrap(),
+            )
+            .await
+            .body;
+        requests.push(hidden_field(&page, "request"));
+    }
+    let emails = forum.emails().await;
+    assert_eq!(emails.len(), 3);
+    let code_in = |body: &str| {
+        body.lines()
+            .map(str::trim)
+            .find(|line| line.len() == 6 && line.bytes().all(|b| b.is_ascii_digit()))
+            .unwrap()
+            .to_owned()
+    };
+    let wrong = |code: &str| format!("{:06}", (code.parse::<u32>().unwrap() + 1) % 1_000_000);
+    // Ten wrong guesses, five at each of the first two requests.
+    for (request, email) in requests.iter().zip(&emails).take(2) {
+        for _ in 0..5 {
+            let response = forum
+                .submit_as_ip(
+                    "/login/code",
+                    &[
+                        ("request", request),
+                        ("code", &wrong(&code_in(&email.body))),
+                    ],
+                    &addresses.next().unwrap(),
+                )
+                .await;
+            assert_ne!(response.status, StatusCode::SEE_OTHER);
+        }
+    }
+    // Now even the right code for the third is refused for a while.
+    let response = forum
+        .submit_as_ip(
+            "/login/code",
+            &[
+                ("request", &requests[2]),
+                ("code", &code_in(&emails[2].body)),
+            ],
+            &addresses.next().unwrap(),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(response.header(header::SET_COOKIE).is_none());
+    // The link in the email still works: it can't be guessed.
+    let link = link_in(&emails[2].body, "/login/");
+    let response = forum
+        .submit_as_ip(&link, &[], &addresses.next().unwrap())
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+}
+
 // ---------------------------------------------------------------------------
 // Magic links
 

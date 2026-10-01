@@ -38,8 +38,17 @@ pub enum Action {
 pub enum Scope {
     /// The client's address.
     Ip,
-    /// The account (or email address) the request is about.
+    /// The username or email address typed into a form, whether or not it
+    /// names an account. Refusals on this scope are shown to the client,
+    /// and they are the same for every name, so they reveal nothing about
+    /// which accounts exist.
     Account,
+    /// The account a request turned out to be about, by id, however it was
+    /// named. Callers don't show refusals on this scope as such (a refused
+    /// login looks like a wrong password, a refused email is quietly not
+    /// sent), so that comparing the allowances of a username and an email
+    /// address doesn't reveal whether they belong to the same account.
+    User,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,9 +70,15 @@ impl Rule {
 pub fn rule(action: Action, scope: Scope) -> Rule {
     match (action, scope) {
         (Action::Login, Scope::Ip) => Rule::new(20, 30),
-        (Action::Login, Scope::Account) => Rule::new(10, 60),
+        (Action::Login, Scope::Account | Scope::User) => Rule::new(10, 60),
         (Action::MagicLink | Action::PasswordReset, Scope::Ip) => Rule::new(5, 120),
-        (Action::MagicLink | Action::PasswordReset, Scope::Account) => Rule::new(3, 600),
+        (Action::MagicLink | Action::PasswordReset, Scope::Account | Scope::User) => {
+            Rule::new(3, 600)
+        }
+        // Each magic link allows a few guesses at its six-digit code, and
+        // anyone can ask for links. Per account, this allows at most 22
+        // guesses a day, a one in 45,000 chance.
+        (Action::MagicCode, Scope::User) => Rule::new(10, 2 * 3600),
         (Action::MagicCode, _) => Rule::new(10, 30),
         (Action::Redeem, _) => Rule::new(10, 300),
         (Action::Setup, _) => Rule::new(10, 60),
@@ -100,12 +115,49 @@ impl Bucket {
     }
 }
 
-/// How many buckets to hold before throwing away the full ones.
+/// Keys longer than this are cut short before hashing. Nothing that long
+/// names an account, so sharing a bucket between such keys loses nothing.
+const MAX_KEY_CHARS: usize = 320;
+
+/// A bucket's key: the action, the scope, and a hash of the key text, so
+/// that each bucket takes the same small amount of memory however long the
+/// text a client sent.
+type Key = (Action, Scope, [u8; 16]);
+
+fn key(action: Action, scope: Scope, text: &str) -> Key {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for c in text
+        .chars()
+        .take(MAX_KEY_CHARS)
+        .flat_map(char::to_lowercase)
+    {
+        let mut buf = [0; 4];
+        hasher.update(c.encode_utf8(&mut buf).as_bytes());
+    }
+    let digest = hasher.finalize();
+    let mut hash = [0; 16];
+    hash.copy_from_slice(&digest[..16]);
+    (action, scope, hash)
+}
+
+/// The most buckets held by default. Each takes well under 100 bytes.
+pub const DEFAULT_CAPACITY: usize = 100_000;
+/// How many buckets to hold before looking for full ones to throw away.
 const PRUNE_AT: usize = 10_000;
 
 pub struct RateLimiter {
-    buckets: Mutex<HashMap<(Action, Scope, String), Bucket>>,
+    inner: Mutex<Buckets>,
     rules: fn(Action, Scope) -> Rule,
+    capacity: usize,
+}
+
+struct Buckets {
+    map: HashMap<Key, Bucket>,
+    /// The size at which to prune next. It grows with the number of
+    /// buckets left after pruning, so that pruning stays cheap on average
+    /// even when few buckets are full.
+    prune_at: usize,
 }
 
 impl Default for RateLimiter {
@@ -116,44 +168,81 @@ impl Default for RateLimiter {
 
 impl RateLimiter {
     pub fn new(rules: fn(Action, Scope) -> Rule) -> RateLimiter {
+        RateLimiter::with_capacity(rules, DEFAULT_CAPACITY)
+    }
+
+    /// A limiter that holds at most `capacity` buckets. When it has more,
+    /// it forgets those that are closest to full, which gives their keys a
+    /// fresh allowance a little early but bounds the memory used whatever
+    /// clients send.
+    pub fn with_capacity(rules: fn(Action, Scope) -> Rule, capacity: usize) -> RateLimiter {
+        let capacity = capacity.max(1);
         RateLimiter {
-            buckets: Mutex::new(HashMap::new()),
+            inner: Mutex::new(Buckets {
+                map: HashMap::new(),
+                prune_at: PRUNE_AT.min(capacity),
+            }),
             rules,
+            capacity,
         }
     }
 
     /// Whether a request may go ahead, using up one of its allowance if so.
+    /// Keys that differ only in case share an allowance.
     pub fn check(&self, action: Action, scope: Scope, key: &str) -> bool {
         self.check_at(action, scope, key, Instant::now())
     }
 
-    pub fn check_at(&self, action: Action, scope: Scope, key: &str, now: Instant) -> bool {
+    pub fn check_at(&self, action: Action, scope: Scope, key_text: &str, now: Instant) -> bool {
         let rule = (self.rules)(action, scope);
-        let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
-        if buckets.len() >= PRUNE_AT {
-            buckets.retain(|_, bucket| !bucket.is_full(now));
+        let key = key(action, scope, key_text);
+        let mut buckets = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if !buckets.map.contains_key(&key) && buckets.map.len() >= buckets.prune_at {
+            self.prune(&mut buckets, now);
         }
         buckets
-            .entry((action, scope, key.to_lowercase()))
+            .map
+            .entry(key)
             .or_insert_with(|| Bucket::new(now))
             .take(rule, now)
     }
 
-    /// Checks several limits at once; the request goes ahead only if all
-    /// of them allow it. Every limit is charged either way, so that a
-    /// client can't probe one limit without paying for the others.
+    fn prune(&self, buckets: &mut Buckets, now: Instant) {
+        buckets.map.retain(|_, bucket| !bucket.is_full(now));
+        // Leave room for a quarter of the capacity before pruning again.
+        let keep = self.capacity - (self.capacity / 4).max(1);
+        if buckets.map.len() > keep {
+            let mut by_full_at: Vec<(Instant, Key)> = buckets
+                .map
+                .iter()
+                .map(|(key, bucket)| (bucket.full_at, *key))
+                .collect();
+            let excess = by_full_at.len() - keep;
+            by_full_at.select_nth_unstable_by_key(excess - 1, |(full_at, _)| *full_at);
+            for (_, key) in &by_full_at[..excess] {
+                buckets.map.remove(key);
+            }
+        }
+        // There are now fewer than `capacity` buckets, so this is more
+        // than there are.
+        buckets.prune_at =
+            (buckets.map.len() * 2).clamp(PRUNE_AT.min(self.capacity), self.capacity);
+    }
+
+    /// Checks several limits in order, using up one of each allowance until
+    /// one refuses. Put the client's own limits (its address) first: a
+    /// client that has used up its own allowance can't then use up anyone
+    /// else's, or fill memory with buckets for names it makes up.
     pub fn check_all(&self, checks: &[(Action, Scope, &str)]) -> bool {
         let now = Instant::now();
-        let results: Vec<bool> = checks
+        checks
             .iter()
-            .map(|(action, scope, key)| self.check_at(*action, *scope, key, now))
-            .collect();
-        results.into_iter().all(|ok| ok)
+            .all(|(action, scope, key)| self.check_at(*action, *scope, key, now))
     }
 
     #[cfg(test)]
     fn len(&self) -> usize {
-        self.buckets.lock().unwrap().len()
+        self.inner.lock().unwrap().map.len()
     }
 }
 
@@ -261,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn check_all_charges_every_limit() {
+    fn check_all_stops_at_the_first_refusal() {
         let limiter = RateLimiter::default();
         let ip_burst = rule(Action::MagicLink, Scope::Ip).burst;
         let mut allowed = 0;
@@ -275,5 +364,68 @@ mod tests {
             }
         }
         assert_eq!(allowed, ip_burst);
+        // The refused requests made no buckets for their addresses.
+        assert_eq!(limiter.len(), 1 + ip_burst as usize);
+        // Running out of an account's allowance still uses up the client's.
+        let limiter = RateLimiter::default();
+        let account_burst = rule(Action::MagicLink, Scope::Account).burst;
+        for _ in 0..ip_burst {
+            limiter.check_all(&[
+                (Action::MagicLink, Scope::Ip, "1.2.3.4"),
+                (Action::MagicLink, Scope::Account, "ruth"),
+            ]);
+        }
+        assert!(ip_burst > account_burst);
+        assert!(!limiter.check(Action::MagicLink, Scope::Ip, "1.2.3.4"));
+    }
+
+    #[test]
+    fn long_keys_take_no_more_room() {
+        let limiter = RateLimiter::default();
+        let now = Instant::now();
+        let long = "x".repeat(1_000_000);
+        for i in 0..5 {
+            limiter.check_at(Action::Login, Scope::Account, &format!("{long}{i}"), now);
+        }
+        // Past the length that can name anything, keys share a bucket.
+        assert_eq!(limiter.len(), 1);
+        assert_eq!(
+            std::mem::size_of::<Key>(),
+            std::mem::size_of::<(Action, Scope, [u8; 16])>()
+        );
+    }
+
+    /// However many different keys clients send, and however fast, the
+    /// limiter never holds more buckets than its capacity, and a key it
+    /// still remembers is never allowed more than its rule says.
+    #[hegel::test(test_cases = 200)]
+    fn memory_is_bounded(tc: TestCase) {
+        let capacity = tc.draw(gs::integers::<usize>().min_value(1).max_value(50));
+        let limiter = RateLimiter::with_capacity(rule, capacity);
+        let start = Instant::now();
+        let times = times(&tc);
+        for t in times {
+            let key = tc.draw(gs::integers::<u32>().max_value(200)).to_string();
+            let scope = tc.draw(
+                gs::sampled_from(vec![Scope::Ip, Scope::Account, Scope::User]).print_as_debug(),
+            );
+            limiter.check_at(Action::Login, scope, &key, start + Duration::from_millis(t));
+            assert!(limiter.len() <= capacity, "{} > {capacity}", limiter.len());
+        }
+    }
+
+    #[test]
+    fn a_flood_of_new_keys_stays_within_capacity() {
+        let limiter = RateLimiter::with_capacity(rule, 1000);
+        let now = Instant::now();
+        for i in 0..20_000 {
+            limiter.check_at(Action::Login, Scope::Account, &format!("k{i}"), now);
+        }
+        assert!(limiter.len() <= 1000);
+        // The newest keys are remembered.
+        for _ in 0..rule(Action::Login, Scope::Account).burst - 1 {
+            assert!(limiter.check_at(Action::Login, Scope::Account, "k19999", now));
+        }
+        assert!(!limiter.check_at(Action::Login, Scope::Account, "k19999", now));
     }
 }

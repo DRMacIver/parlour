@@ -4,7 +4,9 @@
 //! A magic link can also be used by typing a six-digit code into the page
 //! where it was asked for, for when the email is read on another device.
 //! That page holds a random request id; the code is only accepted together
-//! with it, at most [`MAX_CODE_ATTEMPTS`] times.
+//! with it, at most [`MAX_CODE_ATTEMPTS`] times. Anyone can ask for links,
+//! so the caller also limits guesses per account across all its requests
+//! (see [`try_code`]).
 
 use std::time::Duration;
 
@@ -158,10 +160,20 @@ pub enum CodeResult {
     /// No such request, or it has expired, been used, or had too many
     /// wrong codes.
     Expired,
+    /// The account has had too many guesses lately, across all its
+    /// requests; the code wasn't checked.
+    TooManyGuesses,
 }
 
 /// Tries the code from a magic-link email against the page's request id.
-pub async fn try_code(db: &PgPool, request: &str, code: &str) -> sqlx::Result<CodeResult> {
+/// `allow` is asked, with the account's id, whether that account may have
+/// another guess; it is only asked about requests that are current.
+pub async fn try_code(
+    db: &PgPool,
+    request: &str,
+    code: &str,
+    allow: impl FnOnce(i64) -> bool,
+) -> sqlx::Result<CodeResult> {
     if !tokens::plausible(request) {
         return Ok(CodeResult::Expired);
     }
@@ -180,6 +192,9 @@ pub async fn try_code(db: &PgPool, request: &str, code: &str) -> sqlx::Result<Co
     else {
         return Ok(CodeResult::Expired);
     };
+    if !allow(row.user_id) {
+        return Ok(CodeResult::TooManyGuesses);
+    }
     let right = row
         .code_hash
         .as_deref()

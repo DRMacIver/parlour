@@ -66,6 +66,14 @@ async fn find_account(state: &AppState, identifier: &str) -> sqlx::Result<Option
     }))
 }
 
+/// Uses up one of an account's allowance for `action` (the account
+/// [`Scope::User`] limits), returning whether there was any.
+fn user_allows(state: &AppState, action: Action, user_id: i64) -> bool {
+    state
+        .limiter()
+        .check(action, Scope::User, &user_id.to_string())
+}
+
 /// Starts a session and sends the browser on.
 async fn log_in(
     state: &AppState,
@@ -174,17 +182,22 @@ pub async fn login(
     headers: HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Result<Response, AppError> {
-    let account_key = form.identifier.trim().to_lowercase();
+    let account_key = form.identifier.trim();
     if !state.limiter().check_all(&[
         (Action::Login, Scope::Ip, &ip),
-        (Action::Login, Scope::Account, &account_key),
+        (Action::Login, Scope::Account, account_key),
     ]) {
         return web::rate_limited(&state, &viewer).await;
     }
     let account = find_account(&state, &form.identifier).await?;
+    // The account's own limit, however it was named. When it refuses, the
+    // password is checked against nothing (taking as long as a real check),
+    // so the refusal looks like a wrong password.
     let (user_id, hash) = match account {
-        Some(account) => (Some(account.id), account.password_hash),
-        None => (None, None),
+        Some(account) if user_allows(&state, Action::Login, account.id) => {
+            (Some(account.id), account.password_hash)
+        }
+        _ => (None, None),
     };
     if accounts::verify_password(hash, &form.password).await
         && let Some(user_id) = user_id
@@ -232,19 +245,19 @@ pub async fn request_magic_link(
     ClientIp(ip): ClientIp,
     Form(form): Form<MagicLinkForm>,
 ) -> Result<Response, AppError> {
-    let account_key = form.email.trim().to_lowercase();
+    let account_key = form.email.trim();
     if !state.limiter().check_all(&[
         (Action::MagicLink, Scope::Ip, &ip),
-        (Action::MagicLink, Scope::Account, &account_key),
+        (Action::MagicLink, Scope::Account, account_key),
     ]) {
         return web::rate_limited(&state, &viewer).await;
     }
     let next = web::safe_next(&form.next).unwrap_or_default().to_owned();
     // Without an account there is nothing to send, but the page looks the
     // same, with a request id that matches nothing.
+    // An account that has had enough links lately is quietly sent nothing.
     let request = match find_account(&state, &form.email).await? {
-        None => tokens::new_token(),
-        Some(account) => {
+        Some(account) if user_allows(&state, Action::MagicLink, account.id) => {
             let mut tx = state.db().begin().await?;
             let issued = login_tokens::issue(&mut tx, account.id, Purpose::MagicLink, None).await?;
             let mut url = state.config().url(&format!("/login/{}", issued.token));
@@ -267,6 +280,7 @@ pub async fn request_magic_link(
             state.jobs().wake();
             issued.request.unwrap_or_default()
         }
+        _ => tokens::new_token(),
     };
     web::ok(&LoginCodeTemplate {
         layout: Layout::load(&state, &viewer, Nav::Login).await?,
@@ -294,7 +308,8 @@ pub async fn enter_code(
     if !state.limiter().check(Action::MagicCode, Scope::Ip, &ip) {
         return web::rate_limited(&state, &viewer).await;
     }
-    match login_tokens::try_code(state.db(), &form.request, &form.code).await? {
+    let allow = |user_id| user_allows(&state, Action::MagicCode, user_id);
+    match login_tokens::try_code(state.db(), &form.request, &form.code, allow).await? {
         CodeResult::LoggedIn { user_id } => {
             mark_verified(&state, user_id).await?;
             log_in(&state, user_id, &headers, &ip, &form.next).await
@@ -317,6 +332,17 @@ pub async fn enter_code(
                 &viewer,
                 "code",
                 ("/login", "Ask for a new login link"),
+            )
+            .await
+        }
+        CodeResult::TooManyGuesses => {
+            web::message(
+                &state,
+                &viewer,
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many wrong codes",
+                &["There have been too many wrong codes for this account recently, so codes won’t work for it for a while. Follow the link in the email instead: that still works."],
+                None,
             )
             .await
         }
@@ -456,14 +482,18 @@ pub async fn request_reset(
     ClientIp(ip): ClientIp,
     Form(form): Form<EmailForm>,
 ) -> Result<Response, AppError> {
-    let account_key = form.email.trim().to_lowercase();
+    let account_key = form.email.trim();
     if !state.limiter().check_all(&[
         (Action::PasswordReset, Scope::Ip, &ip),
-        (Action::PasswordReset, Scope::Account, &account_key),
+        (Action::PasswordReset, Scope::Account, account_key),
     ]) {
         return web::rate_limited(&state, &viewer).await;
     }
-    if let Some(account) = find_account(&state, &form.email).await? {
+    // An account that has had enough reset emails lately is quietly sent
+    // nothing.
+    if let Some(account) = find_account(&state, &form.email).await?
+        && user_allows(&state, Action::PasswordReset, account.id)
+    {
         let mut tx = state.db().begin().await?;
         let issued = login_tokens::issue(&mut tx, account.id, Purpose::Reset, None).await?;
         let site_name = settings::site_name(state.db()).await?;
@@ -813,10 +843,7 @@ pub async fn change_password(
     let Some(user) = viewer.user() else {
         return Ok(web::login_first("/settings"));
     };
-    if !state
-        .limiter()
-        .check(Action::Login, Scope::Account, &user.username.to_lowercase())
-    {
+    if !user_allows(&state, Action::Login, user.id) {
         return web::rate_limited(&state, &viewer).await;
     }
     let current_hash =
@@ -869,11 +896,7 @@ pub async fn change_email(
     let Some(user) = viewer.user() else {
         return Ok(web::login_first("/settings"));
     };
-    if !state.limiter().check(
-        Action::VerifyEmail,
-        Scope::Account,
-        &user.username.to_lowercase(),
-    ) {
+    if !user_allows(&state, Action::VerifyEmail, user.id) {
         return web::rate_limited(&state, &viewer).await;
     }
     let token = session_cookie(&headers);
@@ -948,11 +971,7 @@ pub async fn resend_verification(
     if user.email_verified {
         return Ok(see_other("/settings"));
     }
-    if !state.limiter().check(
-        Action::VerifyEmail,
-        Scope::Account,
-        &user.username.to_lowercase(),
-    ) {
+    if !user_allows(&state, Action::VerifyEmail, user.id) {
         return web::rate_limited(&state, &viewer).await;
     }
     send_verification(&state, user, &user.email).await?;
