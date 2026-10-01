@@ -1,0 +1,16 @@
+# Development database for running the server and tests locally.
+#   docker compose -f dev/compose.yaml up -d
+#   export DATABASE_URL=postgres://parlour:parlour@localhost:54329/parlour
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: parlour
+      POSTGRES_PASSWORD: parlour
+      POSTGRES_DB: parlour
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - parlour-dev-pg:/var/lib/postgresql
+volumes:
+  parlour-dev-pg:

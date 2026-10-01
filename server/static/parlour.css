@@ -1,0 +1,89 @@
+/* Parlour: "Classic × Broadsheet" theme. See DESIGN.md §5.
+   Every colour, font and size used below comes from these variables, so
+   alternative themes only need to redefine them. */
+
+:root {
+  --font-body: "Newsreader", Georgia, "Times New Roman", serif;
+  --font-size: 17px;
+  --line-height: 1.5;
+
+  --paper: #ECE9E0;        /* page background */
+  --panel: #FBFAF6;        /* tables and boxes */
+  --panel-alt: #F4F2EA;    /* alternate rows */
+  --ink: #161616;          /* text, rules, header bars */
+  --ink-muted: #55534C;    /* secondary text */
+  --rule: #CFCBBE;         /* light internal rules */
+  --on-ink: #F7F5EF;       /* text on header bars */
+  --accent: #A1171E;       /* unread, current page, section labels */
+  --badge: #C42A2A;        /* notification counts */
+  --on-badge: #FFFFFF;
+
+  --wrap: 1120px;
+  --gutter: 24px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #141412;
+    --panel: #1C1B18;
+    --panel-alt: #21201C;
+    --ink: #E9E6DC;
+    --ink-muted: #A9A597;
+    --rule: #3A3832;
+    --on-ink: #141412;
+    --accent: #E5636A;
+    --badge: #E5636A;
+    --on-badge: #141412;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--font-size);
+  line-height: var(--line-height);
+}
+
+a { color: var(--ink); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover { color: var(--accent); }
+
+.wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 var(--gutter); }
+
+.masthead { background: var(--panel); border-bottom: 1px solid var(--ink); }
+.masthead .wrap { padding-top: 16px; padding-bottom: 12px; }
+.site-name { font-size: 38px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; text-decoration: none; }
+
+.topnav { background: var(--ink); color: var(--on-ink); }
+.topnav .wrap { display: flex; flex-wrap: wrap; gap: 0 24px; min-height: 38px; align-items: center; }
+.topnav a {
+  color: var(--on-ink);
+  text-decoration: none;
+  font-variant: small-caps;
+  letter-spacing: 0.12em;
+  font-size: 15px;
+}
+.topnav a[aria-current="page"] { font-weight: 700; }
+
+main.wrap { padding-top: 18px; padding-bottom: 40px; }
+
+.page-title { margin: 4px 0 12px; font-size: 38px; font-weight: 500; line-height: 1.1; letter-spacing: -0.01em; }
+
+.panel { border: 1px solid var(--ink); background: var(--panel); }
+.panel-bar {
+  margin: 0;
+  padding: 5px 14px;
+  background: var(--ink);
+  color: var(--on-ink);
+  font-size: 14px;
+  font-weight: 400;
+  font-variant: small-caps;
+  letter-spacing: 0.14em;
+}
+.empty { margin: 0; padding: 14px; font-style: italic; color: var(--ink-muted); }
+
+.site-footer { border-top: 1px solid var(--ink); background: var(--panel); font-size: 14px; color: var(--ink-muted); }
+.site-footer .wrap { padding-top: 12px; padding-bottom: 12px; }
