@@ -21,7 +21,8 @@ async fn make_invite(forum: &Forum, cookie: &str, fields: &[(&str, &str)]) -> St
     shown_link(&response.body)
 }
 
-async fn join(forum: &Forum, link: &str, username: &str, email: &str) -> common::Response {
+/// Fills in the registration form at an invite link.
+async fn join_start(forum: &Forum, link: &str, username: &str, email: &str) -> common::Response {
     forum
         .submit(
             link,
@@ -34,6 +35,23 @@ async fn join(forum: &Forum, link: &str, username: &str, email: &str) -> common:
             None,
         )
         .await
+}
+
+/// Joins with an invite: for an invite link, also follows the link emailed
+/// to `email` to finish joining. Returns the last response.
+async fn join(forum: &Forum, link: &str, username: &str, email: &str) -> common::Response {
+    let response = join_start(forum, link, username, email).await;
+    if response.status != StatusCode::OK || !response.body.contains("Check your email") {
+        return response;
+    }
+    finish_joining(forum, email, username).await
+}
+
+/// Follows the link in the last email to `email` to finish joining.
+async fn finish_joining(forum: &Forum, email: &str, username: &str) -> common::Response {
+    let message = forum.last_email_to(email).await;
+    let link = link_in(&message.body, "/join/");
+    forum.submit(&link, &[("username", username)], None).await
 }
 
 struct Inviter {
@@ -95,13 +113,19 @@ async fn a_member_invites_someone_with_a_link(db: PgPool) {
     assert!(invite_page.header(header::SET_COOKIE).is_none());
     assert!(invite_page.body.contains("Ruth</a> has invited you"));
 
-    let response = join(&forum, &link, "alex", "alex@example.com").await;
+    // Registering sends a link to the address typed in; following it makes
+    // the account, with the address confirmed.
+    let response = join_start(&forum, &link, "alex", "alex@example.com").await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+    assert!(response.body.contains("Check your email"));
+    assert!(response.header(header::SET_COOKIE).is_none());
+    let response = finish_joining(&forum, "alex@example.com", "alex").await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
-    assert_eq!(response.location(), "/settings?done=welcome-verify");
+    assert_eq!(response.location(), "/settings?done=welcome");
     let alex_cookie = cookie_set_by(&response).unwrap();
     let settings = forum.page_as(response.location(), &alex_cookie).await;
     assert!(settings.contains("Welcome!"));
-    assert!(settings.contains("Not confirmed"));
+    assert!(settings.contains("Confirmed"));
 
     let (invited_by, invite_id, role): (Option<i64>, Option<i64>, String) = sqlx::query_as(
         "SELECT invited_by_user_id, invite_id, role FROM users WHERE username = 'alex'",
@@ -124,17 +148,6 @@ async fn a_member_invites_someone_with_a_link(db: PgPool) {
     let page = forum.page_as("/invites", &cookie).await;
     assert!(page.contains("Used"));
     assert!(page.contains("href=\"/u/alex\""));
-
-    // They get an email to confirm their address.
-    let email = forum.last_email_to("alex@example.com").await;
-    let verify = link_in(&email.body, "/verify/");
-    forum.submit(&verify, &[], Some(&alex_cookie)).await;
-    assert!(
-        forum
-            .page_as("/settings", &alex_cookie)
-            .await
-            .contains("Confirmed")
-    );
 }
 
 #[sqlx::test]
@@ -161,7 +174,6 @@ async fn an_emailed_invite_is_for_that_address(db: PgPool) {
     let email = forum.last_email_to("alex@example.com").await;
     assert!(email.subject.contains("Ruth has invited you"));
     let link = link_in(&email.body, "/invite/");
-    assert_eq!(link, shown_link(&response.body));
 
     let page = forum.page(&link).await;
     assert!(page.contains("value=\"alex@example.com\" readonly"));
@@ -181,6 +193,135 @@ async fn an_emailed_invite_is_for_that_address(db: PgPool) {
     assert_eq!(forum.emails().await.len(), 1);
 }
 
+/// An emailed invite proves that whoever uses it can read that address, so
+/// its link goes only to the address: the inviter doesn't see it, and can't
+/// use it to make an account with someone else's address.
+#[sqlx::test]
+async fn only_the_invited_address_gets_an_emailed_invites_link(db: PgPool) {
+    let Inviter { forum, cookie, .. } = setup(db, "user").await;
+    let response = forum
+        .submit(
+            "/invites",
+            &[
+                ("email", "victim@example.org"),
+                ("days", "7"),
+                ("uses", "1"),
+            ],
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::OK);
+    let link = link_in(
+        &forum.last_email_to("victim@example.org").await.body,
+        "/invite/",
+    );
+    assert!(!response.body.contains(&link));
+    assert!(!response.body.contains("/invite/"));
+    assert!(!response.body.contains("link-box"));
+}
+
+/// Inviting an address says the same whether or not it belongs to a
+/// member, so members can't use invites to find out who else is one. A
+/// member's address gets a note saying they have an account already.
+#[sqlx::test]
+async fn inviting_a_members_address_doesnt_say_they_are_one(db: PgPool) {
+    let Inviter { forum, cookie, .. } = setup(db, "user").await;
+    forum.member("sam", "user", None).await;
+    let mut pages = Vec::new();
+    for email in ["sam@example.com", "stranger@example.com"] {
+        let response = forum
+            .submit(
+                "/invites",
+                &[("email", email), ("days", "7"), ("uses", "1")],
+                Some(&cookie),
+            )
+            .await;
+        assert_eq!(response.status, StatusCode::OK, "{email}");
+        pages.push(response.body.replace(email, "ADDRESS"));
+    }
+    // The pages differ only in the list of invites, which shows the addresses.
+    let notice = |page: &str| page[..page.find("mine-heading").unwrap()].to_owned();
+    assert_eq!(notice(&pages[0]), notice(&pages[1]));
+    let to_sam = forum.last_email_to("sam@example.com").await;
+    assert!(!to_sam.body.contains("/invite/"), "{}", to_sam.body);
+    assert!(to_sam.body.contains("already have an account"));
+    assert!(to_sam.body.contains("/login"));
+    let to_stranger = forum.last_email_to("stranger@example.com").await;
+    assert!(to_stranger.body.contains("/invite/"));
+}
+
+/// Joining with a link that anyone may have answers the same whether or not
+/// the address typed belongs to a member: the new member finishes joining
+/// from an email to that address, and a member gets a note instead.
+#[sqlx::test]
+async fn joining_with_a_link_doesnt_say_who_is_a_member(db: PgPool) {
+    let Inviter { forum, cookie, .. } = setup(db, "admin").await;
+    forum.member("sam", "user", None).await;
+    let link = make_invite(&forum, &cookie, &[("days", "7"), ("uses", "5")]).await;
+    let mut pages = Vec::new();
+    for (username, email) in [
+        ("imposter", "sam@example.com"),
+        ("newbie", "new@example.com"),
+    ] {
+        let response = join_start(&forum, &link, username, email).await;
+        assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+        assert!(response.header(header::SET_COOKIE).is_none());
+        pages.push(response.body.replace(email, "ADDRESS"));
+    }
+    assert_eq!(pages[0], pages[1]);
+    assert!(pages[0].contains("Check your email"));
+    // Nobody has joined yet, and the invite hasn't been used.
+    let (users, uses): (i64, i32) =
+        sqlx::query_as("SELECT (SELECT count(*) FROM users), (SELECT uses FROM invites)")
+            .fetch_one(&forum.db)
+            .await
+            .unwrap();
+    assert_eq!((users, uses), (2, 0));
+
+    let to_sam = forum.last_email_to("sam@example.com").await;
+    assert!(to_sam.body.contains("already have an account"));
+    assert!(!to_sam.body.contains("/join/"));
+    let to_newbie = forum.last_email_to("new@example.com").await;
+    let join_link = link_in(&to_newbie.body, "/join/");
+    let page = forum.get(&join_link).await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert_eq!(
+        page.header(header::CACHE_CONTROL),
+        Some(PRIVATE_CACHE_CONTROL)
+    );
+    assert_eq!(page.header(header::REFERRER_POLICY), Some("same-origin"));
+    assert!(page.header(header::SET_COOKIE).is_none());
+    assert!(page.body.contains("value=\"newbie\""));
+    let response = forum
+        .submit(&join_link, &[("username", "newbie")], None)
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(response.location(), "/settings?done=welcome");
+    let newbie = cookie_set_by(&response).unwrap();
+    assert!(
+        forum
+            .page_as("/settings", &newbie)
+            .await
+            .contains("Confirmed")
+    );
+    let (email, verified, uses): (String, bool, i32) = sqlx::query_as(
+        "SELECT u.email::text, u.email_verified_at IS NOT NULL, i.uses
+         FROM users u JOIN invites i ON i.id = u.invite_id WHERE u.username = 'newbie'",
+    )
+    .fetch_one(&forum.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (email.as_str(), verified, uses),
+        ("new@example.com", true, 1)
+    );
+    // The link works once.
+    let again = forum
+        .submit(&join_link, &[("username", "newbie2")], None)
+        .await;
+    assert_eq!(again.status, StatusCode::GONE);
+}
+
 #[sqlx::test]
 async fn registration_checks_what_was_typed(db: PgPool) {
     let Inviter { forum, cookie, .. } = setup(db, "user").await;
@@ -196,7 +337,6 @@ async fn registration_checks_what_was_typed(db: PgPool) {
         ),
         ("admin", "x@example.com", "", "reserved"),
         ("TAKEN", "x@example.com", "", "username is taken"),
-        ("newbie", "TAKEN@example.com", "", "already an account"),
         ("newbie", "not-an-address", "", "valid email"),
         ("newbie", "x@example.com", "short", "at least 10"),
     ] {
@@ -227,6 +367,60 @@ async fn registration_checks_what_was_typed(db: PgPool) {
     assert_eq!(response.status, StatusCode::SEE_OTHER);
 }
 
+/// The link to finish joining checks the invite and the username again,
+/// since time has passed.
+#[sqlx::test]
+async fn finishing_joining_checks_again(db: PgPool) {
+    let Inviter { forum, cookie, .. } = setup(db, "admin").await;
+    let link = make_invite(&forum, &cookie, &[("days", "7"), ("uses", "2")]).await;
+    // Two people choose the same name; the first to finish gets it.
+    join_start(&forum, &link, "alex", "alex@example.com").await;
+    join_start(&forum, &link, "alex", "other@example.com").await;
+    assert_eq!(
+        finish_joining(&forum, "alex@example.com", "alex")
+            .await
+            .status,
+        StatusCode::SEE_OTHER
+    );
+    let response = finish_joining(&forum, "other@example.com", "alex").await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(response.body.contains("username is taken"));
+    assert!(response.body.contains("other@example.com"));
+    let response = finish_joining(&forum, "other@example.com", "alexis").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+
+    // A link for an invite that has since been used up or revoked fails.
+    let single = make_invite(&forum, &cookie, &[("days", "7"), ("uses", "1")]).await;
+    join_start(&forum, &single, "cal", "cal@example.com").await;
+    join_start(&forum, &single, "dee", "dee@example.com").await;
+    assert_eq!(
+        finish_joining(&forum, "cal@example.com", "cal")
+            .await
+            .status,
+        StatusCode::SEE_OTHER
+    );
+    let response = finish_joining(&forum, "dee@example.com", "dee").await;
+    assert_eq!(response.status, StatusCode::GONE);
+    assert!(response.body.contains("already been used"));
+
+    // And one that has expired.
+    let third = make_invite(&forum, &cookie, &[("days", "7"), ("uses", "1")]).await;
+    join_start(&forum, &third, "eve", "eve@example.com").await;
+    forum
+        .exec("UPDATE registrations SET expires_at = now() - interval '1 second'")
+        .await;
+    let message = forum.last_email_to("eve@example.com").await;
+    let join_link = link_in(&message.body, "/join/");
+    assert_eq!(forum.get(&join_link).await.status, StatusCode::GONE);
+    assert_eq!(
+        forum
+            .submit(&join_link, &[("username", "eve")], None)
+            .await
+            .status,
+        StatusCode::GONE
+    );
+}
+
 #[sqlx::test]
 async fn a_password_chosen_when_joining_works(db: PgPool) {
     let Inviter { forum, cookie, .. } = setup(db, "user").await;
@@ -243,6 +437,7 @@ async fn a_password_chosen_when_joining_works(db: PgPool) {
             None,
         )
         .await;
+    finish_joining(&forum, "alex@example.com", "alex").await;
     let response = forum
         .submit(
             "/login",
@@ -376,10 +571,6 @@ async fn members_have_limits_staff_dont(db: PgPool) {
         (
             vec![("days", "7"), ("uses", "1"), ("email", "bad")],
             "valid email",
-        ),
-        (
-            vec![("days", "7"), ("uses", "1"), ("email", "ruth@example.com")],
-            "already a member",
         ),
     ] {
         let response = forum.submit("/invites", &fields, Some(&cookie)).await;
@@ -660,7 +851,10 @@ mod model {
     use super::common::Forum;
     use hegel::TestCase;
     use hegel::generators as gs;
-    use parlour::invites::{self, InviteStatus, NewInvite, RedeemError, Registration};
+    use parlour::invites::{
+        self, FinishError, InviteStatus, NewInvite, RedeemError, Redeemed, Registration,
+    };
+    use parlour::ratelimit::{RateLimiter, Rule};
     use parlour::viewer::UserCtx;
     use sqlx::PgPool;
     use tokio::runtime::Handle;
@@ -701,7 +895,18 @@ mod model {
         taken: Vec<(String, String)>,
         /// Who joined, with the invite they used.
         joined: Vec<(i64, usize)>,
+        /// Registrations with invite links waiting to be finished.
+        pending: Vec<Pending>,
         closed: bool,
+    }
+
+    #[derive(Clone, Debug)]
+    struct Pending {
+        token: String,
+        invite: usize,
+        username: String,
+        email: String,
+        finished: bool,
     }
 
     const USERNAMES: &[&str] = &["alex", "Alex", "bea", "cal", "dee", "ruth"];
@@ -715,7 +920,15 @@ mod model {
 
     impl World {
         pub fn new(rt: Handle, db: PgPool) -> World {
-            let forum = Forum::new(db);
+            let mut forum = Forum::new(db);
+            // Rate limits aren't part of the model.
+            forum.state = forum
+                .state
+                .clone()
+                .with_limiter(RateLimiter::new(|_, _| Rule {
+                    burst: u32::MAX,
+                    interval: std::time::Duration::from_millis(1),
+                }));
             let creators = rt.block_on(async {
                 sqlx::raw_sql("TRUNCATE settings, users RESTART IDENTITY CASCADE")
                     .execute(&forum.db)
@@ -746,6 +959,7 @@ mod model {
                 invites: Vec::new(),
                 taken,
                 joined: Vec::new(),
+                pending: Vec::new(),
                 closed: false,
             }
         }
@@ -759,6 +973,25 @@ mod model {
 
         fn email_taken(&self, email: &str) -> bool {
             self.taken.iter().any(|(_, e)| e == &email.to_lowercase())
+        }
+
+        fn username_taken(&self, username: &str) -> bool {
+            self.taken
+                .iter()
+                .any(|(u, _)| u == &username.to_lowercase())
+        }
+
+        /// Records a new member.
+        fn joined(&mut self, user_id: i64, invite: usize, username: &str, email: &str) {
+            self.invites[invite].uses += 1;
+            self.taken
+                .push((username.to_lowercase(), email.to_lowercase()));
+            self.joined.push((user_id, invite));
+        }
+
+        /// The emails sent so far, after running the queue.
+        fn emails(&self) -> Vec<parlour::mail::Email> {
+            self.rt.block_on(self.forum.emails())
         }
     }
 
@@ -793,11 +1026,14 @@ mod model {
                     &new,
                 ))
                 .unwrap();
+            // Inviting a member's address works like any other, so as not
+            // to reveal that it is one.
             let expected_ok = (staff || !self.closed)
-                && !email.as_deref().is_some_and(|e| self.email_taken(e))
                 && (staff || self.pending(creator) < invites::MAX_PENDING as usize);
             assert_eq!(result.is_ok(), expected_ok, "{result:?}");
             if let Ok(created) = result {
+                // Only invites without an address show the inviter a link.
+                assert_eq!(created.link.is_some(), email.is_none());
                 self.invites.push(Invite {
                     id: created.id,
                     code: created.code,
@@ -824,6 +1060,7 @@ mod model {
                 email: typed_email.clone(),
                 password: None,
             };
+            let sent_before = self.emails().len();
             let result = self
                 .rt
                 .block_on(invites::redeem(
@@ -833,10 +1070,7 @@ mod model {
                 ))
                 .unwrap();
             let email = invite.email.clone().unwrap_or(typed_email);
-            let username_taken = self
-                .taken
-                .iter()
-                .any(|(u, _)| u == &username.to_lowercase());
+            let username_taken = self.username_taken(&username);
             match result {
                 Err(RedeemError::Closed) => assert!(self.closed),
                 Err(RedeemError::Unusable(status)) => {
@@ -846,18 +1080,91 @@ mod model {
                 }
                 Err(RedeemError::Invalid(problems)) => {
                     assert!(!self.closed && invite.status() == InviteStatus::Valid);
-                    assert!(username_taken || self.email_taken(&email), "{problems:?}");
+                    // Only an emailed invite says the address is taken.
+                    assert!(
+                        username_taken || (invite.email.is_some() && self.email_taken(&email)),
+                        "{problems:?}"
+                    );
                 }
                 Err(RedeemError::NotFound) => panic!("invite {} not found", invite.id),
-                Ok(joined) => {
+                Ok(Redeemed::Joined(joined)) => {
                     assert!(!self.closed && invite.status() == InviteStatus::Valid);
+                    assert!(invite.email.is_some());
                     assert!(!username_taken && !self.email_taken(&email));
                     assert_eq!(joined.invite_id, invite.id);
-                    assert_eq!(joined.email_verified, invite.email.is_some());
-                    self.invites[index].uses += 1;
-                    self.taken
-                        .push((username.to_lowercase(), email.to_lowercase()));
-                    self.joined.push((joined.user_id, index));
+                    self.joined(joined.user_id, index, &username, &email);
+                }
+                Ok(Redeemed::EmailSent { email: sent_to }) => {
+                    assert!(!self.closed && invite.status() == InviteStatus::Valid);
+                    assert!(invite.email.is_none());
+                    assert!(!username_taken);
+                    assert_eq!(sent_to.to_lowercase(), email.to_lowercase());
+                    let emails = self.emails();
+                    assert_eq!(emails.len(), sent_before + 1);
+                    let message = emails.last().unwrap();
+                    assert_eq!(message.to.to_lowercase(), email.to_lowercase());
+                    if self.email_taken(&email) {
+                        assert!(!message.body.contains("/join/"), "{}", message.body);
+                    } else {
+                        let link = super::link_in(&message.body, "/join/");
+                        self.pending.push(Pending {
+                            token: link.trim_start_matches("/join/").to_owned(),
+                            invite: index,
+                            username,
+                            email,
+                            finished: false,
+                        });
+                    }
+                }
+            }
+        }
+
+        #[rule]
+        fn finish(&mut self, tc: TestCase) {
+            tc.assume(!self.pending.is_empty());
+            let index = tc.draw(gs::integers::<usize>().max_value(self.pending.len() - 1));
+            let pending = self.pending[index].clone();
+            let invite = self.invites[pending.invite].clone();
+            let result = self
+                .rt
+                .block_on(invites::finish(
+                    &self.forum.state,
+                    &pending.token,
+                    &pending.username,
+                ))
+                .unwrap();
+            match result {
+                Err(FinishError::Expired) => assert!(pending.finished),
+                Err(FinishError::Closed) => assert!(!pending.finished && self.closed),
+                Err(FinishError::Unusable(status)) => {
+                    assert!(!pending.finished && !self.closed);
+                    assert_eq!(status, invite.status());
+                    assert_ne!(status, InviteStatus::Valid);
+                }
+                Err(FinishError::Invalid(problems)) => {
+                    assert!(!pending.finished && !self.closed);
+                    assert_eq!(invite.status(), InviteStatus::Valid);
+                    assert!(self.username_taken(&pending.username), "{problems:?}");
+                }
+                Err(FinishError::EmailTaken) => {
+                    assert!(!pending.finished && !self.closed);
+                    assert_eq!(invite.status(), InviteStatus::Valid);
+                    assert!(!self.username_taken(&pending.username));
+                    assert!(self.email_taken(&pending.email));
+                }
+                Ok(joined) => {
+                    assert!(!pending.finished && !self.closed);
+                    assert_eq!(invite.status(), InviteStatus::Valid);
+                    assert!(!self.username_taken(&pending.username));
+                    assert!(!self.email_taken(&pending.email));
+                    assert_eq!(joined.invite_id, invite.id);
+                    self.pending[index].finished = true;
+                    self.joined(
+                        joined.user_id,
+                        pending.invite,
+                        &pending.username,
+                        &pending.email,
+                    );
                 }
             }
         }

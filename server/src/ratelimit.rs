@@ -31,6 +31,8 @@ pub enum Action {
     Setup,
     /// Sending a verification email again.
     VerifyEmail,
+    /// Emailing an address the link to finish joining with an invite link.
+    JoinEmail,
 }
 
 /// Whose allowance a request uses up.
@@ -82,7 +84,7 @@ pub fn rule(action: Action, scope: Scope) -> Rule {
         (Action::MagicCode, _) => Rule::new(10, 30),
         (Action::Redeem, _) => Rule::new(10, 300),
         (Action::Setup, _) => Rule::new(10, 60),
-        (Action::VerifyEmail, _) => Rule::new(3, 600),
+        (Action::VerifyEmail | Action::JoinEmail, _) => Rule::new(3, 600),
     }
 }
 

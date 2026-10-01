@@ -390,6 +390,12 @@ struct SetupInvitesTemplate {
     uses: String,
 }
 
+impl SetupInvitesTemplate {
+    fn shows_link(&self) -> bool {
+        self.created.iter().any(|invite| invite.link.is_some())
+    }
+}
+
 pub async fn invites_page(
     State(state): State<AppState>,
     viewer: Viewer,

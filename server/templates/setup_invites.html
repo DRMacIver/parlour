@@ -12,10 +12,10 @@
   <p>Invitations made:</p>
   <ul class="created-invites">
   {% for invite in created %}
-    <li>{% if let Some(email) = invite.emailed_to %}Emailing {{ email }}: {% else %}A link anyone can use: {% endif %}<input class="link-box" type="text" readonly value="{{ invite.url }}" aria-label="Invitation link"></li>
+    <li>{% if let Some(email) = invite.emailed_to %}Emailing an invitation to {{ email }}.{% endif %}{% if let Some(link) = invite.link %}A link anyone can use: <input class="link-box" type="text" readonly value="{{ link }}" aria-label="Invitation link">{% endif %}</li>
   {% endfor %}
   </ul>
-  <p>Copy any links you need now: they aren’t shown again.</p>
+  {% if self.shows_link() %}<p>Copy the link now: it isn’t shown again.</p>{% endif %}
 </div>
 {% endif %}
 {% call f::errors(errors) %}{% endcall %}

@@ -15,14 +15,15 @@ use crate::client::ClientIp;
 use crate::content::Deps;
 use crate::error::AppError;
 use crate::invites::{
-    self, CreatedInvite, InviteRow, InviteStatus, NewInvite, RedeemError, Registration,
+    self, CreatedInvite, FinishError, InviteRow, InviteStatus, NewInvite, PendingRegistration,
+    RedeemError, Redeemed, Registration,
 };
 use crate::members::{self, Profile, TreeItem};
 use crate::ratelimit::{Action, Scope};
 use crate::sessions;
 use crate::settings::{self, RegistrationMode};
 use crate::viewer::{UserCtx, Viewer};
-use crate::web::{self, Layout, Nav, cacheable, render, see_other};
+use crate::web::{self, Layout, Nav, cacheable, render, secret_url, see_other};
 
 // ---------------------------------------------------------------------------
 // Making and managing invites
@@ -341,24 +342,24 @@ pub async fn redeem(
         password: Some(form.password.clone()),
     };
     match invites::redeem(&state, &code, &registration).await? {
-        Ok(joined) => {
-            state
-                .changed(Change::UserCreated {
-                    user_id: joined.user_id,
-                })
-                .await?;
-            state
-                .changed(Change::InviteChanged {
-                    invite_id: joined.invite_id,
-                })
-                .await?;
-            let token = sessions::create(state.db(), joined.user_id, &headers, &ip).await?;
-            let next = if joined.email_verified {
-                "/settings?done=welcome".to_owned()
-            } else {
-                "/settings?done=welcome-verify".to_owned()
-            };
-            Ok(web::start_session(see_other(&next), &state, &token))
+        Ok(Redeemed::Joined(joined)) => welcome(&state, joined, &headers, &ip).await,
+        Ok(Redeemed::EmailSent { email }) => {
+            let text = format!(
+                "We’ve sent an email to {email}. Follow the link in it within {} to finish joining.",
+                crate::format::plural(i64::from(invites::REGISTRATION_HOURS), "hour", "hours")
+            );
+            web::message(
+                &state,
+                &viewer,
+                StatusCode::OK,
+                "Check your email",
+                &[
+                    &text,
+                    "If it doesn’t arrive, check that you typed your address correctly, and look in your spam folder.",
+                ],
+                None,
+            )
+            .await
         }
         Err(RedeemError::NotFound) => web::not_found(&state, &viewer).await,
         Err(RedeemError::Closed) => closed(&state, &viewer).await,
@@ -382,6 +383,130 @@ pub async fn redeem(
                     email: form.email,
                 },
             )
+        }
+    }
+}
+
+/// Logs a new member in after they join.
+async fn welcome(
+    state: &AppState,
+    joined: invites::Joined,
+    headers: &HeaderMap,
+    ip: &str,
+) -> Result<Response, AppError> {
+    state
+        .changed(Change::UserCreated {
+            user_id: joined.user_id,
+        })
+        .await?;
+    state
+        .changed(Change::InviteChanged {
+            invite_id: joined.invite_id,
+        })
+        .await?;
+    let token = sessions::create(state.db(), joined.user_id, headers, ip).await?;
+    Ok(web::start_session(
+        see_other("/settings?done=welcome"),
+        state,
+        &token,
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Finishing joining with an invite link, from the emailed link
+
+#[derive(Template)]
+#[template(path = "join.html")]
+struct JoinTemplate {
+    layout: Layout,
+    token: String,
+    pending: PendingRegistration,
+    username: String,
+    errors: Vec<String>,
+}
+
+async fn join_link_expired(state: &AppState, viewer: &Viewer) -> Result<Response, AppError> {
+    web::message(
+        state,
+        viewer,
+        StatusCode::GONE,
+        "Link expired",
+        &[
+            "This link has expired or has already been used.",
+            "If you haven’t joined yet, use your invitation again.",
+        ],
+        None,
+    )
+    .await
+}
+
+pub async fn join_page(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(token): Path<String>,
+) -> Result<Response, AppError> {
+    let Some(pending) = invites::pending_registration(state.db(), &token).await? else {
+        return Ok(secret_url(join_link_expired(&state, &viewer).await?));
+    };
+    // Opening the link doesn't join by itself (mail scanners open links).
+    Ok(secret_url(web::ok(&JoinTemplate {
+        layout: Layout::load(&state, &viewer, Nav::None).await?,
+        token,
+        username: pending.username.clone(),
+        pending,
+        errors: Vec::new(),
+    })?))
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+pub struct JoinForm {
+    username: String,
+}
+
+pub async fn finish_joining(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    ClientIp(ip): ClientIp,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+    Form(form): Form<JoinForm>,
+) -> Result<Response, AppError> {
+    // Not rate-limited: the token can't be guessed, and the expensive
+    // parts (hashing the password, sending email) happened before.
+    if viewer.user().is_some() {
+        return Ok(see_other("/"));
+    }
+    match invites::finish(&state, &token, &form.username).await? {
+        Ok(joined) => welcome(&state, joined, &headers, &ip).await,
+        Err(FinishError::Expired) => join_link_expired(&state, &viewer).await,
+        Err(FinishError::Closed) => closed(&state, &viewer).await,
+        Err(FinishError::Unusable(status)) => unusable(&state, &viewer, status).await,
+        Err(FinishError::EmailTaken) => {
+            web::message(
+                &state,
+                &viewer,
+                StatusCode::CONFLICT,
+                "Already a member",
+                &["There is already an account with this email address. Log in instead, or reset your password."],
+                Some(("/login", "Log in")),
+            )
+            .await
+        }
+        Err(FinishError::Invalid(errors)) => {
+            let Some(pending) = invites::pending_registration(state.db(), &token).await? else {
+                return join_link_expired(&state, &viewer).await;
+            };
+            Ok(secret_url(render(
+                StatusCode::BAD_REQUEST,
+                &JoinTemplate {
+                    layout: Layout::load(&state, &viewer, Nav::None).await?,
+                    token,
+                    pending,
+                    username: form.username,
+                    errors,
+                },
+            )?))
         }
     }
 }

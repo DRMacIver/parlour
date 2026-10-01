@@ -1,0 +1,11 @@
+Hello {{ name }},
+
+To finish joining {{ site_name }}, follow this link:
+
+  {{ url }}
+
+The link works for a day. If you didn't ask to join, you can ignore this
+email: no account has been made.
+
+-- 
+{{ site_name }}

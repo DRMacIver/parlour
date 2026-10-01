@@ -772,9 +772,6 @@ fn notice_for(done: &str) -> Option<&'static str> {
         "welcome" => {
             Some("Welcome! You’re a member now. This page is where you manage your account.")
         }
-        "welcome-verify" => Some(
-            "Welcome! You’re a member now. We’ve sent you an email with a link to confirm your address.",
-        ),
         _ => None,
     }
 }

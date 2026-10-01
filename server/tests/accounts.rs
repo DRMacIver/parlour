@@ -1150,10 +1150,22 @@ async fn anonymous_visitors_never_get_a_cookie(db: PgPool) {
             Some(&cookie),
         )
         .await;
+    forum
+        .submit(
+            &invite_path,
+            &[
+                ("username", "newbie"),
+                ("display_name", "Newbie"),
+                ("email", "newbie@example.com"),
+            ],
+            None,
+        )
+        .await;
     let emails = forum.emails().await;
     let login_link = link_in(&emails[0].body, "/login/");
     let reset_link = link_in(&emails[1].body, "/reset/");
     let verify_link = link_in(&emails[2].body, "/verify/");
+    let join_link = link_in(&emails[3].body, "/join/");
     for path in [
         "/",
         "/login",
@@ -1172,6 +1184,8 @@ async fn anonymous_visitors_never_get_a_cookie(db: PgPool) {
         login_link.as_str(),
         reset_link.as_str(),
         verify_link.as_str(),
+        join_link.as_str(),
+        "/join/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     ] {
         let response = forum.get(path).await;
         assert!(

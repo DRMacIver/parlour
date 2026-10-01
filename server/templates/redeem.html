@@ -5,7 +5,7 @@
 {% block content %}
 <div class="narrow">
 <h1 class="page-title">Join {{ layout.site_name }}</h1>
-<p class="lede"><a href="/u/{{ inviter_username }}">{{ inviter_name }}</a> has invited you. Choose a name and you’re in. The invitation expires {% call m::time(expires_at) %}{% endcall %}.</p>
+<p class="lede"><a href="/u/{{ inviter_username }}">{{ inviter_name }}</a> has invited you. {% if fixed_email.is_some() %}Choose a name and you’re in.{% else %}Choose a name, and we’ll email you a link to finish joining.{% endif %} The invitation expires {% call m::time(expires_at) %}{% endcall %}.</p>
 {% call f::errors(errors) %}{% endcall %}
 <section class="panel" aria-labelledby="join-heading">
   <h2 class="panel-bar" id="join-heading">Your account</h2>

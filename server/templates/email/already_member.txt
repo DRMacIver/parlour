@@ -1,0 +1,18 @@
+Hello {{ name }},
+
+{{ what }}, but you already have an account there, with the username
+{{ username }}.
+
+To log in, go to:
+
+  {{ login_url }}
+
+If you've forgotten your password, or never chose one, you can ask for a
+login link there instead, or choose a new password at:
+
+  {{ reset_url }}
+
+If this wasn't you, you can ignore this email.
+
+-- 
+{{ site_name }}

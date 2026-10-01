@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{% block title %}Finish joining · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Finish joining {{ layout.site_name }}</h1>
+<p class="lede">You were invited by <a href="/u/{{ pending.inviter_username }}">{{ pending.inviter_name }}</a>. Your account’s email address will be <strong>{{ pending.email }}</strong>.</p>
+{% call f::errors(errors) %}{% endcall %}
+<section class="panel" aria-labelledby="join-heading">
+  <h2 class="panel-bar" id="join-heading">Your account</h2>
+  <form class="form" method="post" action="/join/{{ token }}">
+    <div class="field">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="2" maxlength="24" pattern="[A-Za-z0-9_]+" value="{{ username }}">
+      <span class="field-hint">The one you chose, unless someone has taken it since.</span>
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Join</button></div>
+  </form>
+</section>
+</div>
+{% endblock %}

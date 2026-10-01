@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO users (username, display_name, email, email_verified_at, password_hash, role,\n                              invited_by_user_id, invite_id)\n           VALUES ($1, $2, $3, CASE WHEN $4 THEN now() END, $5, 'user', $6, $7)\n           RETURNING id",
+  "query": "INSERT INTO users (username, display_name, email, email_verified_at, password_hash, role,\n                              invited_by_user_id, invite_id)\n           VALUES ($1, $2, $3, now(), $4, 'user', $5, $6)\n           RETURNING id",
   "describe": {
     "columns": [
       {
@@ -30,7 +30,6 @@
             "kind": "Simple"
           }
         },
-        "Bool",
         "Text",
         "Int8",
         "Int8"
@@ -40,5 +39,5 @@
       false
     ]
   },
-  "hash": "24ddeedba4c380ab6bf5e6f843bce4136560ac409aa1b8999e6524bdc23577f7"
+  "hash": "35cd7ef0189d17fdc749173df8ce1dd3dd3fabee4b3c004126b18ca11338c87f"
 }

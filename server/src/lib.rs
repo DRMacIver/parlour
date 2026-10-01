@@ -91,6 +91,11 @@ impl AppState {
         self
     }
 
+    pub fn with_limiter(mut self, limiter: RateLimiter) -> Self {
+        self.limiter = Arc::new(limiter);
+        self
+    }
+
     pub fn with_mailer(mut self, mailer: Mailer) -> Self {
         self.mailer = mailer;
         self
@@ -182,6 +187,10 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/invite/{code}",
             get(invite_pages::redeem_page).post(invite_pages::redeem),
+        )
+        .route(
+            "/join/{token}",
+            get(invite_pages::join_page).post(invite_pages::finish_joining),
         )
         .route("/users/tree", get(invite_pages::tree))
         .route("/u/{username}", get(invite_pages::profile))

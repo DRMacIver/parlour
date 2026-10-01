@@ -98,6 +98,82 @@ pub fn reset(to: &str, site_name: &str, name: &str, url: &str) -> Email {
 }
 
 #[derive(Template)]
+#[template(path = "email/join.txt")]
+struct JoinText<'a> {
+    site_name: &'a str,
+    name: &'a str,
+    url: &'a str,
+}
+
+/// The link that finishes joining with an invite link.
+pub fn join(to: &str, site_name: &str, name: &str, url: &str) -> Email {
+    Email {
+        to: to.to_owned(),
+        subject: format!("Finish joining {site_name}"),
+        body: JoinText {
+            site_name,
+            name,
+            url,
+        }
+        .render()
+        .expect("email templates render"),
+    }
+}
+
+#[derive(Template)]
+#[template(path = "email/already_member.txt")]
+struct AlreadyMemberText<'a> {
+    site_name: &'a str,
+    name: &'a str,
+    what: &'a str,
+    username: &'a str,
+    login_url: &'a str,
+    reset_url: &'a str,
+}
+
+/// Why a member is being told they already have an account.
+pub enum AlreadyMember<'a> {
+    /// This member invited the address.
+    InvitedBy(&'a str),
+    /// Someone used an invite link with the address.
+    Joining,
+}
+
+/// Sent instead of an invitation, or instead of the link to finish joining,
+/// when the address belongs to a member already: the page that asked says
+/// the same either way, so it doesn't reveal who is a member.
+pub fn already_member(
+    to: &str,
+    site_name: &str,
+    name: &str,
+    username: &str,
+    why: AlreadyMember,
+    login_url: &str,
+    reset_url: &str,
+) -> Email {
+    let what = match why {
+        AlreadyMember::InvitedBy(inviter) => format!("{inviter} invited you to join {site_name}"),
+        AlreadyMember::Joining => {
+            format!("Someone used an invitation to join {site_name} with this email address")
+        }
+    };
+    Email {
+        to: to.to_owned(),
+        subject: format!("You already have an account on {site_name}"),
+        body: AlreadyMemberText {
+            site_name,
+            name,
+            what: &what,
+            username,
+            login_url,
+            reset_url,
+        }
+        .render()
+        .expect("email templates render"),
+    }
+}
+
+#[derive(Template)]
 #[template(path = "email/test.txt")]
 struct TestText<'a> {
     site_name: &'a str,

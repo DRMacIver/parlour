@@ -9,11 +9,13 @@
 {% if let Some(created) = created %}
 <div class="notice notice-success" role="status">
   {% if let Some(email) = created.emailed_to %}
-  <p>We’re emailing an invitation to <strong>{{ email }}</strong>. You can also send them this link yourself:</p>
-  {% else %}
-  <p>Your invitation is ready. Send this link to the person you’re inviting. It is only shown once, so copy it now:</p>
+  <p>We’re emailing an invitation to <strong>{{ email }}</strong>. Only they get the link, so that joining with it proves the address is theirs.</p>
+  <p>If it doesn’t arrive, revoke it and make an invitation without an address instead: you’ll get a link to send them yourself.</p>
   {% endif %}
-  <p><input class="link-box" type="text" readonly value="{{ created.url }}" aria-label="Invitation link"></p>
+  {% if let Some(link) = created.link %}
+  <p>Your invitation is ready. Send this link to the person you’re inviting. It is only shown once, so copy it now:</p>
+  <p><input class="link-box" type="text" readonly value="{{ link }}" aria-label="Invitation link"></p>
+  {% endif %}
 </div>
 {% endif %}
 {% call f::errors(errors) %}{% endcall %}

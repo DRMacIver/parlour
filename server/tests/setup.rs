@@ -213,8 +213,20 @@ async fn setup_makes_the_first_invites(db: PgPool) {
         )
         .await;
     assert_eq!(response.status, StatusCode::OK, "{}", response.body);
-    assert_eq!(response.body.matches("class=\"link-box\"").count(), 4);
+    // Only the shared link is shown: emailed invitations go only to their
+    // addresses.
+    assert_eq!(response.body.matches("class=\"link-box\"").count(), 1);
+    assert_eq!(response.body.matches("/invite/").count(), 1);
+    assert!(
+        response
+            .body
+            .contains("Emailing an invitation to maya@example.com")
+    );
     let emails = forum.emails().await;
+    for email in &emails {
+        let link = common::link_in(&email.body, "/invite/");
+        assert!(!response.body.contains(&link));
+    }
     let mut to: Vec<&str> = emails.iter().map(|e| e.to.as_str()).collect();
     to.sort();
     assert_eq!(
