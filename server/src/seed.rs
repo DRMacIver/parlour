@@ -6,11 +6,19 @@
 //!
 //! The text is generated from fixed sentence lists with a fixed random seed,
 //! so every run produces the same posts. Timestamps are relative to now.
+//!
+//! Seeding runs in one transaction, so a failure leaves nothing behind. It
+//! records the highest id in each content table in the `dev_seed` setting,
+//! and `parlour seed --reset` refuses to delete anything unless that record
+//! still matches: it only ever wipes a database that the seed command
+//! filled and that nobody has added to since. The binary ships to
+//! production, where running `--reset` out of habit must not be able to
+//! destroy a real forum.
 
 use std::fmt;
 
 use chrono::{DateTime, Duration, DurationRound, Utc};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 use crate::markdown;
 use crate::store::{self, CreatedThread, NewCategory, NewPost, NewThread, NewUser};
@@ -19,6 +27,11 @@ use crate::store::{self, CreatedThread, NewCategory, NewPost, NewThread, NewUser
 pub enum SeedError {
     /// The database already has forum content.
     NotEmpty,
+    /// `--reset` was asked to wipe a database that `parlour seed` didn't fill.
+    NotSeeded,
+    /// `--reset` was asked to wipe a seeded database that has gained users or
+    /// content since.
+    ChangedSinceSeed,
     Database(sqlx::Error),
 }
 
@@ -28,6 +41,14 @@ impl fmt::Display for SeedError {
             SeedError::NotEmpty => write!(
                 f,
                 "the database already has categories or users; run `parlour seed --reset` to replace them"
+            ),
+            SeedError::NotSeeded => write!(
+                f,
+                "refusing to reset: this database has users or content that `parlour seed` didn't create"
+            ),
+            SeedError::ChangedSinceSeed => write!(
+                f,
+                "refusing to reset: users or content have been added since this database was seeded"
             ),
             SeedError::Database(err) => write!(f, "database error: {err}"),
         }
@@ -50,25 +71,59 @@ pub struct SeedSummary {
     pub posts: usize,
 }
 
-/// Deletes all users and forum content. Settings are kept.
-pub async fn reset(db: &PgPool) -> sqlx::Result<()> {
-    sqlx::raw_sql("TRUNCATE posts, threads, categories, sections, users RESTART IDENTITY CASCADE")
-        .execute(db)
+/// The highest id in each table that `reset` deletes from, as JSON. Later
+/// milestones' tables that hang off users (sessions, invites, …) are
+/// emptied by the CASCADE and should be added here too.
+const HIGH_WATER_MARK: &str = "jsonb_build_object(
+    'users', (SELECT coalesce(max(id), 0) FROM users),
+    'sections', (SELECT coalesce(max(id), 0) FROM sections),
+    'categories', (SELECT coalesce(max(id), 0) FROM categories),
+    'threads', (SELECT coalesce(max(id), 0) FROM threads),
+    'posts', (SELECT coalesce(max(id), 0) FROM posts))";
+
+/// Deletes all users and forum content, but only from a database that
+/// [`seed`] filled and nobody has added to since (or an empty one).
+/// Settings other than the seed's own record are kept.
+pub async fn reset(db: &PgPool) -> Result<(), SeedError> {
+    let mut tx = db.begin().await?;
+    sqlx::raw_sql("LOCK TABLE users, sections, categories, threads, posts IN EXCLUSIVE MODE")
+        .execute(&mut *tx)
         .await?;
+    let (empty, matches): (bool, Option<bool>) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT NOT EXISTS (SELECT 1 FROM users) AND NOT EXISTS (SELECT 1 FROM sections)
+                AND NOT EXISTS (SELECT 1 FROM categories),
+                (SELECT value = {HIGH_WATER_MARK} FROM settings WHERE key = 'dev_seed')"
+    )))
+    .fetch_one(&mut *tx)
+    .await?;
+    match (empty, matches) {
+        (true, _) | (_, Some(true)) => {}
+        (false, None) => return Err(SeedError::NotSeeded),
+        (false, Some(false)) => return Err(SeedError::ChangedSinceSeed),
+    }
+    sqlx::raw_sql(
+        "TRUNCATE posts, threads, categories, sections, users RESTART IDENTITY CASCADE;
+         DELETE FROM settings WHERE key = 'dev_seed';",
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(())
 }
 
+/// Fills an empty database with sample content, all in one transaction.
 pub async fn seed(db: &PgPool) -> Result<SeedSummary, SeedError> {
+    let mut tx = db.begin().await?;
     let existing: i64 = sqlx::query_scalar!(
         r#"SELECT (SELECT count(*) FROM users) + (SELECT count(*) FROM categories) AS "n!""#
     )
-    .fetch_one(db)
+    .fetch_one(&mut *tx)
     .await?;
     if existing > 0 {
         return Err(SeedError::NotEmpty);
     }
     let mut seeder = Seeder {
-        db,
+        db: &mut tx,
         rng: Rng(0x5eed_7e55_da7c_1ab5),
         now: Utc::now()
             .duration_trunc(Duration::minutes(1))
@@ -77,7 +132,15 @@ pub async fn seed(db: &PgPool) -> Result<SeedSummary, SeedError> {
         summary: SeedSummary::default(),
     };
     seeder.run().await?;
-    Ok(seeder.summary)
+    let summary = seeder.summary;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO settings (key, value) VALUES ('dev_seed', {HIGH_WATER_MARK})
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = now()"
+    )))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(summary)
 }
 
 /// xorshift64*: small, fast, and the same everywhere.
@@ -106,7 +169,7 @@ impl Rng {
 }
 
 struct Seeder<'a> {
-    db: &'a PgPool,
+    db: &'a mut PgConnection,
     rng: Rng,
     now: DateTime<Utc>,
     /// (username, id)
@@ -484,13 +547,13 @@ impl Seeder<'_> {
             "INSERT INTO settings (key, value) VALUES ('site_name', to_jsonb('The Tuesday Club'::text))
              ON CONFLICT (key) DO NOTHING"
         )
-        .execute(self.db)
+        .execute(&mut *self.db)
         .await?;
 
         for spec in USERS {
             let invited_by = spec.invited_by.map(|name| self.user(name));
             let id = store::create_user(
-                self.db,
+                &mut *self.db,
                 &NewUser {
                     username: spec.username.into(),
                     display_name: spec.display_name.into(),
@@ -509,9 +572,9 @@ impl Seeder<'_> {
         }
         self.summary.users = self.users.len();
 
-        let community = store::create_section(self.db, "Community", 1).await?;
-        let hobbies = store::create_section(self.db, "Hobbies", 2).await?;
-        let members = store::create_section(self.db, "Members only", 3).await?;
+        let community = store::create_section(&mut *self.db, "Community", 1).await?;
+        let hobbies = store::create_section(&mut *self.db, "Hobbies", 2).await?;
+        let members = store::create_section(&mut *self.db, "Members only", 3).await?;
 
         let announcements = self
             .category(
@@ -838,7 +901,7 @@ impl Seeder<'_> {
     ) -> sqlx::Result<i64> {
         self.summary.categories += 1;
         store::create_category(
-            self.db,
+            &mut *self.db,
             &NewCategory {
                 section_id: Some(section_id),
                 slug: slug.into(),
@@ -907,12 +970,13 @@ impl Seeder<'_> {
             Some(text) => text.to_owned(),
             None => self.body(topic),
         };
+        let author_id = self.user(spec.author);
         let created = store::create_thread(
-            self.db,
+            &mut *self.db,
             &NewThread {
                 category_id,
                 title: spec.title.into(),
-                author_id: self.user(spec.author),
+                author_id,
                 body_md: body.clone(),
                 forked_from_post_id: None,
                 pinned: spec.pinned,
@@ -963,11 +1027,12 @@ impl Seeder<'_> {
         reply_to: Option<i64>,
         at: DateTime<Utc>,
     ) -> sqlx::Result<i64> {
+        let author_id = self.user(author);
         let id = store::create_post(
-            self.db,
+            &mut *self.db,
             &NewPost {
                 thread_id: thread.created.thread_id,
-                author_id: self.user(author),
+                author_id,
                 body_md: body.clone(),
                 reply_to_post_id: reply_to,
                 created_at: Some(at),
@@ -1008,7 +1073,7 @@ impl Seeder<'_> {
             "UPDATE posts SET edited_at = created_at + interval '8 minutes' WHERE id = $1",
             maya_post
         )
-        .execute(self.db)
+        .execute(&mut *self.db)
         .await?;
         self.post(&mut thread, "ollie", "> solo play is its own hobby that happens to share equipment with this one\n\nStrong disagree, but this deserves its own thread rather than derailing this one. Starting one now.".into(), Some(maya_post), day(self, 3) + Duration::minutes(16))
             .await?;
@@ -1025,7 +1090,7 @@ impl Seeder<'_> {
             "UPDATE posts SET deleted_at = created_at + interval '1 minute' WHERE id = $1",
             deleted
         )
-        .execute(self.db)
+        .execute(&mut *self.db)
         .await?;
         self.post(&mut thread, "dev", "Tuesday group played Heat: Pedal to the Metal with five. Teaching took ten minutes and the race took forty. Best new-to-us game of the year so far.".into(), None, day(self, 1))
             .await?;
@@ -1038,12 +1103,13 @@ impl Seeder<'_> {
             .forkable
             .expect("september thread has a post to fork");
         let start = self.now - Duration::hours(3) + Duration::minutes(18);
+        let author_id = self.user("ollie");
         let created = store::create_thread(
-            self.db,
+            &mut *self.db,
             &NewThread {
                 category_id: games,
                 title: "Do solo modes count as ‘playing’ a game?".into(),
-                author_id: self.user("ollie"),
+                author_id,
                 body_md: "Strong disagree, but it deserves its own thread rather than derailing that one. Is a solo game a different hobby, or the same hobby with fewer snacks?".into(),
                 forked_from_post_id: Some(source),
                 pinned: false,
@@ -1077,7 +1143,7 @@ impl Seeder<'_> {
         // One reply in the fork broke the rules and was hidden.
         let hidden = thread.posts[5].0;
         sqlx::query!("UPDATE posts SET hidden_at = now() WHERE id = $1", hidden)
-            .execute(self.db)
+            .execute(&mut *self.db)
             .await?;
         // And one post was edited after the fact.
         let edited = thread.posts[2].0;
@@ -1088,7 +1154,7 @@ impl Seeder<'_> {
             body,
             markdown::render(body)
         )
-        .execute(self.db)
+        .execute(&mut *self.db)
         .await?;
         Ok(())
     }

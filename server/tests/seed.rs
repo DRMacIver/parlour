@@ -151,3 +151,77 @@ async fn reset_empties_the_content_tables(pool: PgPool) {
         assert_eq!(n, 0, "{table}");
     }
 }
+
+async fn count(pool: &PgPool, table: &str) -> i64 {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test]
+async fn reset_refuses_a_database_seed_did_not_create(pool: PgPool) {
+    let f = Forum::new(pool.clone());
+    let ruth = f.user("ruth").await;
+    let games = f.category("games", "public", None, 0).await;
+    f.thread(games, ruth, "Real content", "x").await;
+    assert!(matches!(
+        seed::reset(&pool).await,
+        Err(SeedError::NotSeeded)
+    ));
+    assert_eq!(count(&pool, "users").await, 1);
+    assert_eq!(count(&pool, "posts").await, 1);
+}
+
+#[sqlx::test]
+async fn reset_refuses_a_seeded_database_that_has_gained_content(pool: PgPool) {
+    seed::seed(&pool).await.unwrap();
+    let posts = count(&pool, "posts").await;
+    let f = Forum::new(pool.clone());
+    let ruth = f.user("newcomer").await;
+    let thread: i64 = sqlx::query_scalar("SELECT min(id) FROM threads")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    f.post(thread, ruth, "A real post").await;
+    assert!(matches!(
+        seed::reset(&pool).await,
+        Err(SeedError::ChangedSinceSeed)
+    ));
+    assert_eq!(count(&pool, "posts").await, posts + 1);
+}
+
+#[sqlx::test]
+async fn reset_accepts_an_empty_database(pool: PgPool) {
+    seed::reset(&pool).await.unwrap();
+    seed::seed(&pool).await.unwrap();
+}
+
+#[sqlx::test]
+async fn a_failed_seed_leaves_nothing_behind(pool: PgPool) {
+    // Make the seed fail part-way through, once the long threads are being
+    // written.
+    sqlx::raw_sql("ALTER TABLE posts ADD CONSTRAINT boom CHECK (seq < 30)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        seed::seed(&pool).await,
+        Err(SeedError::Database(_))
+    ));
+    for table in [
+        "users",
+        "sections",
+        "categories",
+        "threads",
+        "posts",
+        "settings",
+    ] {
+        assert_eq!(count(&pool, table).await, 0, "{table}");
+    }
+    sqlx::raw_sql("ALTER TABLE posts DROP CONSTRAINT boom")
+        .execute(&pool)
+        .await
+        .unwrap();
+    seed::seed(&pool).await.unwrap();
+}

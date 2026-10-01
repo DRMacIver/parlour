@@ -7,7 +7,9 @@ use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage: parlour [serve]          run the web server
        parlour seed [--reset]   fill an empty database with sample content
-                                (--reset first deletes all users and content)
+                                (--reset first deletes all users and content,
+                                but only if `parlour seed` created them and
+                                nothing has been added since)
 
 Environment: DATABASE_URL (required), PARLOUR_BIND (default 0.0.0.0:8080)";
 
@@ -53,9 +55,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Serve => serve(db).await,
         Command::Seed { reset } => {
             if reset {
-                seed::reset(&db)
-                    .await
-                    .context("could not reset the database")?;
+                seed::reset(&db).await?;
             }
             let summary = seed::seed(&db).await?;
             println!(

@@ -2,13 +2,15 @@
 //! categories, threads and posts with their bookkeeping (post numbering,
 //! thread activity, rendered HTML) kept consistent.
 //!
+//! Each takes a pool, a connection or an open transaction.
+//!
 //! These functions don't check permissions or clear the page cache. Request
 //! handlers that write (M4 onwards) check permissions first and then call
 //! [`crate::AppState::changed`] once the write has committed. The `seed`
 //! command uses them directly.
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{Acquire, Postgres};
 
 use crate::markdown;
 
@@ -56,7 +58,11 @@ pub struct NewUser {
     pub created_at: Option<DateTime<Utc>>,
 }
 
-pub async fn create_user(db: &PgPool, user: &NewUser) -> sqlx::Result<i64> {
+pub async fn create_user<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    user: &NewUser,
+) -> sqlx::Result<i64> {
+    let mut conn = db.acquire().await?;
     sqlx::query_scalar!(
         r#"INSERT INTO users (username, display_name, email, role, title, pronouns, status_line,
                               location, invited_by_user_id, created_at)
@@ -73,17 +79,22 @@ pub async fn create_user(db: &PgPool, user: &NewUser) -> sqlx::Result<i64> {
         user.invited_by_user_id,
         user.created_at,
     )
-    .fetch_one(db)
+    .fetch_one(&mut *conn)
     .await
 }
 
-pub async fn create_section(db: &PgPool, name: &str, position: i32) -> sqlx::Result<i64> {
+pub async fn create_section<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    name: &str,
+    position: i32,
+) -> sqlx::Result<i64> {
+    let mut conn = db.acquire().await?;
     sqlx::query_scalar!(
         "INSERT INTO sections (name, position) VALUES ($1, $2) RETURNING id",
         name,
         position
     )
-    .fetch_one(db)
+    .fetch_one(&mut *conn)
     .await
 }
 
@@ -100,7 +111,11 @@ pub struct NewCategory {
     pub write_level: String,
 }
 
-pub async fn create_category(db: &PgPool, category: &NewCategory) -> sqlx::Result<i64> {
+pub async fn create_category<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    category: &NewCategory,
+) -> sqlx::Result<i64> {
+    let mut conn = db.acquire().await?;
     sqlx::query_scalar!(
         r#"INSERT INTO categories (section_id, slug, name, description, position, read_level, write_level)
            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"#,
@@ -112,7 +127,7 @@ pub async fn create_category(db: &PgPool, category: &NewCategory) -> sqlx::Resul
         category.read_level,
         category.write_level,
     )
-    .fetch_one(db)
+    .fetch_one(&mut *conn)
     .await
 }
 
@@ -135,7 +150,10 @@ pub struct CreatedThread {
 }
 
 /// Creates a thread together with its first post.
-pub async fn create_thread(db: &PgPool, thread: &NewThread) -> sqlx::Result<CreatedThread> {
+pub async fn create_thread<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    thread: &NewThread,
+) -> sqlx::Result<CreatedThread> {
     let mut tx = db.begin().await?;
     let created_at = thread.created_at.unwrap_or_else(Utc::now);
     let thread_id = sqlx::query_scalar!(
@@ -182,7 +200,10 @@ pub struct NewPost {
 }
 
 /// Adds a post to the end of a thread.
-pub async fn create_post(db: &PgPool, post: &NewPost) -> sqlx::Result<i64> {
+pub async fn create_post<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    post: &NewPost,
+) -> sqlx::Result<i64> {
     let mut tx = db.begin().await?;
     let id = insert_post(&mut tx, post).await?;
     tx.commit().await?;
