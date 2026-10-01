@@ -36,6 +36,14 @@ Items marked **[proposal]** are choices I made while drafting this document that
 - Permission-aware full-text search using Postgres.
 - Image uploads in posts and avatars, with metadata removed and size limits **[proposal: in v1 because Discord users expect to share images]**.
 - User profiles showing avatar, title and who invited them.
+- **No signatures.** Instead, each user can customise the post-info column shown to the left of their posts:
+  - a title;
+  - pronouns;
+  - a short status line of up to about 60 characters, plain text with no links;
+  - an optional location.
+
+  The column always shows the avatar, display name, username and join date. The custom fields are short and fixed in format, so the page layout stays dense and predictable. **[proposal: exact fields]**
+- **Edit history.** Editing has no time limit. An edited post shows "edited", which links to its revisions, and anyone who can see the post can see its revisions **[proposal]**.
 - Data export and account deletion; a simple contact and report form that works without logging in.
 - Live "N new posts" indicator on threads using server-sent events **[proposal]**.
 - Deployment: docker compose, a first-run `/setup` wizard, automatic migrations, nightly backups.
@@ -44,7 +52,7 @@ Items marked **[proposal]** are choices I made while drafting this document that
 
 - Open registration modes (email-verified, admin approval), with the anti-bot measures they need: a hidden honeypot field, a minimum form-fill time and a proof-of-work check **[proposal: invite-only means these can wait]**.
 - Passkeys and generic single sign-on (OIDC); Discord as an optional single sign-on provider.
-- Digest emails, Atom feeds, a webhook to post new threads elsewhere (for example into Discord), bookmarks, edit history visible to staff, web push notifications, templates for terms of service, privacy and Online Safety Act paperwork, importers, spoiler markup.
+- Digest emails, Atom feeds, a webhook to post new threads elsewhere (for example into Discord), bookmarks, web push notifications, templates for terms of service, privacy and Online Safety Act paperwork, importers, spoiler markup.
 
 ### Out of scope
 
@@ -87,6 +95,7 @@ Content in DMs can never be quoted out, and DMs never contain quote-forks **[pro
 - **Embeds are references, not copies.** The embedded post is checked against the viewer's permissions every time the page is rendered. If the source is later moved somewhere more private, or deleted, the embed shows "this post is unavailable". That also covers moves after the fork was created, which the rule above can't prevent.
 - The source post shows "↪ continued in: <title>" backlinks. Each one is shown only to viewers who can see the fork.
 - Editing the source post updates every embed. For the cache, see §5.
+- An embed always shows the current version of the source post, marked "edited" if it has been. That keeps embeds consistent with the edit history and the "references, not copies" rule. **[proposal]**
 
 ### 3.3 Threads and posts
 
@@ -95,6 +104,13 @@ Content in DMs can never be quoted out, and DMs never contain quote-forks **[pro
 - A post can have `reply_to_post_id`, which must be in the same thread. Selecting text and clicking Quote inserts a Markdown blockquote and sets this link. The post is then shown with "in reply to @alice ↑", linking to the quoted post.
 - Markdown follows CommonMark plus GitHub extensions (tables, strikethrough, autolinks), rendered by comrak and sanitised by ammonia.
 - **HTML is generated when a post is saved** and stored as `body_html`. Mentions (`@name`) are resolved to links at that point.
+- **Edits:**
+  - Posts can be edited at any time.
+  - Each edit stores the previous version in `post_revisions`.
+  - Edits within 5 minutes of posting are merged into one revision, as a grace period for typo fixes **[proposal]**.
+  - `/p/{id}/revisions` shows each revision with a diff.
+- **Redacting revisions:** a moderator can redact an individual revision, for example if someone edited out doxxing and the old text is still in the history. A redacted revision keeps its entry but its content is removed for everyone, and the action is recorded in `mod_actions`.
+- **Deleting a post** also hides its history.
 
 ### 3.4 Reactions
 
@@ -145,7 +161,7 @@ IDs are `bigint` identity columns. Times are `timestamptz`.
 
 ```
 users(id, username UNIQUE citext, display_name, email UNIQUE citext, email_verified_at,
-      password_hash?, role {user, moderator, admin}, title?, avatar_upload_id?,
+      password_hash?, role {user, moderator, admin}, title?, pronouns?, status_line?, location?, avatar_upload_id?,
       invited_by_user_id?, invite_id?, silenced_until?, suspended_until?,
       dm_policy, email_prefs jsonb, created_at, deleted_at?)
 groups(id, slug, name, description)
@@ -158,6 +174,7 @@ private_thread_participants(thread_id, user_id, joined_at, left_at?)
 posts(id, thread_id, seq, author_id, reply_to_post_id?, body_md, body_html,
       search tsvector GENERATED, created_at, edited_at?, deleted_at?, hidden_at?,
       UNIQUE(thread_id, seq))
+post_revisions(id, post_id, rev, body_md, body_html, editor_id, created_at, redacted_at?, redacted_by?)
 reaction_types(emoji, position, enabled)
 reactions(post_id, user_id, emoji, created_at, PK(post_id, user_id, emoji))
 thread_reads(user_id, thread_id, last_read_seq)
@@ -272,6 +289,7 @@ enum Viewer { Anonymous, User(UserCtx) }  // UserCtx: id, role, group_ids, suspe
 | `/t/{id}/{slug}?page=n` | Thread |
 | `/t/{id}/unread` | Redirects to the first unread post |
 | `/p/{id}` | Post permalink; redirects to `/t/…?page=k#p{id}` |
+| `/p/{id}/revisions` | Edit history |
 | `/u/{username}` | Profile |
 | `/users/tree` | Invite tree |
 | `/search?q=` | Search |
@@ -314,7 +332,7 @@ research/      background research
 ## 14. Open questions
 
 1. Which **[proposal]** items do you want to change?
-2. **Category layout:** do we want subforums or sections, phpBB style, or is a flat ordered list of categories enough? (The current draft is a flat list.)
-3. **Signatures:** none, or short collapsed ones?
-4. **Editing:** is there a time window for editing posts, and do edits show an "edited" marker? (The current draft shows an "edited" marker with no time limit.)
-5. **Name:** is "forumal" the final name?
+2. **Category layout:** a flat list, a flat list with optional display-only sections, or real subforums? (Recommendation: a flat list with optional sections.)
+3. **Name:** "forumal" is a placeholder. Choose a real name before the first public release.
+
+Resolved: no signatures, but a customisable post-info column; no time limit on editing; edit history in v1.
