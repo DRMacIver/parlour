@@ -66,7 +66,9 @@ pub fn ok(template: &impl Template) -> Result<Response, AppError> {
 /// A rendered page that anonymous visitors may be served from the cache.
 pub fn cacheable(template: &impl Template, deps: &Deps) -> Result<Response, AppError> {
     let mut response = Html(template.render()?).into_response();
-    response.extensions_mut().insert(CacheTags(deps.tags()));
+    response
+        .extensions_mut()
+        .insert(CacheTags(deps.tags(), deps.expiry()));
     Ok(response)
 }
 

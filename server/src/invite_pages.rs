@@ -293,23 +293,30 @@ pub async fn redeem_page(
     if settings::registration_mode(state.db()).await? == RegistrationMode::Closed {
         return closed(&state, &viewer).await;
     }
+    let emailed = invite.email.is_some();
+    let template = RedeemTemplate {
+        layout: Layout::load(&state, &viewer, Nav::None).await?,
+        code,
+        inviter_username: invite.inviter_username,
+        inviter_name: invite.inviter_name,
+        fixed_email: invite.email,
+        expires_at: invite.expires_at,
+        errors: Vec::new(),
+        username: String::new(),
+        display_name: String::new(),
+        email: String::new(),
+    };
+    // The page for an invite sent to an address shows the address, so it
+    // isn't kept anywhere, here or in a cache in front; it only has one
+    // visitor anyway. An invite link's page may be shared widely, so it is
+    // cached until something changes the invite or it expires.
+    if emailed {
+        return web::ok(&template);
+    }
     let mut deps = Deps::new();
     deps.add(Tag::Invite(invite.id));
-    cacheable(
-        &RedeemTemplate {
-            layout: Layout::load(&state, &viewer, Nav::None).await?,
-            code,
-            inviter_username: invite.inviter_username,
-            inviter_name: invite.inviter_name,
-            fixed_email: invite.email,
-            expires_at: invite.expires_at,
-            errors: Vec::new(),
-            username: String::new(),
-            display_name: String::new(),
-            email: String::new(),
-        },
-        &deps,
-    )
+    deps.expires_at(invite.expires_at);
+    cacheable(&template, &deps)
 }
 
 #[derive(serde::Deserialize, Default)]

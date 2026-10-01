@@ -24,6 +24,7 @@ pub const LATEST_ON_INDEX: i64 = 8;
 #[derive(Debug, Default)]
 pub struct Deps {
     tags: BTreeSet<Tag>,
+    expires_at: Option<DateTime<Utc>>,
 }
 
 impl Deps {
@@ -39,6 +40,16 @@ impl Deps {
 
     pub fn tags(&self) -> Vec<Tag> {
         self.tags.iter().copied().collect()
+    }
+
+    /// Says that the page stops being right at `at` by itself, with no
+    /// change to clear it.
+    pub fn expires_at(&mut self, at: DateTime<Utc>) {
+        self.expires_at = Some(self.expires_at.map_or(at, |earlier| earlier.min(at)));
+    }
+
+    pub fn expiry(&self) -> Option<DateTime<Utc>> {
+        self.expires_at
     }
 }
 

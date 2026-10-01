@@ -13,6 +13,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use axum::body::Bytes;
 
@@ -119,6 +120,9 @@ struct Entry {
     tags: Vec<Tag>,
     used: u64,
     size: usize,
+    /// When the page stops being right by itself, with nothing to clear
+    /// it, such as an invite's page when the invite expires.
+    expires: Option<Instant>,
 }
 
 impl PageCache {
@@ -142,9 +146,22 @@ impl PageCache {
     }
 
     pub fn get(&self, key: &str) -> Option<Arc<CachedPage>> {
+        self.get_at(key, Instant::now())
+    }
+
+    pub fn get_at(&self, key: &str, now: Instant) -> Option<Arc<CachedPage>> {
         let mut inner = self.lock();
         let inner = &mut *inner;
         inner.clock += 1;
+        if inner
+            .entries
+            .get(key)?
+            .expires
+            .is_some_and(|expires| expires <= now)
+        {
+            inner.remove(key);
+            return None;
+        }
         let entry = inner.entries.get_mut(key)?;
         inner.lru.remove(&entry.used);
         entry.used = inner.clock;
@@ -163,6 +180,19 @@ impl PageCache {
     /// was stored: it isn't if one of its tags has been cleared since, or if
     /// it doesn't fit.
     pub fn insert(&self, ticket: Ticket, key: String, page: CachedPage, tags: &[Tag]) -> bool {
+        self.insert_until(ticket, key, page, tags, None)
+    }
+
+    /// Like [`PageCache::insert`], for a page that must not be served after
+    /// `expires`.
+    pub fn insert_until(
+        &self,
+        ticket: Ticket,
+        key: String,
+        page: CachedPage,
+        tags: &[Tag],
+        expires: Option<Instant>,
+    ) -> bool {
         let size = key.len() + page.body.len() + page.content_type.len() + ENTRY_OVERHEAD;
         if size > self.max_bytes {
             return false;
@@ -197,6 +227,7 @@ impl PageCache {
                 tags,
                 used,
                 size,
+                expires,
             },
         );
         true
@@ -411,6 +442,32 @@ mod tests {
         assert!(!cache.insert(ticket, "/".into(), page, &[Tag::Site]));
         let page = CachedPage::new("text/html".into(), Bytes::from_static(b"x"));
         assert!(cache.insert(cache.ticket(), "/".into(), page, &[Tag::Site]));
+    }
+
+    #[test]
+    fn pages_are_not_served_after_they_expire() {
+        let cache = PageCache::new(1 << 20);
+        let now = Instant::now();
+        let later = now + std::time::Duration::from_secs(10);
+        let page = || CachedPage::new("text/html".into(), Bytes::from_static(b"hello"));
+        assert!(cache.insert_until(
+            cache.ticket(),
+            "/a".into(),
+            page(),
+            &[Tag::Site],
+            Some(later)
+        ));
+        assert!(cache.insert(cache.ticket(), "/b".into(), page(), &[Tag::Site]));
+        assert!(cache.get_at("/a", now).is_some());
+        assert!(cache.get_at("/a", later).is_none());
+        // It is gone, and its room is given back.
+        assert_eq!(cache.len(), 1);
+        assert!(cache.get_at("/a", now).is_none());
+        assert!(
+            cache
+                .get_at("/b", later + later.duration_since(now))
+                .is_some()
+        );
     }
 
     #[test]

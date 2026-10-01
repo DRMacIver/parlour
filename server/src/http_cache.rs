@@ -18,6 +18,8 @@ use axum::http::header::{
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use chrono::{DateTime, Utc};
+use std::time::Instant;
 
 use crate::AppState;
 use crate::cache::{CachedPage, Tag};
@@ -27,9 +29,10 @@ pub const PUBLIC_CACHE_CONTROL: &str = "public, max-age=0, s-maxage=30, stale-wh
 pub const PRIVATE_CACHE_CONTROL: &str = "private, no-store";
 
 /// Attached by a handler to a response that may be cached for anonymous
-/// visitors, listing what it was rendered from.
+/// visitors, listing what it was rendered from and, if it stops being
+/// right by itself at some point, when.
 #[derive(Clone, Debug)]
-pub struct CacheTags(pub Vec<Tag>);
+pub struct CacheTags(pub Vec<Tag>, pub Option<DateTime<Utc>>);
 
 pub async fn middleware(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let method = request.method().clone();
@@ -52,12 +55,20 @@ pub async fn middleware(State(state): State<AppState>, request: Request, next: N
 
     let ticket = state.cache.ticket();
     let response = next.run(request).await;
-    let tags = match response.extensions().get::<CacheTags>() {
-        Some(tags)
+    let (tags, expires) = match response.extensions().get::<CacheTags>() {
+        Some(CacheTags(tags, expires_at))
             if response.status() == StatusCode::OK
                 && !response.headers().contains_key(SET_COOKIE) =>
         {
-            tags.0.clone()
+            let expires = match expires_at {
+                None => None,
+                Some(at) => match (*at - Utc::now()).to_std() {
+                    Ok(left) => Some(Instant::now() + left),
+                    // Already out of date: don't keep it.
+                    Err(_) => return private(response),
+                },
+            };
+            (tags.clone(), expires)
         }
         _ => return private(response),
     };
@@ -78,7 +89,7 @@ pub async fn middleware(State(state): State<AppState>, request: Request, next: N
     let page = CachedPage::new(content_type, body);
     let response = respond(&page, if_none_match.as_ref(), head);
     if !head {
-        state.cache.insert(ticket, key, page, &tags);
+        state.cache.insert_until(ticket, key, page, &tags, expires);
     }
     response
 }

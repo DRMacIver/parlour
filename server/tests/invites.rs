@@ -528,6 +528,54 @@ async fn expired_invites_cant_be_used(db: PgPool) {
     assert!(forum.page_as("/invites", &cookie).await.contains("Expired"));
 }
 
+/// A cached invite page lasts no longer than the invite does, though
+/// nothing clears it when the invite expires.
+#[sqlx::test]
+async fn cached_invite_pages_expire_with_the_invite(db: PgPool) {
+    let Inviter { forum, cookie, .. } = setup(db, "user").await;
+    let link = make_invite(&forum, &cookie, &[("days", "1"), ("uses", "1")]).await;
+    forum
+        .exec("UPDATE invites SET expires_at = now() + interval '1 second'")
+        .await;
+    let page = forum.get(&link).await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert_eq!(
+        page.header(header::CACHE_CONTROL),
+        Some(PUBLIC_CACHE_CONTROL)
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let page = forum.get(&link).await;
+    assert_eq!(page.status, StatusCode::GONE);
+    assert!(page.body.contains("expired"));
+}
+
+/// The page for an invite sent to an address shows the address, so it
+/// isn't cached, here or by anything in between.
+#[sqlx::test]
+async fn emailed_invite_pages_are_not_cached(db: PgPool) {
+    let Inviter { forum, cookie, .. } = setup(db, "user").await;
+    forum
+        .submit(
+            "/invites",
+            &[("email", "alex@example.com"), ("days", "7"), ("uses", "1")],
+            Some(&cookie),
+        )
+        .await;
+    let link = link_in(
+        &forum.last_email_to("alex@example.com").await.body,
+        "/invite/",
+    );
+    let page = forum.get(&link).await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(page.body.contains("alex@example.com"));
+    assert_eq!(
+        page.header(header::CACHE_CONTROL),
+        Some(PRIVATE_CACHE_CONTROL)
+    );
+    assert!(page.header(header::SET_COOKIE).is_none());
+    assert_eq!(forum.state.cache().len(), 0);
+}
+
 #[sqlx::test]
 async fn unknown_invite_codes_are_not_found(db: PgPool) {
     let forum = Forum::new(db);
