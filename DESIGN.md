@@ -199,7 +199,13 @@ Using a single `threads` table for both categories and DMs is a deliberate choic
 ## 5. Rendering and caching
 
 - **Templates:** askama, compiled into the binary.
-- **CSS:** one hand-written stylesheet using CSS variables, with light and dark themes. The look is dense and in the style of phpBB/old.reddit, and adapts down to 320px wide.
+- **CSS:** one hand-written stylesheet using CSS variables, with light and dark themes. It adapts down to 320px wide: on narrow screens, the author column collapses into a single line above each post.
+- **Visual direction: "Classic × Broadsheet"** (chosen 2026-10-01; mockup 3b on the [design canvas](https://claude.ai/artifact/PPCuLhSznBYVmHTLsyTVH3)). We expect to try variants later, so all colours, fonts and spacing are CSS variables, which keeps alternative themes cheap.
+  - **Structure:** the classic phpBB layout, with an Author / Message two-column post table, header bars, shaded alternate rows, boxed "X wrote:" quotes, breadcrumbs, "Go to page" links and a quick-reply box.
+  - **Type:** Newsreader (a serif with optical sizes), body text about 17px. Labels, navigation and actions are in small caps with letter-spacing.
+  - **Colour:** newsprint-grey page (`#ECE9E0`), off-white panels, ink-black (`#161616`) header bars with off-white small-caps labels, and one red accent (`#A1171E`) for the "new since your last visit" double rule, unread counts and the current page.
+  - **Details:** posts are numbered "№ 104"; author details sit in a ruled left column; quotes are set between thin rules; post actions are text links (quote · new thread · report).
+  - **No** rounded cards, shadows, gradients or pill buttons.
 - **React "islands":**
   - Built with Vite. Each island mounts on an element with `data-island="composer"` and reads its props from a `<script type="application/json">` tag next to it.
   - v1 islands: the composer (Markdown with server-rendered preview, quote insertion, image paste), the reaction picker, the notifications menu, the live "new posts" bar, and the quote-fork dialog.
