@@ -8,6 +8,7 @@ pub mod http_cache;
 pub mod markdown;
 mod pages;
 pub mod pagination;
+pub mod seed;
 mod settings;
 pub mod store;
 pub mod viewer;
