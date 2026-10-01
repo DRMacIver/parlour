@@ -15,8 +15,10 @@
 {% else %}
 {% include "_thread_table.html" %}
 {% endif %}
+{% if pagination.is_multi_page() %}
 <div class="toolbar toolbar-bottom">
   <span class="spacer"></span>
   {% call m::pagination(pagination, "Pages, again") %}{% endcall %}
 </div>
+{% endif %}
 {% endblock %}

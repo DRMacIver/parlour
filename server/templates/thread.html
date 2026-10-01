@@ -10,10 +10,12 @@
   {% if thread.pinned %}· <span class="flag">Pinned</span>{% endif %}
   {% if thread.locked %}· <span class="flag">Locked</span>{% endif %}
 </p>
+{% if pagination.is_multi_page() %}
 <div class="toolbar">
   <span class="spacer"></span>
   {% call m::pagination(pagination, "Pages") %}{% endcall %}
 </div>
+{% endif %}
 
 {% if let Some(embed) = thread.embed %}
 {% match embed %}
@@ -90,8 +92,10 @@
   {% endfor %}
 </div>
 
+{% if pagination.is_multi_page() %}
 <div class="toolbar toolbar-bottom">
   <span class="spacer"></span>
   {% call m::pagination(pagination, "Pages, again") %}{% endcall %}
 </div>
+{% endif %}
 {% endblock %}

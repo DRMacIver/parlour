@@ -102,3 +102,27 @@ async fn anonymous_responses_never_set_cookies(pool: PgPool) {
         );
     }
 }
+
+#[sqlx::test]
+async fn self_hosted_fonts_are_served(pool: PgPool) {
+    let css = get(pool.clone(), "/static/parlour.css").await;
+    for font in [
+        "newsreader-latin-opsz-normal.woff2",
+        "newsreader-latin-opsz-italic.woff2",
+        "newsreader-latin-ext-opsz-normal.woff2",
+        "newsreader-latin-ext-opsz-italic.woff2",
+    ] {
+        assert!(css.body.contains(&format!("url(fonts/{font})")), "{font}");
+        let response = app(AppState::new(pool.clone()))
+            .oneshot(
+                Request::get(format!("/static/fonts/{font}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{font}");
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "font/woff2");
+    }
+    assert!(!css.body.contains("fonts.googleapis"));
+}
