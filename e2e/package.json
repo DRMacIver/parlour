@@ -1,0 +1,16 @@
+{
+  "name": "parlour-e2e",
+  "private": true,
+  "description": "Browser tests for Parlour's pages (DESIGN.md §12).",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.6.3",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1",
+    "typescript": "^7.0.2"
+  }
+}
