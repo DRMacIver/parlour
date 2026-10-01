@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="/static/parlour.css">
 </head>
 <body>
+<a class="skip-link" href="#content">Skip to content</a>
 <header class="masthead">
   <div class="wrap">
     <a class="site-name" href="/">{{ layout.site_name }}</a>
@@ -14,10 +15,11 @@
 </header>
 <nav class="topnav" aria-label="Main">
   <div class="wrap">
-    <a href="/" aria-current="page">Forum index</a>
+    <a href="/"{% if layout.nav == Nav::Index %} aria-current="page"{% endif %}>Forum index</a>
+    <a href="/latest"{% if layout.nav == Nav::Latest %} aria-current="page"{% endif %}>Latest</a>
   </div>
 </nav>
-<main class="wrap">
+<main class="wrap" id="content">
 {% block content %}{% endblock %}
 </main>
 <footer class="site-footer">

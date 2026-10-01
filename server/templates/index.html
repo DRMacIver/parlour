@@ -1,8 +1,71 @@
 {% extends "base.html" %}
+{%- import "_macros.html" as m -%}
 {% block content %}
-<h1 class="page-title">Forum index</h1>
-<section class="panel">
-  <h2 class="panel-bar">Categories</h2>
-  <p class="empty">There are no categories yet.</p>
-</section>
+<h1 class="page-title visually-hidden">Forum index</h1>
+<div class="index-layout">
+  <div class="index-main">
+  {% if sections.is_empty() %}
+    <section class="panel">
+      <h2 class="panel-bar">Categories</h2>
+      <p class="empty">There are no categories yet.</p>
+    </section>
+  {% endif %}
+  {% for section in sections %}
+    <table class="list category-list">
+      <thead>
+        <tr>
+          <th scope="col">{% if let Some(name) = section.name %}{{ name }}{% else %}Categories{% endif %}</th>
+          <th scope="col" class="num">Threads</th>
+          <th scope="col" class="num">Posts</th>
+          <th scope="col" class="last-col">Last post</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for summary in section.categories %}
+        <tr>
+          <td class="main-col">
+            <div class="row-title">
+              <a href="/c/{{ summary.category.slug }}">{{ summary.category.name }}</a>
+              {% if summary.read_level == "members" %}<span class="flag">Members only</span>{% endif %}
+              {% if summary.read_level == "groups" %}<span class="flag">Restricted</span>{% endif %}
+            </div>
+            {% if !summary.description.is_empty() %}<div class="row-meta">{{ summary.description }}</div>{% endif %}
+          </td>
+          <td class="num" data-label="Threads">{{ crate::format::count(summary.thread_count) }}</td>
+          <td class="num" data-label="Posts">{{ crate::format::count(summary.post_count) }}</td>
+          <td class="last-col">
+          {% if let Some(last) = summary.last %}
+            {% if let Some(post_id) = last.post_id %}
+            <a class="last-title" href="/p/{{ post_id }}">{{ last.thread.title }}</a>
+            {% else %}
+            <a class="last-title" href="{{ crate::format::thread_href(last.thread.id, last.thread.slug) }}">{{ last.thread.title }}</a>
+            {% endif %}
+            <div class="row-meta">{% if let Some(by) = last.by %}by {{ by.display_name }} · {% endif %}{% call m::time(last.at) %}{% endcall %}</div>
+          {% else %}
+            <span class="row-meta">No posts yet</span>
+          {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endfor %}
+  </div>
+  <aside class="panel latest" aria-labelledby="latest-heading">
+    <h2 class="panel-bar" id="latest-heading">Latest</h2>
+    {% if latest.is_empty() %}
+    <p class="empty">Nothing has been posted yet.</p>
+    {% else %}
+    <ol class="latest-list">
+    {% for row in latest %}
+      <li>
+        <a href="{{ crate::format::thread_href(row.thread.id, row.thread.slug) }}">{{ row.thread.title }}</a>
+        <div class="row-meta">{{ row.category.name }} · {% call m::time(row.last_post_at) %}{% endcall %}</div>
+      </li>
+    {% endfor %}
+    </ol>
+    {% endif %}
+    <p class="panel-foot"><a href="/latest">All recent threads →</a></p>
+  </aside>
+</div>
 {% endblock %}

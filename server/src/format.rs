@@ -1,0 +1,133 @@
+//! Small display helpers called from templates.
+//!
+//! Times are shown as absolute UTC dates rather than "today" or "5 minutes
+//! ago": anonymous pages are cached until something they show changes, and a
+//! relative time would go stale without anything changing.
+
+use std::borrow::Borrow;
+
+use chrono::{DateTime, Utc};
+
+/// "1 Oct 2026, 21:14"
+pub fn datetime(at: &DateTime<Utc>) -> String {
+    at.format("%-d %b %Y, %H:%M").to_string()
+}
+
+/// "1 Oct 2026"
+pub fn date(at: &DateTime<Utc>) -> String {
+    at.format("%-d %b %Y").to_string()
+}
+
+/// "March 2024"
+pub fn month_year(at: &DateTime<Utc>) -> String {
+    at.format("%B %Y").to_string()
+}
+
+/// For `<time datetime="…">`.
+pub fn iso(at: &DateTime<Utc>) -> String {
+    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// "1,204"
+/// Takes the number by value or reference, as templates pass either.
+pub fn count(n: impl Borrow<i64>) -> String {
+    let n = n.borrow();
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if *n < 0 {
+        out.insert(0, '-');
+    }
+    out
+}
+
+/// "1 post", "2 posts"
+pub fn plural(n: impl Borrow<i64>, one: &str, many: &str) -> String {
+    let n = *n.borrow();
+    format!("{} {}", count(n), if n == 1 { one } else { many })
+}
+
+/// The letter shown in a user's placeholder avatar.
+pub fn initial(name: &str) -> String {
+    name.chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().collect())
+        .unwrap_or_else(|| "?".to_owned())
+}
+
+/// One of a fixed set of avatar colour classes in parlour.css.
+pub fn avatar_class(user_id: &i64) -> String {
+    format!("avatar-{}", user_id.rem_euclid(8))
+}
+
+pub fn thread_href(id: &i64, slug: &str) -> String {
+    format!("/t/{id}/{slug}")
+}
+
+/// A link to page `page` of a thread.
+pub fn thread_page_href(id: &i64, slug: &str, page: &i64) -> String {
+    if *page <= 1 {
+        thread_href(id, slug)
+    } else {
+        format!("/t/{id}/{slug}?page={page}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+    use hegel::TestCase;
+    use hegel::generators as gs;
+
+    #[test]
+    fn formats_dates() {
+        let at = Utc.with_ymd_and_hms(2026, 10, 1, 9, 5, 0).unwrap();
+        assert_eq!(datetime(&at), "1 Oct 2026, 09:05");
+        assert_eq!(date(&at), "1 Oct 2026");
+        assert_eq!(month_year(&at), "October 2026");
+        assert_eq!(iso(&at), "2026-10-01T09:05:00Z");
+    }
+
+    #[test]
+    fn formats_counts() {
+        assert_eq!(count(0), "0");
+        assert_eq!(count(999), "999");
+        assert_eq!(count(1000), "1,000");
+        assert_eq!(count(1204), "1,204");
+        assert_eq!(count(-1234567), "-1,234,567");
+        assert_eq!(plural(1, "post", "posts"), "1 post");
+        assert_eq!(plural(2, "post", "posts"), "2 posts");
+    }
+
+    #[hegel::test]
+    fn count_round_trips(tc: TestCase) {
+        let n = tc.draw(gs::integers::<i64>());
+        let shown = count(n);
+        assert_eq!(shown.replace(',', "").parse::<i64>().unwrap(), n);
+        for group in shown.trim_start_matches('-').split(',').skip(1) {
+            assert_eq!(group.len(), 3, "{shown}");
+        }
+    }
+
+    #[test]
+    fn initials() {
+        assert_eq!(initial("ruth"), "R");
+        assert_eq!(initial("_dev"), "D");
+        assert_eq!(initial("ünal"), "Ü");
+        assert_eq!(initial(""), "?");
+    }
+
+    #[hegel::test]
+    fn avatar_classes_are_in_range(tc: TestCase) {
+        let id = tc.draw(gs::integers::<i64>());
+        let class = avatar_class(&id);
+        let n: i64 = class.strip_prefix("avatar-").unwrap().parse().unwrap();
+        assert!((0..8).contains(&n));
+    }
+}

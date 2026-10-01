@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{% block title %}{{ category.category.name }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a>{% if let Some(section) = category.section_name %} › {{ section }}{% endif %} › <span aria-current="page">{{ category.category.name }}</span></nav>
+<h1 class="page-title">{{ category.category.name }}</h1>
+{% if !category.description.is_empty() %}<p class="lede">{{ category.description }}</p>{% endif %}
+<div class="toolbar">
+  <span class="toolbar-note">{{ crate::format::plural(category.thread_count, "thread", "threads") }}</span>
+  <span class="spacer"></span>
+  {% call m::pagination(pagination, "Pages") %}{% endcall %}
+</div>
+{% if threads.is_empty() %}
+<section class="panel"><p class="empty">No threads yet.</p></section>
+{% else %}
+{% include "_thread_table.html" %}
+{% endif %}
+<div class="toolbar toolbar-bottom">
+  <span class="spacer"></span>
+  {% call m::pagination(pagination, "Pages, again") %}{% endcall %}
+</div>
+{% endblock %}

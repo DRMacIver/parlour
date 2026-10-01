@@ -271,9 +271,16 @@ mod tests {
     }
 
     fn keys() -> impl PrintableGenerator<String> {
-        gs::sampled_from(vec!["/", "/latest", "/c/a", "/t/1/x", "/t/2/y", "/t/3/z?page=2"])
-            .map(|k| k.to_owned())
-            .print_as_debug()
+        gs::sampled_from(vec![
+            "/",
+            "/latest",
+            "/c/a",
+            "/t/1/x",
+            "/t/2/y",
+            "/t/3/z?page=2",
+        ])
+        .map(|k| k.to_owned())
+        .print_as_debug()
     }
 
     fn page(tc: &TestCase) -> CachedPage {
@@ -311,7 +318,10 @@ mod tests {
             let stored = self.cache.insert(ticket, key.clone(), page, &tags);
             let stale = tags.iter().any(|t| cleared.contains(t));
             if stale {
-                assert!(!stored, "stored a page rendered before {cleared:?} were cleared");
+                assert!(
+                    !stored,
+                    "stored a page rendered before {cleared:?} were cleared"
+                );
             }
             if self.unbounded {
                 assert_eq!(stored, !stale);
@@ -341,7 +351,9 @@ mod tests {
                     assert_eq!(page.body, body.as_bytes());
                     assert_eq!(page.etag, etag_for(body.as_bytes()));
                 }
-                (Some(page), None) => panic!("cache returned {page:?} for {key} but should be empty"),
+                (Some(page), None) => {
+                    panic!("cache returned {page:?} for {key} but should be empty")
+                }
                 (None, Some(_)) => {
                     assert!(!self.unbounded, "unbounded cache lost {key}");
                     self.model.remove(&key);
@@ -362,27 +374,25 @@ mod tests {
 
     #[hegel::test(test_cases = 300)]
     fn unbounded_cache_matches_model(tc: TestCase) {
-        hegel::stateful::machine(
-            CacheModel {
-                cache: PageCache::new(usize::MAX),
-                model: HashMap::new(),
-                tickets: Vec::new(),
-                unbounded: true,
-            })
-            .run(tc);
+        hegel::stateful::machine(CacheModel {
+            cache: PageCache::new(usize::MAX),
+            model: HashMap::new(),
+            tickets: Vec::new(),
+            unbounded: true,
+        })
+        .run(tc);
     }
 
     #[hegel::test(test_cases = 300)]
     fn bounded_cache_never_returns_stale_pages(tc: TestCase) {
         let max_bytes = tc.draw(gs::integers::<usize>().max_value(2000));
-        hegel::stateful::machine(
-            CacheModel {
-                cache: PageCache::new(max_bytes),
-                model: HashMap::new(),
-                tickets: Vec::new(),
-                unbounded: false,
-            })
-            .run(tc);
+        hegel::stateful::machine(CacheModel {
+            cache: PageCache::new(max_bytes),
+            model: HashMap::new(),
+            tickets: Vec::new(),
+            unbounded: false,
+        })
+        .run(tc);
     }
 
     #[test]

@@ -1,0 +1,47 @@
+{%- import "_macros.html" as m -%}
+<table class="list thread-list">
+  <thead>
+    <tr>
+      <th scope="col">Thread</th>
+      <th scope="col" class="num">Replies</th>
+      <th scope="col" class="last-col">Last post</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for row in threads %}
+    <tr{% if row.pinned && !show_category %} class="pinned"{% endif %}>
+      <td class="main-col">
+        <div class="row-title">
+          {% if row.pinned && !show_category %}<span class="flag">Pinned</span>{% endif %}
+          {% if row.locked %}<span class="flag">Locked</span>{% endif %}
+          <a href="{{ crate::format::thread_href(row.thread.id, row.thread.slug) }}">{{ row.thread.title }}</a>
+        </div>
+        <div class="row-meta">
+          <span>by {{ row.author.display_name }}, {% call m::time(row.created_at) %}{% endcall %}</span>
+          {% if show_category %}<span>in <a href="/c/{{ row.category.slug }}">{{ row.category.name }}</a></span>{% endif %}
+          {% if let Some(source) = row.forked_from %}<span class="fork-origin">from <a href="{{ crate::format::thread_href(source.id, source.slug) }}">{{ source.title }}</a></span>{% endif %}
+          {% let pages = row.page_links() %}
+          {% if !pages.is_empty() %}
+          <span class="row-pages">Pages:
+            {% for item in pages %}
+              {% match item %}
+                {% when PageItem::Link(n) %}<a href="{{ crate::format::thread_page_href(row.thread.id, row.thread.slug, n) }}">{{ n }}</a>
+                {% when PageItem::Current(n) %}{{ n }}
+                {% when PageItem::Gap %}…
+              {% endmatch %}
+            {% endfor %}
+          </span>
+          {% endif %}
+        </div>
+      </td>
+      <td class="num" data-label="Replies">{{ crate::format::count(row.reply_count()) }}</td>
+      <td class="last-col">
+        {% call m::time(row.last_post_at) %}{% endcall %}
+        {% if let Some(by) = row.last_by %}
+        <div class="row-meta">by {{ by.display_name }}{% if let Some(post_id) = row.last_post_id %} <a href="/p/{{ post_id }}" aria-label="Go to last post">→</a>{% endif %}</div>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>

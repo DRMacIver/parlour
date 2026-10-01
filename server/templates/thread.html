@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{% block title %}{{ thread.thread.title }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a>{% if let Some(section) = thread.section_name %} › {{ section }}{% endif %} › <a href="/c/{{ thread.category.slug }}">{{ thread.category.name }}</a></nav>
+<h1 class="page-title">{{ thread.thread.title }}</h1>
+<p class="thread-meta">
+  Started by {{ thread.author.display_name }} on {% call m::time(thread.created_at) %}{% endcall %}
+  · {{ crate::format::plural(thread.last_seq, "post", "posts") }}
+  {% if thread.pinned %}· <span class="flag">Pinned</span>{% endif %}
+  {% if thread.locked %}· <span class="flag">Locked</span>{% endif %}
+</p>
+<div class="toolbar">
+  <span class="spacer"></span>
+  {% call m::pagination(pagination, "Pages") %}{% endcall %}
+</div>
+
+{% if let Some(embed) = thread.embed %}
+{% match embed %}
+{% when Embed::Available(source) %}
+<figure class="embed">
+  <figcaption class="embed-caption">
+    <span class="embed-label">Quoted post</span>
+    <span>From <a href="{{ crate::format::thread_href(source.thread.id, source.thread.slug) }}">{{ source.thread.title }}</a> in <a href="/c/{{ source.category.slug }}">{{ source.category.name }}</a></span>
+    <span class="spacer"></span>
+    <a href="/p/{{ source.post_id }}">View in original thread →</a>
+  </figcaption>
+  <div class="embed-body">
+    {% call m::avatar(source.author, "avatar-small") %}{% endcall %}
+    <div class="embed-content">
+      <div class="embed-byline"><strong>{{ source.author.display_name }}</strong>{% if let Some(title) = source.author_title %} · {{ title }}{% endif %} · № {{ source.seq }} · {% call m::time(source.created_at) %}{% endcall %}{% if source.edited_at.is_some() %} · edited{% endif %}</div>
+      <div class="post-body">{{ source.body_html|safe }}</div>
+    </div>
+  </div>
+</figure>
+{% when Embed::Unavailable %}
+<figure class="embed embed-unavailable">
+  <figcaption class="embed-caption"><span class="embed-label">Quoted post</span></figcaption>
+  <p class="empty">This post is unavailable. It may have been deleted, or moved somewhere you can’t see.</p>
+</figure>
+{% endmatch %}
+{% endif %}
+
+<div class="posts">
+  <div class="posts-head" aria-hidden="true"><span>Author</span><span>Message</span></div>
+  {% for post in thread.posts %}
+  {% match post.body %}
+  {% when PostBody::Live { author, body_html, edited_at } %}
+  <article class="post" id="p{{ post.id }}">
+    <aside class="post-author" aria-label="About {{ author.user.display_name }}">
+      {% call m::avatar(author.user, "") %}{% endcall %}
+      <div class="author-names">
+        <span class="author-name">{{ author.user.display_name }}</span>
+        <span class="author-username">@{{ author.user.username }}</span>
+      </div>
+      {% if author.title.is_some() || author.pronouns.is_some() %}
+      <div class="author-title">{% if let Some(title) = author.title %}{{ title }}{% endif %}{% if author.title.is_some() && author.pronouns.is_some() %} · {% endif %}{% if let Some(pronouns) = author.pronouns %}{{ pronouns }}{% endif %}</div>
+      {% endif %}
+      {% if let Some(status) = author.status_line %}<div class="author-status">“{{ status }}”</div>{% endif %}
+      <div class="author-stats">Since {{ crate::format::month_year(author.joined_at) }} · {{ crate::format::plural(author.post_count, "post", "posts") }}{% if let Some(location) = author.location %} · {{ location }}{% endif %}</div>
+    </aside>
+    <div class="post-main">
+      <header class="post-info">
+        <a class="post-number" href="#p{{ post.id }}" title="Link to this post">№ {{ post.seq }}</a>
+        {% call m::time(post.created_at) %}{% endcall %}
+        {% if let Some(reply) = post.reply_to %}
+        <span class="reply-to">in reply to <a href="{{ self.reply_href(reply.post_id, reply.seq) }}">{% if let Some(who) = reply.author %}{{ who.display_name }}, {% endif %}№ {{ reply.seq }} ↑</a></span>
+        {% endif %}
+        {% if let Some(edited) = edited_at %}<span class="edited">edited {% call m::time(edited) %}{% endcall %}</span>{% endif %}
+      </header>
+      <div class="post-body">{{ body_html|safe }}</div>
+      {% for fork in post.forks %}
+      <p class="fork-link">Continued in <a href="{{ crate::format::thread_href(fork.thread.id, fork.thread.slug) }}">{{ fork.thread.title }}</a> ({{ crate::format::plural(fork.post_count, "post", "posts") }}, by {{ fork.author.display_name }})</p>
+      {% endfor %}
+    </div>
+  </article>
+  {% when PostBody::Deleted %}
+  <article class="post post-tombstone" id="p{{ post.id }}">
+    <a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a>
+    <span>Post deleted</span>
+    {% call m::time(post.created_at) %}{% endcall %}
+  </article>
+  {% when PostBody::Hidden %}
+  <article class="post post-tombstone" id="p{{ post.id }}">
+    <a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a>
+    <span>Post hidden by a moderator</span>
+    {% call m::time(post.created_at) %}{% endcall %}
+  </article>
+  {% endmatch %}
+  {% endfor %}
+</div>
+
+<div class="toolbar toolbar-bottom">
+  <span class="spacer"></span>
+  {% call m::pagination(pagination, "Pages, again") %}{% endcall %}
+</div>
+{% endblock %}

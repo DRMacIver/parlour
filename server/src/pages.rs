@@ -1,50 +1,316 @@
+//! Page handlers. Each reads through [`crate::content`] as the request's
+//! [`Viewer`] and, for pages anonymous visitors may cache, attaches the
+//! [`CacheTags`] the content layer collected.
+
 use askama::Template;
-use axum::extract::State;
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
+use serde::Deserialize;
 
 use crate::AppState;
+use crate::content::{
+    self, CategoryPage, Deps, Embed, IndexSection, LATEST_ON_INDEX, POSTS_PER_PAGE, PostBody,
+    THREADS_PER_PAGE, ThreadPage, ThreadRow, page_count, page_of_seq,
+};
 use crate::error::AppError;
+use crate::format;
+use crate::http_cache::CacheTags;
+use crate::pagination::{PageItem, Pagination, page_href, thread_list_pages};
 use crate::settings;
+use crate::viewer::Viewer;
+
+/// Which item in the top navigation is the current page.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Nav {
+    Index,
+    Latest,
+    None,
+}
 
 /// Fields every page needs for the shared layout in `base.html`.
 pub struct Layout {
     pub site_name: String,
+    pub nav: Nav,
 }
 
 impl Layout {
-    async fn load(state: &AppState) -> sqlx::Result<Layout> {
+    async fn load(state: &AppState, nav: Nav) -> sqlx::Result<Layout> {
         Ok(Layout {
             site_name: settings::site_name(&state.db).await?,
+            nav,
         })
     }
 }
 
-fn render(template: &impl Template) -> Result<Html<String>, AppError> {
-    Ok(Html(template.render()?))
+/// A rendered page that anonymous visitors may be served from the cache.
+fn cacheable(template: &impl Template, deps: &Deps) -> Result<Response, AppError> {
+    let mut response = Html(template.render()?).into_response();
+    response.extensions_mut().insert(CacheTags(deps.tags()));
+    Ok(response)
 }
+
+#[derive(Deserialize)]
+pub struct PageQuery {
+    page: Option<String>,
+}
+
+impl PageQuery {
+    /// The requested page number, or `None` if it isn't a positive integer.
+    fn number(&self) -> Option<i64> {
+        match &self.page {
+            None => Some(1),
+            Some(page) => page.parse().ok().filter(|&n: &i64| n >= 1),
+        }
+    }
+}
+
+/// Paths take ids as strings so that a malformed id is a 404, not a 400.
+fn parse_id(id: &str) -> Option<i64> {
+    id.parse().ok().filter(|&n: &i64| n >= 1)
+}
+
+impl ThreadRow {
+    fn reply_count(&self) -> i64 {
+        self.post_count - 1
+    }
+
+    /// Links to each page of a long thread, shown in thread lists.
+    fn page_links(&self) -> Vec<PageItem> {
+        thread_list_pages(page_count(self.post_count, POSTS_PER_PAGE))
+    }
+}
+
+// ---------------------------------------------------------------------------
 
 #[derive(Template)]
 #[template(path = "index.html")]
-struct IndexPage {
+struct IndexTemplate {
     layout: Layout,
+    sections: Vec<IndexSection>,
+    latest: Vec<ThreadRow>,
 }
 
-pub async fn index(State(state): State<AppState>) -> Result<Html<String>, AppError> {
-    render(&IndexPage {
-        layout: Layout::load(&state).await?,
-    })
+pub async fn index(State(state): State<AppState>, viewer: Viewer) -> Result<Response, AppError> {
+    let mut deps = Deps::new();
+    let sections = content::index_sections(&state.db, &viewer, &mut deps).await?;
+    let latest = content::latest(&state.db, &viewer, 1, LATEST_ON_INDEX, &mut deps).await?;
+    cacheable(
+        &IndexTemplate {
+            layout: Layout::load(&state, Nav::Index).await?,
+            sections,
+            latest: latest.threads,
+        },
+        &deps,
+    )
 }
+
+// ---------------------------------------------------------------------------
+
+#[derive(Template)]
+#[template(path = "latest.html")]
+struct LatestTemplate {
+    layout: Layout,
+    threads: Vec<ThreadRow>,
+    pagination: Pagination,
+    show_category: bool,
+}
+
+pub async fn latest(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Query(query): Query<PageQuery>,
+) -> Result<Response, AppError> {
+    let Some(page) = query.number() else {
+        return not_found_response(&state).await;
+    };
+    let mut deps = Deps::new();
+    let latest = content::latest(&state.db, &viewer, page, THREADS_PER_PAGE, &mut deps).await?;
+    let total = page_count(latest.thread_count, THREADS_PER_PAGE);
+    if page > total {
+        return not_found_response(&state).await;
+    }
+    cacheable(
+        &LatestTemplate {
+            layout: Layout::load(&state, Nav::Latest).await?,
+            threads: latest.threads,
+            pagination: Pagination::new("/latest", page, total),
+            show_category: true,
+        },
+        &deps,
+    )
+}
+
+// ---------------------------------------------------------------------------
+
+#[derive(Template)]
+#[template(path = "category.html")]
+struct CategoryTemplate {
+    layout: Layout,
+    category: CategoryPage,
+    threads: Vec<ThreadRow>,
+    pagination: Pagination,
+    show_category: bool,
+}
+
+pub async fn category(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(slug): Path<String>,
+    Query(query): Query<PageQuery>,
+) -> Result<Response, AppError> {
+    let Some(page) = query.number() else {
+        return not_found_response(&state).await;
+    };
+    let mut deps = Deps::new();
+    let Some(mut category) =
+        content::category_page(&state.db, &viewer, &slug, page, &mut deps).await?
+    else {
+        return not_found_response(&state).await;
+    };
+    let total = page_count(category.thread_count, THREADS_PER_PAGE);
+    if page > total {
+        return not_found_response(&state).await;
+    }
+    let threads = std::mem::take(&mut category.threads);
+    let base = format!("/c/{}", category.category.slug);
+    cacheable(
+        &CategoryTemplate {
+            layout: Layout::load(&state, Nav::None).await?,
+            category,
+            threads,
+            pagination: Pagination::new(base, page, total),
+            show_category: false,
+        },
+        &deps,
+    )
+}
+
+// ---------------------------------------------------------------------------
+
+#[derive(Template)]
+#[template(path = "thread.html")]
+struct ThreadTemplate {
+    layout: Layout,
+    thread: ThreadPage,
+    pagination: Pagination,
+}
+
+impl ThreadTemplate {
+    /// Where an "in reply to" link should point: an anchor if the post is
+    /// on this page, otherwise its permalink.
+    fn reply_href(&self, post_id: &i64, seq: &i64) -> String {
+        if page_of_seq(*seq) == self.pagination.current {
+            format!("#p{post_id}")
+        } else {
+            format!("/p/{post_id}")
+        }
+    }
+}
+
+pub async fn thread(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path((id, slug)): Path<(String, String)>,
+    Query(query): Query<PageQuery>,
+) -> Result<Response, AppError> {
+    let (Some(id), Some(page)) = (parse_id(&id), query.number()) else {
+        return not_found_response(&state).await;
+    };
+    let mut deps = Deps::new();
+    let Some(thread) = content::thread_page(&state.db, &viewer, id, page, &mut deps).await? else {
+        return not_found_response(&state).await;
+    };
+    if thread.thread.slug != slug {
+        let canonical = page_href(&format::thread_href(&id, &thread.thread.slug), page);
+        return Ok(Redirect::permanent(&canonical).into_response());
+    }
+    let total = page_count(thread.last_seq, POSTS_PER_PAGE);
+    if page > total {
+        return not_found_response(&state).await;
+    }
+    let base = format::thread_href(&id, &thread.thread.slug);
+    cacheable(
+        &ThreadTemplate {
+            layout: Layout::load(&state, Nav::None).await?,
+            thread,
+            pagination: Pagination::new(base, page, total),
+        },
+        &deps,
+    )
+}
+
+pub async fn thread_without_slug(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    redirect_to_thread(&state, &viewer, &id, Redirect::permanent).await
+}
+
+/// Will jump to the first unread post once read markers exist (M4); for now
+/// it goes to the start of the thread.
+pub async fn thread_unread(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    redirect_to_thread(&state, &viewer, &id, Redirect::temporary).await
+}
+
+async fn redirect_to_thread(
+    state: &AppState,
+    viewer: &Viewer,
+    id: &str,
+    redirect: impl FnOnce(&str) -> Redirect,
+) -> Result<Response, AppError> {
+    let Some(id) = parse_id(id) else {
+        return not_found_response(state).await;
+    };
+    match content::thread_slug(&state.db, viewer, id).await? {
+        Some(slug) => Ok(redirect(&format::thread_href(&id, &slug)).into_response()),
+        None => not_found_response(state).await,
+    }
+}
+
+pub async fn permalink(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let Some(id) = parse_id(&id) else {
+        return not_found_response(&state).await;
+    };
+    match content::post_location(&state.db, &viewer, id).await? {
+        Some(location) => {
+            let href = page_href(
+                &format::thread_href(&location.thread_id, &location.thread_slug),
+                page_of_seq(location.seq),
+            );
+            Ok(Redirect::temporary(&format!("{href}#p{id}")).into_response())
+        }
+        None => not_found_response(&state).await,
+    }
+}
+
+// ---------------------------------------------------------------------------
 
 #[derive(Template)]
 #[template(path = "not_found.html")]
-struct NotFoundPage {
+struct NotFoundTemplate {
     layout: Layout,
 }
 
-pub async fn not_found(State(state): State<AppState>) -> Result<Response, AppError> {
-    let page = render(&NotFoundPage {
-        layout: Layout::load(&state).await?,
-    })?;
+async fn not_found_response(state: &AppState) -> Result<Response, AppError> {
+    let page = Html(
+        NotFoundTemplate {
+            layout: Layout::load(state, Nav::None).await?,
+        }
+        .render()?,
+    );
     Ok((StatusCode::NOT_FOUND, page).into_response())
+}
+
+pub async fn not_found(State(state): State<AppState>) -> Result<Response, AppError> {
+    not_found_response(&state).await
 }

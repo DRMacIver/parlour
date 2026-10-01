@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{% block title %}Latest · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <span aria-current="page">Latest</span></nav>
+<h1 class="page-title">Latest</h1>
+<div class="toolbar">
+  <span class="toolbar-note">All threads, most recently active first</span>
+  <span class="spacer"></span>
+  {% call m::pagination(pagination, "Pages") %}{% endcall %}
+</div>
+{% if threads.is_empty() %}
+<section class="panel"><p class="empty">Nothing has been posted yet.</p></section>
+{% else %}
+{% include "_thread_table.html" %}
+{% endif %}
+<div class="toolbar toolbar-bottom">
+  <span class="spacer"></span>
+  {% call m::pagination(pagination, "Pages, again") %}{% endcall %}
+</div>
+{% endblock %}

@@ -1,0 +1,20 @@
+{% macro pagination(p, label) %}
+{% if p.is_multi_page() %}
+<nav class="pagination" aria-label="{{ label }}">
+  <span class="pagination-summary">Page {{ p.current }} of {{ p.total }}</span>
+  {% if let Some(prev) = p.prev() %}<a href="{{ p.href(prev) }}" rel="prev">‹ Prev</a>{% endif %}
+  {% for item in p.items() %}
+    {% match item %}
+      {% when PageItem::Link(n) %}<a href="{{ p.href(n) }}">{{ n }}</a>
+      {% when PageItem::Current(n) %}<strong aria-current="page">{{ n }}</strong>
+      {% when PageItem::Gap %}<span class="gap">…</span>
+    {% endmatch %}
+  {% endfor %}
+  {% if let Some(next) = p.next() %}<a href="{{ p.href(next) }}" rel="next">Next ›</a>{% endif %}
+</nav>
+{% endif %}
+{% endmacro %}
+
+{% macro time(at) %}<time datetime="{{ crate::format::iso(at) }}">{{ crate::format::datetime(at) }}</time>{% endmacro %}
+
+{% macro avatar(user, class) %}<span class="avatar {{ class }} {{ crate::format::avatar_class(user.id) }}" aria-hidden="true">{{ crate::format::initial(user.display_name) }}</span>{% endmacro %}
