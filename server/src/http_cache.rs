@@ -12,7 +12,9 @@
 
 use axum::body::{Body, to_bytes};
 use axum::extract::{Request, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, SET_COOKIE};
+use axum::http::header::{
+    CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, ETAG, IF_NONE_MATCH, SET_COOKIE,
+};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -105,6 +107,9 @@ fn respond(page: &CachedPage, if_none_match: Option<&HeaderValue>, head: bool) -
     if let Ok(content_type) = HeaderValue::from_str(&page.content_type) {
         headers.insert(CONTENT_TYPE, content_type);
     }
+    // A HEAD response says how long the GET response would be
+    // (RFC 9110 §9.3.2), rather than the length of its own empty body.
+    headers.insert(CONTENT_LENGTH, HeaderValue::from(page.body.len()));
     let body = if head {
         Body::empty()
     } else {

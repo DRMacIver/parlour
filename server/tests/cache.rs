@@ -208,6 +208,28 @@ async fn head_requests_are_answered_from_the_cache(pool: PgPool) {
     );
 }
 
+/// RFC 9110 §9.3.2: a HEAD response's Content-Length, if sent, is the length
+/// the GET response would have. Checked on a cache miss and a hit.
+#[sqlx::test]
+async fn head_responses_carry_the_get_content_length(pool: PgPool) {
+    let s = setup(pool).await;
+    let head = || {
+        s.f.request(Request::head(&s.path).body(Body::empty()).unwrap())
+    };
+    let miss = head().await;
+    let get = s.f.get(&s.path).await;
+    let hit = head().await;
+    let length = get.body.len().to_string();
+    assert_eq!(get.header(header::CONTENT_LENGTH), Some(length.as_str()));
+    for response in [miss, hit] {
+        assert!(response.body.is_empty());
+        assert_eq!(
+            response.header(header::CONTENT_LENGTH),
+            Some(length.as_str())
+        );
+    }
+}
+
 #[sqlx::test]
 async fn requests_with_a_session_cookie_bypass_the_cache(pool: PgPool) {
     let s = setup(pool).await;
