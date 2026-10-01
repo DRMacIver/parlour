@@ -4,8 +4,8 @@
 
 use askama::Template;
 use axum::http::header::{LOCATION, REFERRER_POLICY, SET_COOKIE};
-use axum::http::{HeaderValue, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::http::{HeaderValue, StatusCode, Uri};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 
 use crate::AppState;
 use crate::content::Deps;
@@ -80,6 +80,16 @@ pub fn secret_url(mut response: Response) -> Response {
         .headers_mut()
         .insert(REFERRER_POLICY, HeaderValue::from_static("same-origin"));
     response
+}
+
+/// Every page has exactly one URL. A request for any other spelling of it
+/// (unknown query parameters, `?page=1`, `?page=02`, `/t/049/…`,
+/// percent-encoded letters) is redirected there before any rendering, so
+/// such URLs never cost a render or take up room in the anonymous cache,
+/// which is keyed by the raw path and query.
+pub fn redirect_unless_canonical(uri: &Uri, canonical: &str) -> Option<Response> {
+    let requested = uri.path_and_query().map_or(uri.path(), |pq| pq.as_str());
+    (requested != canonical).then(|| Redirect::permanent(canonical).into_response())
 }
 
 /// A 303 redirect, for after a form has done its work.

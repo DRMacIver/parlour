@@ -16,7 +16,7 @@ use crate::error::AppError;
 use crate::format;
 use crate::pagination::{PageItem, Pagination, page_href, thread_list_pages};
 use crate::viewer::Viewer;
-use crate::web::{self, Layout, Nav, cacheable};
+use crate::web::{self, Layout, Nav, cacheable, redirect_unless_canonical};
 
 /// The `?page=` number the request asks for: 1 if there is none, or `None`
 /// (a 404) if it isn't a positive integer or is given more than once.
@@ -28,16 +28,6 @@ fn requested_page(uri: &Uri) -> Option<i64> {
         (Some((_, page)), None) => page.parse().ok().filter(|&n: &i64| n >= 1),
         (Some(_), Some(_)) => None,
     }
-}
-
-/// Every page has exactly one URL. A request for any other spelling of it
-/// (unknown query parameters, `?page=1`, `?page=02`, `/t/049/…`,
-/// percent-encoded letters) is redirected there before any rendering, so
-/// such URLs never cost a render or take up room in the anonymous cache,
-/// which is keyed by the raw path and query.
-fn redirect_unless_canonical(uri: &Uri, canonical: &str) -> Option<Response> {
-    let requested = uri.path_and_query().map_or(uri.path(), |pq| pq.as_str());
-    (requested != canonical).then(|| Redirect::permanent(canonical).into_response())
 }
 
 /// Paths take ids as strings so that a malformed id is a 404, not a 400.

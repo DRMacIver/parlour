@@ -142,10 +142,12 @@ async fn login_goes_back_to_where_it_was_asked_from(db: PgPool) {
             )
             .await;
         assert_eq!(response.location(), "/", "{next}");
-        let page = forum
-            .page(&format!("/login?next={}", next.replace('\\', "%5C")))
+        // The login page drops them from its URL.
+        let response = forum
+            .get(&format!("/login?next={}", next.replace('\\', "%5C")))
             .await;
-        assert_eq!(hidden_field(&page, "next"), "", "{next}");
+        assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT, "{next}");
+        assert_eq!(response.location(), "/login", "{next}");
     }
 }
 
@@ -177,6 +179,56 @@ async fn the_login_page_is_cached_for_anonymous_visitors(db: PgPool) {
         assert!(response.header(header::SET_COOKIE).is_none());
         assert!(!response.body.contains("csrf"));
     }
+}
+
+/// Like the reading pages, the login and reset pages have one URL each, and
+/// any other spelling is redirected there before rendering, so that made-up
+/// query strings can't fill the anonymous cache and push real pages out.
+#[sqlx::test]
+async fn login_and_reset_urls_are_canonical(db: PgPool) {
+    let forum = Forum::new(db);
+    for (path, canonical) in [
+        ("/login?junk=1", "/login"),
+        ("/login?junk=2", "/login"),
+        ("/login?", "/login"),
+        ("/login?next=/", "/login"),
+        ("/login?next=", "/login"),
+        ("/login?next=https://evil.example", "/login"),
+        ("/login?next=/invites&x=1", "/login?next=/invites"),
+        ("/login?x=1&next=/invites", "/login?next=/invites"),
+        ("/login?next=%2Finvites", "/login?next=/invites"),
+        (
+            "/login?next=/t/1/x%3Fpage%3D2",
+            "/login?next=/t/1/x%3Fpage%3D2",
+        ),
+        ("/login?next=/t/1/x?page=2", "/login?next=/t/1/x%3Fpage%3D2"),
+        ("/reset?a=b", "/reset"),
+        ("/reset?", "/reset"),
+    ] {
+        let response = forum.get(path).await;
+        if path == canonical {
+            assert_eq!(response.status, StatusCode::OK, "{path}");
+        } else {
+            assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT, "{path}");
+            assert_eq!(response.location(), canonical, "{path}");
+        }
+        assert!(response.header(header::SET_COOKIE).is_none());
+    }
+    assert_eq!(forum.state.cache().len(), 0);
+    // The canonical pages are cached, except a login page that carries
+    // somewhere to go back to: there can be any number of those.
+    forum.page("/login").await;
+    forum.page("/reset").await;
+    assert_eq!(forum.state.cache().len(), 2);
+    let page = forum.get("/login?next=/invites").await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert_eq!(hidden_field(&page.body, "next"), "/invites");
+    assert_eq!(
+        page.header(header::CACHE_CONTROL),
+        Some(PRIVATE_CACHE_CONTROL)
+    );
+    assert!(page.header(header::SET_COOKIE).is_none());
+    assert_eq!(forum.state.cache().len(), 2);
 }
 
 #[sqlx::test]

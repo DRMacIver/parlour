@@ -254,6 +254,20 @@ async fn a_password_chosen_when_joining_works(db: PgPool) {
 }
 
 #[sqlx::test]
+async fn invite_urls_are_canonical(db: PgPool) {
+    let Inviter { forum, cookie, .. } = setup(db, "user").await;
+    let link = make_invite(&forum, &cookie, &[("days", "7"), ("uses", "1")]).await;
+    for suffix in ["?x=1", "?x=2", "?"] {
+        let response = forum.get(&format!("{link}{suffix}")).await;
+        assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT, "{suffix}");
+        assert_eq!(response.location(), link);
+    }
+    assert_eq!(forum.state.cache().len(), 0);
+    forum.page(&link).await;
+    assert_eq!(forum.state.cache().len(), 1);
+}
+
+#[sqlx::test]
 async fn invites_can_be_revoked(db: PgPool) {
     let Inviter { forum, cookie, .. } = setup(db, "user").await;
     let link = make_invite(&forum, &cookie, &[("days", "7"), ("uses", "1")]).await;

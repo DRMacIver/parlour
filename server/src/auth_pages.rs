@@ -12,7 +12,7 @@
 use askama::Template;
 use axum::Form;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::Response;
 use serde::Deserialize;
 
@@ -29,7 +29,9 @@ use crate::sessions;
 use crate::settings;
 use crate::tokens;
 use crate::viewer::{UserCtx, Viewer, session_cookie};
-use crate::web::{self, Layout, Nav, cacheable, render, secret_url, see_other};
+use crate::web::{
+    self, Layout, Nav, cacheable, redirect_unless_canonical, render, secret_url, see_other,
+};
 
 /// Where to go after logging in.
 fn destination(next: &str) -> &str {
@@ -138,11 +140,32 @@ pub struct NextQuery {
     next: String,
 }
 
+/// The page to come back to that a login page's URL names, if any: the
+/// first `next` parameter, if it is a path on this site other than `/`.
+fn next_in(uri: &Uri) -> Option<String> {
+    let Query(params) = Query::<Vec<(String, String)>>::try_from_uri(uri).ok()?;
+    let (_, next) = params.into_iter().find(|(key, _)| key == "next")?;
+    web::safe_next(&next)
+        .filter(|next| *next != "/")
+        .map(str::to_owned)
+}
+
 pub async fn login_page(
     State(state): State<AppState>,
     viewer: Viewer,
-    Query(query): Query<NextQuery>,
+    uri: Uri,
 ) -> Result<Response, AppError> {
+    // One URL per page that can be shown, as for the reading pages: other
+    // query strings are redirected before rendering, so they can't fill
+    // the anonymous cache.
+    let next = next_in(&uri);
+    let canonical = match &next {
+        None => "/login".to_owned(),
+        Some(next) => format!("/login?next={}", web::query_encode(next)),
+    };
+    if let Some(redirect) = redirect_unless_canonical(&uri, &canonical) {
+        return Ok(redirect);
+    }
     if let Some(user) = viewer.user() {
         let text = format!("You’re logged in as {}.", user.username);
         return web::message(
@@ -155,16 +178,19 @@ pub async fn login_page(
         )
         .await;
     }
-    cacheable(
-        &LoginTemplate {
-            layout: Layout::load(&state, &viewer, Nav::Login).await?,
-            next: web::safe_next(&query.next).unwrap_or_default().to_owned(),
-            identifier: String::new(),
-            email: String::new(),
-            error: None,
-        },
-        &Deps::new(),
-    )
+    let template = LoginTemplate {
+        layout: Layout::load(&state, &viewer, Nav::Login).await?,
+        next: next.clone().unwrap_or_default(),
+        identifier: String::new(),
+        email: String::new(),
+        error: None,
+    };
+    match next {
+        // Only the plain login page is cached: any page on the site can be
+        // somewhere to come back to, so there is no limit to the others.
+        Some(_) => web::ok(&template),
+        None => cacheable(&template, &Deps::new()),
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -464,7 +490,11 @@ struct ResetRequestTemplate {
 pub async fn reset_request_page(
     State(state): State<AppState>,
     viewer: Viewer,
+    uri: Uri,
 ) -> Result<Response, AppError> {
+    if let Some(redirect) = redirect_unless_canonical(&uri, "/reset") {
+        return Ok(redirect);
+    }
     cacheable(
         &ResetRequestTemplate {
             layout: Layout::load(&state, &viewer, Nav::Login).await?,

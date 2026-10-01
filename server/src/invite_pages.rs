@@ -265,10 +265,15 @@ pub async fn redeem_page(
     State(state): State<AppState>,
     viewer: Viewer,
     Path(code): Path<String>,
+    uri: Uri,
 ) -> Result<Response, AppError> {
     let Some(invite) = invites::find(state.db(), &code).await? else {
         return web::not_found(&state, &viewer).await;
     };
+    // The code is a plausible token, so this is the URL it was made with.
+    if let Some(redirect) = web::redirect_unless_canonical(&uri, &format!("/invite/{code}")) {
+        return Ok(redirect);
+    }
     if let Some(user) = viewer.user() {
         let text = format!("You’re already a member, logged in as {}.", user.username);
         return web::message(
