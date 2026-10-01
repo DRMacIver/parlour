@@ -66,6 +66,15 @@ fn admin(viewer: &Viewer) -> Option<&UserCtx> {
     viewer.user().filter(|_| viewer.is_admin())
 }
 
+/// For a visitor who isn't an admin: logging in might help one who isn't
+/// logged in; anyone else isn't allowed.
+async fn not_admin(state: &AppState, viewer: &Viewer, path: &str) -> Result<Response, AppError> {
+    match viewer.user() {
+        None => Ok(web::login_first(path)),
+        Some(_) => web::forbidden(state, viewer).await,
+    }
+}
+
 async fn not_needed(state: &AppState, viewer: &Viewer) -> Result<Response, AppError> {
     web::message(
         state,
@@ -288,7 +297,7 @@ pub async fn email_page(
     viewer: Viewer,
 ) -> Result<Response, AppError> {
     let Some(user) = admin(&viewer) else {
-        return Ok(web::login_first("/setup/email"));
+        return not_admin(&state, &viewer, "/setup/email").await;
     };
     let saved = mail::saved_smtp_settings(state.db()).await?;
     let effective = saved.clone().or_else(|| state.config().smtp.clone());
@@ -318,7 +327,7 @@ pub async fn save_email(
     Form(form): Form<SetupEmailForm>,
 ) -> Result<Response, AppError> {
     let Some(user) = admin(&viewer) else {
-        return Ok(web::login_first("/setup/email"));
+        return not_admin(&state, &viewer, "/setup/email").await;
     };
     let saved = mail::saved_smtp_settings(state.db()).await?;
     let effective = saved.clone().or_else(|| state.config().smtp.clone());
@@ -386,7 +395,7 @@ pub async fn invites_page(
     viewer: Viewer,
 ) -> Result<Response, AppError> {
     if admin(&viewer).is_none() {
-        return Ok(web::login_first("/setup/invites"));
+        return not_admin(&state, &viewer, "/setup/invites").await;
     }
     web::ok(&SetupInvitesTemplate {
         layout: Layout::load(&state, &viewer, Nav::Admin).await?,
@@ -412,7 +421,7 @@ pub async fn create_invites(
     Form(form): Form<SetupInvitesForm>,
 ) -> Result<Response, AppError> {
     let Some(user) = admin(&viewer) else {
-        return Ok(web::login_first("/setup/invites"));
+        return not_admin(&state, &viewer, "/setup/invites").await;
     };
     let mut errors = Vec::new();
     let mut created = Vec::new();

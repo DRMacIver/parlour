@@ -234,14 +234,19 @@ async fn setup_steps_are_for_admins(db: PgPool) {
     let ruth = forum.member("ruth", "moderator", None).await;
     let cookie = forum.session(ruth).await;
     for path in ["/setup/email", "/setup/invites"] {
-        assert_eq!(forum.get(path).await.status, StatusCode::SEE_OTHER);
-        assert_eq!(
-            forum.get_as(path, Some(&cookie)).await.status,
-            StatusCode::SEE_OTHER
-        );
+        // Logging in might help a visitor who isn't logged in…
+        let response = forum.get(path).await;
+        assert_eq!(response.status, StatusCode::SEE_OTHER);
+        assert!(response.location().starts_with("/login?next="));
+        // …but not someone who is logged in and isn't an admin, who is
+        // told so rather than sent to a login page that can't help.
+        let response = forum.get_as(path, Some(&cookie)).await;
+        assert_eq!(response.status, StatusCode::FORBIDDEN, "{path}");
+        assert!(response.body.contains("permission"));
         assert_eq!(
             forum.submit(path, &[], Some(&cookie)).await.status,
-            StatusCode::SEE_OTHER
+            StatusCode::FORBIDDEN,
+            "{path}"
         );
     }
 }
