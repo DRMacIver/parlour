@@ -19,8 +19,8 @@ use std::collections::BTreeSet;
 
 use axum::http::StatusCode;
 use common::{Forum, Response};
-use hegel::TestCase;
 use hegel::generators::{self as gs};
+use hegel::{HealthCheck, TestCase};
 use parlour::cache::PageCache;
 use parlour::changes::Change;
 use parlour::content::{POSTS_PER_PAGE, THREADS_PER_PAGE, page_count, page_of_seq};
@@ -706,13 +706,17 @@ impl<F: Future<Output = Result<T, sqlx::Error>>, T> AwaitBlocking for F {
     }
 }
 
-#[hegel::standalone_function(test_cases = 100)]
+// Every step writes to Postgres and renders pages over HTTP, so a test
+// case takes seconds, and more when the four suites here run side by side.
+// Hegel counts that as slow generation; it is expected, so the TooSlow
+// health check is off. The number of test cases is unchanged.
+#[hegel::standalone_function(test_cases = 100, suppress_health_check = [HealthCheck::TooSlow])]
 fn run_machine(tc: TestCase, rt: &Handle, db: &PgPool, mode: Mode) {
     let world = World::new(rt.clone(), db.clone(), mode);
     hegel::stateful::machine(world).steps(25).run(tc);
 }
 
-#[hegel::standalone_function(test_cases = 50)]
+#[hegel::standalone_function(test_cases = 50, suppress_health_check = [HealthCheck::TooSlow])]
 fn run_machine_briefly(tc: TestCase, rt: &Handle, db: &PgPool, mode: Mode) {
     let world = World::new(rt.clone(), db.clone(), mode);
     hegel::stateful::machine(world).steps(25).run(tc);
