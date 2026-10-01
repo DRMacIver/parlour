@@ -536,8 +536,9 @@ pub async fn thread_page(
     else {
         return Ok(None);
     };
+    // The category's name appears in the breadcrumbs, but renaming a
+    // category clears `site`, and moving the thread clears `thread:N`.
     deps.add(Tag::Thread(thread.id));
-    deps.add(Tag::Category(thread.category_id));
 
     let embed = match thread.forked_from_post_id {
         Some(post_id) => Some(embed(db, viewer, post_id, deps).await?),
