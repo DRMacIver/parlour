@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Moderation queue</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=IBM+Plex+Serif:wght@500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+</style>
+</helmet>
+<div style="{{themeVars}}; background: var(--bg); color: var(--text); font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 15px; line-height: 1.5; min-height: 100vh; display: flex; flex-direction: column">
+
+<header style="background: var(--surface); border-bottom: 1px solid var(--border)">
+<div style="max-width: 1160px; margin: 0 auto; padding: 0 24px; min-height: 60px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px">
+<a href="Main.dc.html" style="font-family: 'IBM Plex Serif', Georgia, serif; font-weight: 600; font-size: 22px; color: var(--accent); white-space: nowrap">The Tuesday Club</a>
+<nav aria-label="Main" style="display: flex; gap: 20px; font-weight: 500">
+<a href="Main.dc.html" style="color: var(--muted); padding: 18px 0 16px">Forums</a>
+<a href="Category.dc.html" style="color: var(--muted); padding: 18px 0 16px">Latest</a>
+<a href="InviteTree.dc.html" style="color: var(--muted); padding: 18px 0 16px">Members</a>
+<a href="ModQueue.dc.html" style="color: var(--text); border-bottom: 2px solid var(--accent); padding: 18px 0 16px">Moderation</a>
+</nav>
+<div style="flex-grow: 1"></div>
+<a href="InviteTree.dc.html" style="display: flex; align-items: center; gap: 8px; color: var(--text); font-weight: 500; min-height: 44px">
+<span style="width: 30px; height: 30px; border-radius: 50%; background: #4F6B2A; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 14px">S</span>sam</a>
+</div>
+</header>
+
+<main style="max-width: 1160px; width: 100%; box-sizing: border-box; margin: 0 auto; padding: 20px 24px 32px; display: flex; flex-direction: column; gap: 16px; flex-grow: 1">
+<div style="display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap">
+<div style="flex-grow: 1">
+<h1 style="margin: 0; font-size: 26px; font-weight: 600">Moderation</h1>
+<p style="margin: 4px 0 0; color: var(--muted)">{{openCount}} items need attention. Oldest first.</p>
+</div>
+<nav aria-label="Moderation sections" style="display: flex; gap: 4px; font-size: 14px; font-weight: 500">
+<a href="#" aria-current="page" style="height: 34px; display: inline-flex; align-items: center; padding: 0 12px; border-radius: 6px; background: var(--accent); color: var(--onAccent)">Queue</a>
+<a href="#" style="height: 34px; display: inline-flex; align-items: center; padding: 0 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface)">Users</a>
+<a href="#" style="height: 34px; display: inline-flex; align-items: center; padding: 0 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface)">Log</a>
+</nav>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+<div style="flex: 999 1 600px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<sc-for list="{{items}}" as="it" hint-placeholder-count="4">
+<article style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden">
+<sc-if value="{{it.resolved}}" hint-placeholder-val="{{false}}">
+<div style="padding: 12px 16px; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"></path></svg>
+<span><strong style="color: var(--text)">{{it.kindLabel}}</strong> · {{it.where}}: {{it.outcome}}</span>
+<div style="flex-grow: 1"></div>
+<button type="button" onClick="{{it.undo}}" style="height: 30px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer">Undo</button>
+</div>
+</sc-if>
+<sc-if value="{{it.open}}" hint-placeholder-val="{{true}}">
+<div style="padding: 10px 16px; background: var(--surface2); border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 13px">
+<span style="font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; font-size: 12px; {{it.kindStyle}}">{{it.kindLabel}}</span>
+<span style="color: var(--muted)">{{it.where}}</span>
+<div style="flex-grow: 1"></div>
+<span style="color: var(--muted)">{{it.when}}</span>
+</div>
+<div style="padding: 12px 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="font-size: 14px"><strong>{{it.reason}}</strong> <span style="color: var(--muted)">· {{it.reporters}}</span></div>
+<blockquote style="margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg)">
+<div style="font-size: 13px; color: var(--muted); margin-bottom: 4px"><strong style="color: var(--text)">{{it.author}}</strong> · {{it.authorMeta}}</div>
+{{it.excerpt}}
+</blockquote>
+<div style="font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 14px">
+<sc-for list="{{it.context}}" as="c" hint-placeholder-count="2"><span>{{c}}</span></sc-for>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px; padding-top: 2px">
+<sc-for list="{{it.actions}}" as="a" hint-placeholder-count="3">
+<button type="button" onClick="{{a.run}}" style="height: 34px; padding: 0 12px; border-radius: 6px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; {{a.style}}">{{a.label}}</button>
+</sc-for>
+</div>
+</div>
+</sc-if>
+</article>
+</sc-for>
+</div>
+
+<aside style="flex: 1 1 300px; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden">
+<h2 style="margin: 0; padding: 10px 16px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; background: var(--surface2); border-bottom: 1px solid var(--border)">Recent actions</h2>
+<ol style="list-style: none; margin: 0; padding: 0; font-size: 14px">
+<sc-for list="{{log}}" as="l" hint-placeholder-count="5">
+<li style="padding: 10px 16px; border-bottom: 1px solid var(--border)">
+<div>{{l.text}}</div>
+<div style="font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center">{{l.when}} · <span style="{{l.visStyle}}">{{l.vis}}</span></div>
+</li>
+</sc-for>
+</ol>
+<p style="margin: 0; padding: 10px 16px; font-size: 13px; color: var(--muted)">Actions on public content appear in the <a href="#">public moderation log</a>. Actions involving private areas or messages are visible to staff only.</p>
+</aside>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":false,"section":"Theme"},"accent":{"editor":"color","default":"#1F5A44","options":["#1F5A44","#2B4C7E","#7A2E3A","#5B3F8C"],"section":"Theme"},"$preview":{"width":1280,"height":1300}}'>
+class Component extends DCLogic {
+  constructor(...args) {
+    super(...args);
+    this.state = { done: {} };
+  }
+  renderVals() {
+    var self = this;
+    var DARK_ACCENT = { '#1F5A44': '#7CCBA8', '#2B4C7E': '#8FB4EA', '#7A2E3A': '#E79AA6', '#5B3F8C': '#BBA3E8' };
+    var dark = !!this.props.dark;
+    var accent = this.props.accent ?? '#1F5A44';
+    var v = dark
+      ? { bg: '#111513', surface: '#191E1B', surface2: '#212823', border: '#323B35', text: '#E4E9E5', muted: '#A0AAA3', accent: DARK_ACCENT[accent] || accent, onAccent: '#0E1612', danger: '#F08F9C', onDanger: '#1A0A0D', unread: '#F2A65A' }
+      : { bg: '#F2F3F0', surface: '#FFFFFF', surface2: '#E8ECE7', border: '#D0D6CF', text: '#1A1E1B', muted: '#545D57', accent: accent, onAccent: '#FFFFFF', danger: '#A3243A', onDanger: '#FFFFFF', unread: '#A34B06' };
+    var themeVars = Object.keys(v).map(function (k) { return '--' + k + ': ' + v[k]; }).join('; ');
+    var ST = {
+      primary: 'border: none; background: var(--accent); color: var(--onAccent)',
+      danger: 'border: none; background: var(--danger); color: var(--onDanger)',
+      plain: 'border: 1px solid var(--border); background: var(--surface); color: var(--text)'
+    };
+    var raw = [
+      { id: 'spam', kindLabel: 'Report', kindStyle: 'color: var(--danger)', where: 'General chat › “Best replica watches, cheap”', when: '27 Sep, 03:12',
+        reason: 'Spam', reporters: 'reported by maya, kit and 1 other',
+        author: 'cheapdeals77', authorMeta: 'joined 4 days ago · 3 posts, all reported',
+        excerpt: 'Hi friends!! Looking for luxury watches at the lowest prices? Visit our shop for 70% off, worldwide shipping…',
+        context: ['Invited by felix (invited by ollie)', 'Same IP as 0 other accounts', 'No staff notes'],
+        actions: [['Delete as spammer', 'danger', 'deleted as spammer'], ['Suspend invite branch…', 'plain', 'branch suspended'], ['Dismiss', 'plain', 'dismissed']] },
+      { id: 'dm', kindLabel: 'Report on a message', kindStyle: 'color: var(--danger)', where: 'Private conversation between ana and ben', when: 'Yesterday 22:47',
+        reason: 'Unwanted contact', reporters: 'reported by ana: “Asked him to stop messaging me twice.”',
+        author: 'ben', authorMeta: 'joined 12 Sep · 31 posts',
+        excerpt: 'come on, just one more game, I’ll even bring the expansion. why are you ignoring me',
+        context: ['Reporting shared only this conversation with moderators', 'ana has blocked ben', 'Invited by kit'],
+        actions: [['Send staff message', 'primary', 'staff message sent'], ['Silence for 7 days…', 'plain', 'silenced for 7 days'], ['Dismiss', 'plain', 'dismissed']] },
+      { id: 'pii', kindLabel: 'Report', kindStyle: 'color: var(--danger)', where: 'Members’ lounge › “Venue for the December social”', when: 'Today 11:52',
+        reason: 'Personal information', reporters: 'reported by jonah',
+        author: 'lin', authorMeta: 'joined Aug 2024 · 412 posts',
+        excerpt: 'If the Fox falls through we can use Ruth’s place. She’s at [address removed in this preview] and said she doesn’t mind.',
+        context: ['Members-only category', 'Earlier versions of this post contain the same text'],
+        actions: [['Hide post and redact history', 'primary', 'post hidden and history redacted'], ['Message lin', 'plain', 'staff message sent'], ['Dismiss', 'plain', 'dismissed']] },
+      { id: 'held', kindLabel: 'Held for approval', kindStyle: 'color: var(--unread)', where: 'Introductions › new thread “Hi from Leeds!”', when: 'Today 08:30',
+        reason: 'First post from a new member', reporters: 'new members’ first 2 posts are reviewed before they appear',
+        author: 'tomasz', authorMeta: 'joined 3 days ago · invited by ruth',
+        excerpt: 'Hello! Ruth dragged me along to a Tuesday session last month and I haven’t stopped thinking about Brass since. Mostly into heavier euros, slowly learning to lose gracefully.',
+        context: ['Invited by ruth', 'Email verified'],
+        actions: [['Approve', 'primary', 'approved'], ['Reject…', 'plain', 'rejected']] }
+    ];
+    var openCount = 0;
+    var items = raw.map(function (r) {
+      var outcome = self.state.done[r.id];
+      if (!outcome) openCount++;
+      return {
+        kindLabel: r.kindLabel, kindStyle: r.kindStyle, where: r.where, when: r.when, reason: r.reason, reporters: r.reporters,
+        author: r.author, authorMeta: r.authorMeta, excerpt: r.excerpt, context: r.context,
+        resolved: !!outcome, open: !outcome, outcome: outcome || '',
+        undo: function () { var next = Object.assign({}, self.state.done); delete next[r.id]; self.setState({ done: next }); },
+        actions: r.actions.map(function (a) {
+          return { label: a[0], style: ST[a[1]], run: function () { var next = Object.assign({}, self.state.done); next[r.id] = a[2]; self.setState({ done: next }); } };
+        })
+      };
+    });
+    var PUB = 'color: var(--accent); font-weight: 600';
+    var STAFF = 'color: var(--muted); font-weight: 600';
+    var log = [
+      { text: 'sam redacted version 2 of a post by maya (personal information)', when: 'Today 13:40', vis: 'Public', visStyle: PUB },
+      { text: 'ruth approved a first post by tomasz', when: 'Today 08:31', vis: 'Public', visStyle: PUB },
+      { text: 'sam suspended cheapdeals77 for spam', when: '27 Sep', vis: 'Public', visStyle: PUB },
+      { text: 'ruth moved 4 posts from “Spirit Island” to a new thread', when: '26 Sep', vis: 'Public', visStyle: PUB },
+      { text: 'sam added a note to ben', when: '25 Sep', vis: 'Staff only', visStyle: STAFF }
+    ];
+    return { themeVars: themeVars, items: items, log: log, openCount: openCount };
+  }
+}
+</script>
+</body>
+</html>

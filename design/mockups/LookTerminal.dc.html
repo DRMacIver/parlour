@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Direction 2: Terminal</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,700;1,400&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#FFD98A;text-decoration:none}a:hover{background:#F2B544;color:#0E0C08}
+</style>
+</helmet>
+<div style="background: #0E0C08; color: #F2B544; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px; line-height: 1.6; min-height: 100vh">
+<div style="max-width: 1040px; margin: 0 auto; padding: 20px 24px 40px">
+
+<div style="background: #F2B544; color: #0E0C08; padding: 2px 10px; display: flex; flex-wrap: wrap; gap: 0 24px; font-weight: 700">
+<span>THE TUESDAY CLUB</span>
+<span style="flex-grow: 1"></span>
+<span>user: priya</span><span>notices: 3</span><span>mail: 1</span><span>01-Oct-2026 15:12</span>
+</div>
+<nav aria-label="Main" style="padding: 6px 10px; color: #A67F33; display: flex; flex-wrap: wrap; gap: 0 22px">
+<a href="#">[F]orums</a><a href="#">[L]atest</a><a href="#">[M]embers</a><a href="#">[/] search</a><a href="#">[?] keys</a>
+</nav>
+
+<div style="margin-top: 14px; border: 3px double #F2B544; padding: 12px 16px">
+<div style="color: #A67F33">forums / board-games / <span style="color: #F2B544">what-did-you-play-this-week-september</span></div>
+<h1 style="margin: 6px 0 4px; font-size: 22px; font-weight: 700; color: #FFD98A">What did you play this week? (September)</h1>
+<div style="color: #A67F33">started by sam 01-Sep · 107 posts · page 3/3 · watching · <a href="#">[u] first unread</a></div>
+</div>
+
+<sc-for list="{{posts}}" as="p" hint-placeholder-count="4">
+<div>
+<sc-if value="{{p.divider}}" hint-placeholder-val="{{false}}">
+<div role="separator" style="margin-top: 18px; color: #0E0C08; background: #FFD98A; font-weight: 700; text-align: center">════════════════ NEW SINCE YOUR LAST VISIT ════════════════</div>
+</sc-if>
+<article id="p{{p.id}}" style="margin-top: 18px">
+<div style="display: flex; gap: 10px; flex-wrap: wrap; white-space: nowrap; overflow: hidden">
+<span style="color: #A67F33">───</span>
+<a href="#p{{p.id}}" style="font-weight: 700">#{{p.id}}</a>
+<span style="font-weight: 700; color: #FFD98A">{{p.name}}</span>
+<span style="color: #A67F33">({{p.pronouns}})</span>
+<span>«{{p.title}}»</span>
+<span style="color: #A67F33">{{p.when}}{{p.editedNote}}</span>
+<span style="color: #A67F33; flex-grow: 1; overflow: hidden">────────────────────────────────────────────────</span>
+</div>
+<sc-if value="{{p.hasStatus}}" hint-placeholder-val="{{true}}"><div style="color: #A67F33; padding-left: 40px; font-style: italic">~ {{p.status}}</div></sc-if>
+<div style="padding: 8px 0 0 40px; max-width: 76ch">
+<sc-if value="{{p.hasQuote}}" hint-placeholder-val="{{false}}">
+<div style="color: #A67F33">&gt; {{p.quoteWho}} wrote in #{{p.replyTo}}:</div>
+<div style="color: #A67F33">&gt; {{p.quote}}</div>
+<div style="height: 10px"></div>
+</sc-if>
+<sc-for list="{{p.paras}}" as="para" hint-placeholder-count="2"><p style="margin: 0 0 10px">{{para}}</p></sc-for>
+<sc-if value="{{p.hasFork}}" hint-placeholder-val="{{false}}">
+<div style="margin-bottom: 10px">↳ continued in <a href="#">“Do solo modes count as ‘playing’ a game?”</a> <span style="color: #A67F33">(23 posts)</span></div>
+</sc-if>
+<div style="display: flex; flex-wrap: wrap; gap: 4px 20px; color: #A67F33">
+<span style="color: #F2B544">{{p.reactions}}</span>
+<span style="flex-grow: 1"></span>
+<a href="#">[r]eply</a><a href="#">[q]uote</a><a href="#">[n]ew thread from this</a><a href="#">[+] react</a><a href="#">[!] report</a>
+</div>
+</div>
+</article>
+</div>
+</sc-for>
+
+<div style="margin-top: 22px; color: #A67F33">─── page 3/3 ── <a href="#">[p]rev</a> ── <a href="#">[1]</a> <a href="#">[2]</a> <span style="color: #0E0C08; background: #F2B544">[3]</span> ───────────────────────────</div>
+
+<section aria-label="Reply" style="margin-top: 22px; border: 1px solid #A67F33; padding: 12px 16px">
+<label for="term-reply" style="display: block; color: #A67F33">reply to thread (markdown ok, ctrl+enter to post, ctrl+p to preview):</label>
+<div style="display: flex; gap: 8px; margin-top: 8px">
+<span aria-hidden="true" style="color: #FFD98A">&gt;</span>
+<textarea id="term-reply" rows="4" style="flex-grow: 1; border: none; background: transparent; color: #FFD98A; font: inherit; resize: vertical; caret-color: #FFD98A">Which expansion were you using for Heat?█</textarea>
+</div>
+<div style="margin-top: 8px; display: flex; gap: 16px">
+<button type="button" style="height: 34px; padding: 0 14px; border: 1px solid #F2B544; background: #F2B544; color: #0E0C08; font: inherit; font-weight: 700; cursor: pointer">POST</button>
+<button type="button" style="height: 34px; padding: 0 14px; border: 1px solid #A67F33; background: transparent; color: #F2B544; font: inherit; cursor: pointer">PREVIEW</button>
+</div>
+</section>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1340}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var posts = [
+      { id: 101, name: 'jonah', title: 'Rules lawyer', pronouns: 'he/him', status: 'Learning Spirit Island the hard way', when: 'yesterday 21:14', paras: ['Finally got Spirit Island to the table with the Jagged Earth spirits. Played Finder of Paths Unseen, which is every bit as confusing as people warned.', 'We lost on turn 6 to a blight cascade and I immediately wanted to play again.'], reactions: '+1×4  lol×1' },
+      { id: 102, name: 'ruth', title: 'Book club host', pronouns: 'she/her', status: 'Reading: Le Guin, again', when: 'yesterday 21:40', replyTo: 101, quoteWho: 'jonah', quote: 'We lost on turn 6 to a blight cascade', paras: ['This is the Spirit Island experience in one sentence. Finder is the spirit I’d least recommend for a first Jagged Earth game. Try Lure of the Deep Wilderness next.'], reactions: '<3×2' },
+      { id: 104, name: 'maya', title: 'Solo gamer', pronouns: 'she/her', status: 'Mostly solo, mostly Arkham', when: 'today 13:02', edited: '13:10', divider: true, fork: true, paras: ['Mostly solo this week: three games of Arkham Horror LCG and one very long game of Mage Knight.', 'I’m starting to think solo play is its own hobby that happens to share equipment with this one.'], reactions: 'lol×5  thanks×1*' },
+      { id: 105, name: 'ollie', title: 'Contrarian', pronouns: 'he/him', status: 'Wrong on the internet since 2003', when: 'today 13:18', replyTo: 104, quoteWho: 'maya', quote: 'solo play is its own hobby that happens to share equipment with this one', paras: ['Strong disagree, but this deserves its own thread rather than derailing this one. Starting one now.'], reactions: '+1×2' }
+    ].map(function (p) {
+      p.hasQuote = !!p.quote; p.hasFork = !!p.fork; p.divider = !!p.divider; p.hasStatus = !!p.status;
+      p.editedNote = p.edited ? ' (edited ' + p.edited + ')' : '';
+      return p;
+    });
+    return { posts: posts };
+  }
+}
+</script>
+</body>
+</html>

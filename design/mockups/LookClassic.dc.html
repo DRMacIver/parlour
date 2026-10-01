@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Direction 3: Classic board</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#1A4C8B;text-decoration:none}a:hover{color:#B3260E;text-decoration:underline}
+</style>
+</helmet>
+<div style="background: #D7DEE8; color: #1C232B; font-family: Verdana, Tahoma, 'DejaVu Sans', sans-serif; font-size: 13px; line-height: 1.5; min-height: 100vh; padding: 16px 0 32px">
+<div style="max-width: 1100px; margin: 0 auto; background: #FFFFFF; border: 1px solid #8A9BB3">
+
+<header style="background: #23446E; color: #FFFFFF; padding: 18px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap">
+<span aria-hidden="true" style="width: 44px; height: 44px; border: 2px solid #FFFFFF; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 20px">TC</span>
+<div>
+<a href="#" style="color: #FFFFFF; font-size: 24px; font-weight: 700; letter-spacing: -0.01em">The Tuesday Club</a>
+<div style="font-size: 12px; color: #C9D6EA">Board games, books and whatever else comes up</div>
+</div>
+</header>
+<nav aria-label="Main" style="background: #E4EAF2; border-bottom: 1px solid #8A9BB3; padding: 6px 12px; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px">
+<a href="#"><strong>Forum index</strong></a><a href="#">Latest posts</a><a href="#">Members</a><a href="#">Search</a>
+<span style="flex-grow: 1"></span>
+<a href="#">Messages (<strong>1</strong> new)</a><a href="#">Notifications (<strong>3</strong>)</a><a href="#">Log out [ priya ]</a>
+</nav>
+
+<div style="padding: 14px 12px">
+<div style="font-size: 12px"><a href="#">The Tuesday Club</a> » <a href="#">Hobbies</a> » <a href="#">Board games</a></div>
+<h1 style="margin: 8px 0 10px; font-size: 20px; color: #23446E"><a href="#" style="color: #23446E">What did you play this week? (September)</a></h1>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px">
+<button type="button" style="height: 30px; padding: 0 12px; border: 1px solid #23446E; background: #23446E; color: #FFFFFF; font: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; cursor: pointer">POST REPLY</button>
+<button type="button" style="height: 30px; padding: 0 12px; border: 1px solid #8A9BB3; background: #F2F5F9; color: #1C232B; font: inherit; font-size: 11px; cursor: pointer">Watching ▾</button>
+<a href="#" style="font-size: 12px">View first unread post</a>
+<span style="flex-grow: 1"></span>
+<span style="font-size: 12px">107 posts · Page <strong>3</strong> of <strong>3</strong> [ Go to page: <a href="#">1</a>, <a href="#">2</a>, <strong>3</strong> ]</span>
+</div>
+
+<div role="table" aria-label="Posts" style="border: 1px solid #8A9BB3">
+<div role="row" style="display: grid; grid-template-columns: 170px minmax(0, 1fr); background: #3A5F8F; color: #FFFFFF; font-size: 12px; font-weight: 700">
+<div role="columnheader" style="padding: 5px 10px; border-right: 1px solid #8A9BB3">Author</div>
+<div role="columnheader" style="padding: 5px 10px">Message</div>
+</div>
+<sc-for list="{{posts}}" as="p" hint-placeholder-count="4">
+<sc-if value="{{p.divider}}" hint-placeholder-val="{{false}}">
+<div role="row" style="background: #FFF4D6; border-top: 1px solid #D9B45A; border-bottom: 1px solid #D9B45A; padding: 4px 10px; font-size: 12px; font-weight: 700; color: #8A5300">▼ New posts since your last visit</div>
+</sc-if>
+<div role="row" id="p{{p.id}}" style="display: grid; grid-template-columns: 170px minmax(0, 1fr); background: {{p.bg}}">
+<div role="cell" style="padding: 10px; border-right: 1px solid #8A9BB3; border-bottom: 1px solid #8A9BB3; background: #E9EEF5; font-size: 11px">
+<a href="#" style="font-size: 13px; font-weight: 700">{{p.name}}</a>
+<div style="color: #4C5A6B; font-style: italic; margin-bottom: 6px">{{p.title}}</div>
+<span style="width: 80px; height: 80px; display: flex; align-items: center; justify-content: center; background: {{p.color}}; color: #FFFFFF; font-size: 34px; font-weight: 700; border: 1px solid #8A9BB3; margin-bottom: 6px">{{p.initial}}</span>
+<div>{{p.pronouns}}</div>
+<div><strong>Joined:</strong> {{p.joined}}</div>
+<div><strong>Posts:</strong> {{p.count}}</div>
+<sc-if value="{{p.hasStatus}}" hint-placeholder-val="{{true}}"><div style="margin-top: 6px; color: #4C5A6B">“{{p.status}}”</div></sc-if>
+</div>
+<div role="cell" style="padding: 0; border-bottom: 1px solid #8A9BB3; min-width: 0">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 5px 10px; border-bottom: 1px dotted #8A9BB3; font-size: 11px; color: #4C5A6B">
+<a href="#p{{p.id}}" title="Permalink">#{{p.id}}</a>
+<span><strong>Posted:</strong> {{p.when}}</span>
+<sc-if value="{{p.hasQuote}}" hint-placeholder-val="{{false}}"><span>in reply to <a href="#">{{p.quoteWho}} (#{{p.replyTo}})</a></span></sc-if>
+<span style="flex-grow: 1"></span>
+<button type="button" style="height: 22px; padding: 0 8px; border: 1px solid #8A9BB3; background: #F2F5F9; color: #1C232B; font: inherit; font-size: 10px; font-weight: 700; cursor: pointer">QUOTE</button>
+<button type="button" style="height: 22px; padding: 0 8px; border: 1px solid #8A9BB3; background: #F2F5F9; color: #1C232B; font: inherit; font-size: 10px; font-weight: 700; cursor: pointer">NEW THREAD</button>
+<button type="button" style="height: 22px; padding: 0 8px; border: 1px solid #8A9BB3; background: #F2F5F9; color: #1C232B; font: inherit; font-size: 10px; font-weight: 700; cursor: pointer">REPORT</button>
+</div>
+<div style="padding: 10px 12px; font-size: 13px">
+<sc-if value="{{p.hasQuote}}" hint-placeholder-val="{{false}}">
+<div style="margin: 0 0 10px; border: 1px solid #A9B7CA; background: #F7F9FC">
+<div style="padding: 3px 8px; background: #E4EAF2; font-size: 11px; font-weight: 700">{{p.quoteWho}} wrote:</div>
+<div style="padding: 6px 8px; font-style: italic">{{p.quote}}</div>
+</div>
+</sc-if>
+<sc-for list="{{p.paras}}" as="para" hint-placeholder-count="2"><p style="margin: 0 0 10px; max-width: 80ch">{{para}}</p></sc-for>
+<sc-if value="{{p.hasFork}}" hint-placeholder-val="{{false}}">
+<div style="margin: 4px 0 10px; font-size: 12px">» Discussion continued in: <a href="#"><strong>Do solo modes count as ‘playing’ a game?</strong></a> (23 posts)</div>
+</sc-if>
+<sc-if value="{{p.edited}}" hint-placeholder-val="{{false}}">
+<div style="font-size: 11px; color: #4C5A6B; font-style: italic; border-top: 1px dotted #A9B7CA; padding-top: 4px; margin-bottom: 6px">Last edited by {{p.name}} on Today, {{p.edited}}. <a href="#">View history</a></div>
+</sc-if>
+<div style="display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px">
+<sc-for list="{{p.reactions}}" as="r" hint-placeholder-count="2"><span style="border: 1px solid #A9B7CA; background: #F2F5F9; padding: 0 6px">{{r}}</span></sc-for>
+<a href="#" style="font-size: 11px; padding: 0 4px">+ react</a>
+</div>
+</div>
+</div>
+</div>
+</sc-for>
+</div>
+
+<div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; flex-wrap: wrap; gap: 8px">
+<button type="button" style="height: 30px; padding: 0 12px; border: 1px solid #23446E; background: #23446E; color: #FFFFFF; font: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; cursor: pointer">POST REPLY</button>
+<span>Page <strong>3</strong> of <strong>3</strong> [ Go to page: <a href="#">1</a>, <a href="#">2</a>, <strong>3</strong> ]</span>
+</div>
+
+<table style="width: 100%; border-collapse: collapse; border: 1px solid #8A9BB3; margin-top: 14px">
+<thead><tr style="background: #3A5F8F; color: #FFFFFF; font-size: 12px; font-weight: 700"><th scope="col" style="text-align: left; padding: 5px 10px">Quick reply</th></tr></thead>
+<tbody><tr><td style="padding: 10px; background: #E9EEF5">
+<label for="cl-reply" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Reply</label>
+<textarea id="cl-reply" rows="5" style="width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid #8A9BB3; background: #FFFFFF; color: #1C232B; font: inherit; resize: vertical"></textarea>
+<div style="margin-top: 6px; display: flex; gap: 6px">
+<button type="button" style="height: 28px; padding: 0 12px; border: 1px solid #23446E; background: #23446E; color: #FFFFFF; font: inherit; font-size: 11px; font-weight: 700; cursor: pointer">Submit</button>
+<button type="button" style="height: 28px; padding: 0 12px; border: 1px solid #8A9BB3; background: #F2F5F9; color: #1C232B; font: inherit; font-size: 11px; cursor: pointer">Preview</button>
+</div>
+</td></tr></tbody>
+</table>
+</div>
+<footer style="border-top: 1px solid #8A9BB3; background: #E4EAF2; padding: 6px 12px; font-size: 11px; color: #4C5A6B; text-align: center">All times are UK time · <a href="#">Moderation log</a> · <a href="#">Invite tree</a> · Powered by Parlour</footer>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1560}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var posts = [
+      { id: 101, name: 'jonah', title: 'Rules lawyer', pronouns: 'he/him', status: 'Learning Spirit Island the hard way', joined: 'Mar 2024', count: '1,204', color: '#3B5A8A', when: 'Yesterday, 21:14', paras: ['Finally got Spirit Island to the table with the Jagged Earth spirits. Played Finder of Paths Unseen, which is every bit as confusing as people warned.', 'We lost on turn 6 to a blight cascade and I immediately wanted to play again.'], reactions: ['👍 4', '😂 1'] },
+      { id: 102, name: 'ruth', title: 'Book club host', pronouns: 'she/her', status: 'Reading: Le Guin, again', joined: 'Jan 2024', count: '2,310', color: '#7A4A1E', when: 'Yesterday, 21:40', replyTo: 101, quoteWho: 'jonah', quote: 'We lost on turn 6 to a blight cascade', paras: ['This is the Spirit Island experience in one sentence. Finder is the spirit I’d least recommend for a first Jagged Earth game. Try Lure of the Deep Wilderness next.'], reactions: ['❤️ 2'] },
+      { id: 104, name: 'maya', title: 'Solo gamer', pronouns: 'she/her', status: 'Mostly solo, mostly Arkham', joined: 'Jan 2024', count: '3,051', color: '#2F6B55', when: 'Today, 13:02', edited: '13:10', divider: true, fork: true, paras: ['Mostly solo this week: three games of Arkham Horror LCG and one very long game of Mage Knight.', 'I’m starting to think solo play is its own hobby that happens to share equipment with this one.'], reactions: ['😂 5', '🙏 1'] },
+      { id: 105, name: 'ollie', title: 'Contrarian', pronouns: 'he/him', status: 'Wrong on the internet since 2003', joined: 'Feb 2024', count: '1,877', color: '#5A4A8A', when: 'Today, 13:18', replyTo: 104, quoteWho: 'maya', quote: 'solo play is its own hobby that happens to share equipment with this one', paras: ['Strong disagree, but this deserves its own thread rather than derailing this one. Starting one now.'], reactions: ['👍 2'] }
+    ].map(function (p, i) {
+      p.hasQuote = !!p.quote; p.hasFork = !!p.fork; p.divider = !!p.divider; p.hasStatus = !!p.status; p.edited = p.edited || '';
+      p.initial = p.name.charAt(0).toUpperCase();
+      p.bg = i % 2 ? '#F4F7FB' : '#FFFFFF';
+      return p;
+    });
+    return { posts: posts };
+  }
+}
+</script>
+</body>
+</html>

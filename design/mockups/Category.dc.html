@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Category: Board games</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=IBM+Plex+Serif:wght@500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+</style>
+</helmet>
+<div style="{{themeVars}}; background: var(--bg); color: var(--text); font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 15px; line-height: 1.45; min-height: 100vh; display: flex; flex-direction: column">
+
+<header style="background: var(--surface); border-bottom: 1px solid var(--border)">
+<div style="max-width: 1160px; margin: 0 auto; padding: 0 24px; min-height: 60px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px">
+<a href="Main.dc.html" style="font-family: 'IBM Plex Serif', Georgia, serif; font-weight: 600; font-size: 22px; color: var(--accent); white-space: nowrap">The Tuesday Club</a>
+<nav aria-label="Main" style="display: flex; gap: 20px; font-weight: 500">
+<a href="Main.dc.html" style="color: var(--text); border-bottom: 2px solid var(--accent); padding: 18px 0 16px">Forums</a>
+<a href="Category.dc.html" style="color: var(--muted); padding: 18px 0 16px">Latest</a>
+<a href="InviteTree.dc.html" style="color: var(--muted); padding: 18px 0 16px">Members</a>
+</nav>
+<div style="flex-grow: 1"></div>
+<form role="search" style="display: flex">
+<input type="search" aria-label="Search the forum" placeholder="Search" style="width: 200px; height: 36px; padding: 0 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; font-size: 14px">
+</form>
+<div style="display: flex; align-items: center; gap: 4px">
+<a href="#" aria-label="Notifications, 3 unread" style="position: relative; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; color: var(--text)">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg>
+<span style="position: absolute; top: 5px; right: 3px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: var(--unread); color: var(--onUnread); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center">3</span>
+</a>
+<a href="Messages.dc.html" aria-label="Messages, 1 unread" style="position: relative; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; color: var(--text)">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg>
+<span style="position: absolute; top: 5px; right: 3px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: var(--unread); color: var(--onUnread); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center">1</span>
+</a>
+<a href="InviteTree.dc.html" style="display: flex; align-items: center; gap: 8px; color: var(--text); font-weight: 500; padding-left: 8px; min-height: 44px">
+<span style="width: 30px; height: 30px; border-radius: 50%; background: #8A3B52; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 14px">P</span>priya</a>
+</div>
+</div>
+</header>
+
+<main style="max-width: 1160px; width: 100%; box-sizing: border-box; margin: 0 auto; padding: 20px 24px 32px; display: flex; flex-direction: column; gap: 16px; flex-grow: 1">
+<nav aria-label="Breadcrumb" style="font-size: 14px; color: var(--muted)"><a href="Main.dc.html">Forums</a> › Hobbies › <span style="color: var(--text)">Board games</span></nav>
+
+<div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px">
+<div style="flex: 1 1 400px; min-width: 0">
+<h1 style="margin: 0; font-size: 26px; font-weight: 600">Board games</h1>
+<p style="margin: 4px 0 0; color: var(--muted)">What you played, rules questions, recommendations. Public: anyone can read, members can post.</p>
+</div>
+<label style="display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted)">Notifications
+<select style="height: 36px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px">
+<option>Normal</option>
+<option>Watching: every new thread</option>
+<option>Muted</option>
+</select>
+</label>
+<button type="button" style="height: 36px; padding: 0 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; cursor: pointer">Mark category read</button>
+<a href="#" style="height: 36px; display: inline-flex; align-items: center; padding: 0 16px; border-radius: 6px; background: var(--accent); color: var(--onAccent); font-weight: 600; font-size: 14px">New thread</a>
+</div>
+
+<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 90px 230px; gap: 16px; padding: 8px 16px; background: var(--surface2); border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted)">
+<div>Thread</div>
+<div style="text-align: right">Replies</div>
+<div>Last post</div>
+</div>
+<sc-for list="{{threads}}" as="t" hint-placeholder-count="12">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 90px 230px; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--border); align-items: center; {{t.rowStyle}}">
+<div style="display: flex; gap: 12px; align-items: flex-start; min-width: 0">
+<sc-if value="{{t.unread}}" hint-placeholder-val="{{false}}">
+<span title="New posts" style="margin-top: 7px; width: 9px; height: 9px; flex-shrink: 0; border-radius: 50%; background: var(--accent)"></span>
+</sc-if>
+<sc-if value="{{t.read}}" hint-placeholder-val="{{true}}">
+<span title="No new posts" style="margin-top: 7px; width: 9px; height: 9px; flex-shrink: 0; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--border)"></span>
+</sc-if>
+<div style="min-width: 0">
+<div style="display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap">
+<sc-if value="{{t.pinned}}" hint-placeholder-val="{{false}}">
+<span style="display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; color: var(--muted)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"></path><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path></svg>Pinned</span>
+</sc-if>
+<sc-if value="{{t.locked}}" hint-placeholder-val="{{false}}">
+<span style="display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; color: var(--muted)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>Locked</span>
+</sc-if>
+<a href="{{t.href}}" style="font-weight: 600; color: var(--text)">{{t.title}}</a>
+<sc-if value="{{t.unread}}" hint-placeholder-val="{{false}}">
+<a href="{{t.href}}" title="Jump to first unread post" style="font-size: 12px; font-weight: 700; color: var(--onUnread); background: var(--unread); border-radius: 9px; padding: 1px 8px">{{t.newCount}} new</a>
+</sc-if>
+</div>
+<div style="font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 10px">
+<span>by <a href="InviteTree.dc.html">{{t.by}}</a>, {{t.started}}</span>
+<sc-if value="{{t.forked}}" hint-placeholder-val="{{false}}">
+<span style="display: inline-flex; align-items: center; gap: 4px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"></circle><circle cx="6" cy="19" r="2"></circle><circle cx="18" cy="12" r="2"></circle><path d="M6 7v10"></path><path d="M6 9c0 3 3 3 6 3h4"></path></svg>from <a href="Thread.dc.html">{{t.forkedFrom}}</a></span>
+</sc-if>
+<sc-if value="{{t.multiPage}}" hint-placeholder-val="{{false}}">
+<span>Pages: <sc-for list="{{t.pages}}" as="p" hint-placeholder-count="3"><a href="Thread.dc.html" style="padding: 0 3px">{{p}}</a></sc-for></span>
+</sc-if>
+</div>
+</div>
+</div>
+<div style="text-align: right; font-variant-numeric: tabular-nums; color: var(--muted)">{{t.replies}}</div>
+<div style="font-size: 14px; min-width: 0">
+<div>{{t.lastWhen}}</div>
+<div style="color: var(--muted)">by <a href="InviteTree.dc.html">{{t.lastBy}}</a> <a href="{{t.href}}" aria-label="Go to last post" style="padding-left: 4px">→</a></div>
+</div>
+</div>
+</sc-for>
+</div>
+
+<nav aria-label="Pages" style="display: flex; align-items: center; gap: 6px; font-size: 14px; flex-wrap: wrap">
+<span style="color: var(--muted); margin-right: 6px">Page 1 of 15</span>
+<span aria-current="page" style="min-width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; background: var(--accent); color: var(--onAccent); font-weight: 600">1</span>
+<a href="#" style="min-width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; border: 1px solid var(--border); background: var(--surface)">2</a>
+<a href="#" style="min-width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; border: 1px solid var(--border); background: var(--surface)">3</a>
+<span style="color: var(--muted)">…</span>
+<a href="#" style="min-width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; border: 1px solid var(--border); background: var(--surface)">15</a>
+<a href="#" style="height: 32px; display: inline-flex; align-items: center; padding: 0 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface)">Next ›</a>
+</nav>
+</main>
+
+<footer style="border-top: 1px solid var(--border); background: var(--surface)">
+<div style="max-width: 1160px; margin: 0 auto; padding: 16px 24px; display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 13px; color: var(--muted)">
+<a href="ModQueue.dc.html">Moderation log</a>
+<a href="InviteTree.dc.html">Invite tree</a>
+<a href="#">Contact &amp; report</a>
+<a href="#">Terms &amp; privacy</a>
+<div style="flex-grow: 1"></div>
+<span>Powered by Parlour</span>
+</div>
+</footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"dark":{"editor":"boolean","default":false,"section":"Theme"},"accent":{"editor":"color","default":"#1F5A44","options":["#1F5A44","#2B4C7E","#7A2E3A","#5B3F8C"],"section":"Theme"},"$preview":{"width":1280,"height":1180}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var DARK_ACCENT = { '#1F5A44': '#7CCBA8', '#2B4C7E': '#8FB4EA', '#7A2E3A': '#E79AA6', '#5B3F8C': '#BBA3E8' };
+    var dark = !!this.props.dark;
+    var accent = this.props.accent ?? '#1F5A44';
+    var v = dark
+      ? { bg: '#111513', surface: '#191E1B', surface2: '#212823', border: '#323B35', text: '#E4E9E5', muted: '#A0AAA3', accent: DARK_ACCENT[accent] || accent, onAccent: '#0E1612', unread: '#F2A65A', onUnread: '#1A1206' }
+      : { bg: '#F2F3F0', surface: '#FFFFFF', surface2: '#E8ECE7', border: '#D0D6CF', text: '#1A1E1B', muted: '#545D57', accent: accent, onAccent: '#FFFFFF', unread: '#A34B06', onUnread: '#FFFFFF' };
+    var themeVars = Object.keys(v).map(function (k) { return '--' + k + ': ' + v[k]; }).join('; ');
+    function t(x) {
+      x.unread = x.newCount > 0;
+      x.read = !x.unread;
+      x.forked = !!x.forkedFrom;
+      x.pages = x.pages || [];
+      x.multiPage = x.pages.length > 1;
+      x.rowStyle = x.pinned ? 'background: var(--surface2)' : '';
+      x.href = x.href || 'Thread.dc.html';
+      return x;
+    }
+    var threads = [
+      t({ title: 'How this category works (read me)', by: 'sam', started: '3 Jan 2025', replies: '0', lastWhen: '3 Jan 2025', lastBy: 'sam', newCount: 0, pinned: true, locked: true }),
+      t({ title: 'What did you play this week? (September)', by: 'sam', started: '1 Sep', replies: '106', lastWhen: 'Today 14:51', lastBy: 'dev', newCount: 4, pinned: true, pages: ['1', '2', '3'] }),
+      t({ title: 'Do solo modes count as ‘playing’ a game?', by: 'ollie', started: 'Today 13:20', replies: '22', lastWhen: 'Today 15:03', lastBy: 'ollie', newCount: 22, forkedFrom: 'What did you play this week?', href: 'Fork.dc.html' }),
+      t({ title: 'Spirit Island: is Jagged Earth worth it if you only play two-player?', by: 'jonah', started: '27 Sep', replies: '31', lastWhen: 'Today 10:02', lastBy: 'ruth', newCount: 3 }),
+      t({ title: 'Looking for a fourth for Tuesday 7th (Brass: Birmingham)', by: 'dev', started: 'Yesterday 19:15', replies: '6', lastWhen: 'Today 08:44', lastBy: 'lin', newCount: 0 }),
+      t({ title: 'Teaching heavy games to new players without losing them', by: 'maya', started: '21 Sep', replies: '58', lastWhen: 'Yesterday 23:10', lastBy: 'felix', newCount: 0, pages: ['1', '2'] }),
+      t({ title: 'Cascadia scoring variants we actually enjoy', by: 'kit', started: '25 Sep', replies: '14', lastWhen: 'Yesterday 17:31', lastBy: 'kit', newCount: 0 }),
+      t({ title: 'Sleeving cards: sensible protection or snobbery?', by: 'tomasz', started: '18 Sep', replies: '44', lastWhen: '29 Sep', lastBy: 'priya', newCount: 0 }),
+      t({ title: 'Storage for big-box games without a dedicated room', by: 'ana', started: '12 Sep', replies: '27', lastWhen: '28 Sep', lastBy: 'jonah', newCount: 0 }),
+      t({ title: 'Rules question: Wingspan “when played” powers and tucking', by: 'lin', started: '26 Sep', replies: '9', lastWhen: '27 Sep', lastBy: 'ruth', newCount: 0 }),
+      t({ title: 'Crowdfunding fatigue: anyone else stopped backing games?', by: 'felix', started: '2 Sep', replies: '73', lastWhen: '26 Sep', lastBy: 'maya', newCount: 0, pages: ['1', '2'] }),
+      t({ title: 'Two-player games that aren’t just cut-down four-player games', by: 'priya', started: '30 Aug', replies: '39', lastWhen: '24 Sep', lastBy: 'dev', newCount: 0 })
+    ];
+    return { themeVars: themeVars, threads: threads };
+  }
+}
+</script>
+</body>
+</html>

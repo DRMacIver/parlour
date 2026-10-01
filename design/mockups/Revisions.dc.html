@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Edit history of a post</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&amp;family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=IBM+Plex+Serif:wght@500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+</style>
+</helmet>
+<div style="{{themeVars}}; background: var(--bg); color: var(--text); font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 15px; line-height: 1.5; min-height: 100vh; display: flex; flex-direction: column">
+
+<header style="background: var(--surface); border-bottom: 1px solid var(--border)">
+<div style="max-width: 1160px; margin: 0 auto; padding: 0 24px; min-height: 60px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px">
+<a href="Main.dc.html" style="font-family: 'IBM Plex Serif', Georgia, serif; font-weight: 600; font-size: 22px; color: var(--accent); white-space: nowrap">The Tuesday Club</a>
+<nav aria-label="Main" style="display: flex; gap: 20px; font-weight: 500">
+<a href="Main.dc.html" style="color: var(--text); border-bottom: 2px solid var(--accent); padding: 18px 0 16px">Forums</a>
+<a href="Category.dc.html" style="color: var(--muted); padding: 18px 0 16px">Latest</a>
+<a href="InviteTree.dc.html" style="color: var(--muted); padding: 18px 0 16px">Members</a>
+</nav>
+<div style="flex-grow: 1"></div>
+<a href="InviteTree.dc.html" style="display: flex; align-items: center; gap: 8px; color: var(--text); font-weight: 500; min-height: 44px">
+<span style="width: 30px; height: 30px; border-radius: 50%; background: {{viewerColor}}; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 14px">{{viewerInitial}}</span>{{viewerName}}</a>
+</div>
+</header>
+
+<main style="max-width: 1160px; width: 100%; box-sizing: border-box; margin: 0 auto; padding: 20px 24px 32px; display: flex; flex-direction: column; gap: 16px; flex-grow: 1">
+<nav aria-label="Breadcrumb" style="font-size: 14px; color: var(--muted)"><a href="Main.dc.html">Forums</a> › <a href="Category.dc.html">Board games</a> › <a href="Thread.dc.html">What did you play this week? (September)</a></nav>
+<div>
+<h1 style="margin: 0; font-size: 26px; font-weight: 600">Edit history</h1>
+<p style="margin: 4px 0 0; color: var(--muted)"><a href="Thread.dc.html#p104" style="font-family: 'IBM Plex Mono', monospace">#104</a> by <a href="InviteTree.dc.html">maya</a> · 3 versions · Edits made within 5 minutes of posting count as part of the original.</p>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+<ol aria-label="Versions" style="flex: 1 1 260px; max-width: 100%; list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden">
+<sc-for list="{{revs}}" as="r" hint-placeholder-count="3">
+<li style="border-bottom: 1px solid var(--border)">
+<button type="button" onClick="{{r.select}}" aria-current="{{r.current}}" style="width: 100%; text-align: left; border: none; padding: 12px 14px; font: inherit; color: var(--text); cursor: pointer; display: flex; flex-direction: column; gap: 2px; {{r.rowStyle}}">
+<span style="display: flex; align-items: center; gap: 8px; font-weight: 600">{{r.label}}
+<sc-if value="{{r.isLatest}}" hint-placeholder-val="{{false}}"><span style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--onAccent); background: var(--accent); border-radius: 4px; padding: 0 6px">Current</span></sc-if>
+<sc-if value="{{r.redacted}}" hint-placeholder-val="{{false}}"><span style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 6px">Redacted</span></sc-if>
+</span>
+<span style="font-size: 13px; color: var(--muted)">{{r.when}} · {{r.by}}</span>
+</button>
+</li>
+</sc-for>
+</ol>
+
+<section aria-label="Selected version" style="flex: 999 1 560px; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden">
+<div style="padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; background: var(--surface2)">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">{{sel.label}}</h2>
+<span style="font-size: 13px; color: var(--muted)">{{sel.compare}}</span>
+<div style="flex-grow: 1"></div>
+<sc-if value="{{canRedact}}" hint-placeholder-val="{{false}}">
+<button type="button" style="height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer">Redact this version…</button>
+</sc-if>
+</div>
+
+<sc-if value="{{sel.redacted}}" hint-placeholder-val="{{false}}">
+<div style="padding: 20px 16px; display: flex; gap: 12px; color: var(--muted)">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink: 0; margin-top: 2px"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>
+<div>
+<p style="margin: 0; color: var(--text); font-weight: 600">This version was redacted by a moderator.</p>
+<p style="margin: 4px 0 0">Redacted today at 13:40 · Reason: contained personal information. The entry stays in the history so you can see an edit happened, but its text has been removed for everyone, including staff. The action is in the moderation log.</p>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{sel.visible}}" hint-placeholder-val="{{true}}">
+<div style="padding: 16px; display: flex; flex-direction: column; gap: 12px">
+<sc-for list="{{sel.paras}}" as="para" hint-placeholder-count="2">
+<p style="margin: 0; max-width: 72ch; line-height: 1.7"><sc-for list="{{para}}" as="seg" hint-placeholder-count="3"><span style="{{seg.style}}">{{seg.t}}</span></sc-for></p>
+</sc-for>
+<div style="display: flex; gap: 16px; font-size: 13px; color: var(--muted); padding-top: 8px; border-top: 1px solid var(--border)">
+<span><span style="background: var(--del); text-decoration: line-through; padding: 0 3px">removed</span></span>
+<span><span style="background: var(--ins); text-decoration: underline; padding: 0 3px">added</span></span>
+<div style="flex-grow: 1"></div>
+<a href="#">View Markdown source</a>
+</div>
+</div>
+</sc-if>
+</section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"moderator":{"editor":"boolean","default":false,"section":"View"},"dark":{"editor":"boolean","default":false,"section":"Theme"},"accent":{"editor":"color","default":"#1F5A44","options":["#1F5A44","#2B4C7E","#7A2E3A","#5B3F8C"],"section":"Theme"},"$preview":{"width":1280,"height":1180}}'>
+class Component extends DCLogic {
+  constructor(...args) {
+    super(...args);
+    this.state = { selected: 0 };
+  }
+  renderVals() {
+    var self = this;
+    var DARK_ACCENT = { '#1F5A44': '#7CCBA8', '#2B4C7E': '#8FB4EA', '#7A2E3A': '#E79AA6', '#5B3F8C': '#BBA3E8' };
+    var dark = !!this.props.dark;
+    var accent = this.props.accent ?? '#1F5A44';
+    var v = dark
+      ? { bg: '#111513', surface: '#191E1B', surface2: '#212823', border: '#323B35', text: '#E4E9E5', muted: '#A0AAA3', accent: DARK_ACCENT[accent] || accent, onAccent: '#0E1612', ins: '#1E4430', del: '#4D2530' }
+      : { bg: '#F2F3F0', surface: '#FFFFFF', surface2: '#E8ECE7', border: '#D0D6CF', text: '#1A1E1B', muted: '#545D57', accent: accent, onAccent: '#FFFFFF', ins: '#CDEBD6', del: '#F5D3D8' };
+    var themeVars = Object.keys(v).map(function (k) { return '--' + k + ': ' + v[k]; }).join('; ');
+    var moderator = !!this.props.moderator;
+    var S = { same: '', del: 'background: var(--del); text-decoration: line-through; padding: 0 2px', ins: 'background: var(--ins); text-decoration: underline; padding: 0 2px' };
+    function seg(kind, t) { return { t: t, style: S[kind] }; }
+    var revs = [
+      { label: 'Version 3', when: 'Today 13:10', by: 'edited by maya', isLatest: true, compare: 'Compared with version 1 (version 2 is redacted)', paras: [
+        [seg('same', 'Mostly solo this week: three games of Arkham Horror LCG and one '), seg('ins', 'very long '), seg('same', 'game of Mage Knight.')],
+        [seg('del', 'I think'), seg('ins', 'I’m starting to think'), seg('same', ' solo play is its own hobby'), seg('del', '.'), seg('ins', ' that happens to share equipment with this one.')]
+      ] },
+      { label: 'Version 2', when: 'Today 13:08', by: 'edited by maya', redacted: true, compare: '', paras: [] },
+      { label: 'Version 1', when: 'Today 13:02', by: 'posted by maya', compare: 'The original post', paras: [
+        [seg('same', 'Mostly solo this week: three games of Arkham Horror LCG and one game of Mage Knight.')],
+        [seg('same', 'I think solo play is its own hobby.')]
+      ] }
+    ];
+    revs.forEach(function (r, i) {
+      var current = i === self.state.selected;
+      r.isLatest = !!r.isLatest;
+      r.redacted = !!r.redacted;
+      r.visible = !r.redacted;
+      r.current = current ? 'true' : 'false';
+      r.rowStyle = current ? 'background: color-mix(in srgb, var(--accent) 12%, var(--surface))' : 'background: var(--surface)';
+      r.select = function () { self.setState({ selected: i }); };
+    });
+    var sel = revs[this.state.selected];
+    return {
+      themeVars: themeVars,
+      revs: revs,
+      sel: sel,
+      canRedact: moderator && sel.visible,
+      viewerName: moderator ? 'sam' : 'priya',
+      viewerInitial: moderator ? 'S' : 'P',
+      viewerColor: moderator ? '#4F6B2A' : '#8A3B52'
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Thread: What did you play this week?</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&amp;family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=IBM+Plex+Serif:wght@500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+</style>
+</helmet>
+<div style="{{themeVars}}; background: var(--bg); color: var(--text); font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 15px; line-height: 1.5; min-height: 100vh; display: flex; flex-direction: column">
+
+<header style="background: var(--surface); border-bottom: 1px solid var(--border)">
+<div style="max-width: 1160px; margin: 0 auto; padding: 0 24px; min-height: 60px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px">
+<a href="Main.dc.html" style="font-family: 'IBM Plex Serif', Georgia, serif; font-weight: 600; font-size: 22px; color: var(--accent); white-space: nowrap">The Tuesday Club</a>
+<nav aria-label="Main" style="display: flex; gap: 20px; font-weight: 500">
+<a href="Main.dc.html" style="color: var(--text); border-bottom: 2px solid var(--accent); padding: 18px 0 16px">Forums</a>
+<a href="Category.dc.html" style="color: var(--muted); padding: 18px 0 16px">Latest</a>
+<a href="InviteTree.dc.html" style="color: var(--muted); padding: 18px 0 16px">Members</a>
+</nav>
+<div style="flex-grow: 1"></div>
+<form role="search" style="display: flex">
+<input type="search" aria-label="Search the forum" placeholder="Search" style="width: 200px; height: 36px; padding: 0 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; font-size: 14px">
+</form>
+<sc-if value="{{loggedIn}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; align-items: center; gap: 4px">
+<a href="#" aria-label="Notifications, 3 unread" style="position: relative; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; color: var(--text)">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg>
+<span style="position: absolute; top: 5px; right: 3px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: var(--unread); color: var(--onUnread); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center">3</span>
+</a>
+<a href="Messages.dc.html" aria-label="Messages, 1 unread" style="position: relative; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; color: var(--text)">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg>
+<span style="position: absolute; top: 5px; right: 3px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: var(--unread); color: var(--onUnread); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center">1</span>
+</a>
+<a href="InviteTree.dc.html" style="display: flex; align-items: center; gap: 8px; color: var(--text); font-weight: 500; padding-left: 8px; min-height: 44px">
+<span style="width: 30px; height: 30px; border-radius: 50%; background: #8A3B52; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 14px">P</span>priya</a>
+</div>
+</sc-if>
+<sc-if value="{{loggedOut}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; align-items: center; gap: 16px">
+<span style="font-size: 13px; color: var(--muted)">Invite-only community</span>
+<a href="#" style="height: 36px; display: inline-flex; align-items: center; padding: 0 16px; border-radius: 6px; background: var(--accent); color: var(--onAccent); font-weight: 600; font-size: 14px">Log in</a>
+</div>
+</sc-if>
+</div>
+</header>
+
+<main style="max-width: 1160px; width: 100%; box-sizing: border-box; margin: 0 auto; padding: 20px 24px 32px; display: flex; flex-direction: column; gap: 16px; flex-grow: 1">
+<nav aria-label="Breadcrumb" style="font-size: 14px; color: var(--muted)"><a href="Main.dc.html">Forums</a> › <a href="Category.dc.html">Board games</a></nav>
+
+<div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px">
+<div style="flex: 1 1 480px; min-width: 0">
+<h1 style="margin: 0; font-size: 26px; font-weight: 600; line-height: 1.25">What did you play this week? (September)</h1>
+<p style="margin: 6px 0 0; color: var(--muted); font-size: 14px">Started by <a href="InviteTree.dc.html">sam</a> on 1 Sep 2026 · 107 posts · <span style="display: inline-flex; align-items: center; gap: 3px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"></path><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path></svg>Pinned</span></p>
+</div>
+<sc-if value="{{loggedIn}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center">
+<label style="display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted)">Notifications
+<select style="height: 36px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px">
+<option>Watching</option>
+<option>Normal</option>
+<option>Muted</option>
+</select>
+</label>
+<a href="#p104" style="height: 36px; display: inline-flex; align-items: center; padding: 0 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 14px; font-weight: 500">Jump to first unread</a>
+</div>
+</sc-if>
+</div>
+
+<nav aria-label="Pages" style="display: flex; align-items: center; gap: 6px; font-size: 14px">
+<span style="color: var(--muted); margin-right: 6px">Page 3 of 3</span>
+<a href="#" style="height: 32px; display: inline-flex; align-items: center; padding: 0 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface)">‹ Prev</a>
+<a href="#" style="min-width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; border: 1px solid var(--border); background: var(--surface)">1</a>
+<a href="#" style="min-width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; border: 1px solid var(--border); background: var(--surface)">2</a>
+<span aria-current="page" style="min-width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; background: var(--accent); color: var(--onAccent); font-weight: 600">3</span>
+</nav>
+
+<sc-for list="{{posts}}" as="p" hint-placeholder-count="7">
+<div style="display: flex; flex-direction: column; gap: 16px">
+<sc-if value="{{p.showUnreadDivider}}" hint-placeholder-val="{{false}}">
+<div role="separator" style="display: flex; align-items: center; gap: 12px; color: var(--unread); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em">
+<span style="flex-grow: 1; height: 2px; background: var(--unread)"></span>New since your last visit<span style="flex-grow: 1; height: 2px; background: var(--unread)"></span>
+</div>
+</sc-if>
+
+<sc-if value="{{p.deleted}}" hint-placeholder-val="{{false}}">
+<div id="p{{p.id}}" style="border: 1px dashed var(--border); border-radius: 8px; padding: 10px 16px; color: var(--muted); font-size: 14px; display: flex; gap: 12px">
+<a href="#p{{p.id}}" style="color: var(--muted); font-family: 'IBM Plex Mono', monospace">#{{p.id}}</a>
+<span>Post deleted by its author · {{p.when}}</span>
+</div>
+</sc-if>
+
+<sc-if value="{{p.live}}" hint-placeholder-val="{{true}}">
+<article id="p{{p.id}}" style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; display: flex; flex-wrap: wrap; overflow: hidden">
+<aside aria-label="About {{p.author.name}}" style="flex: 0 0 188px; box-sizing: border-box; padding: 16px; background: var(--info); border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--muted)">
+<span style="width: 64px; height: 64px; border-radius: 10px; background: {{p.author.color}}; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 600; margin-bottom: 8px">{{p.author.initial}}</span>
+<a href="InviteTree.dc.html" style="font-size: 15px; font-weight: 600; color: var(--text)">{{p.author.display}}</a>
+<span>@{{p.author.name}} · {{p.author.pronouns}}</span>
+<span style="font-weight: 600; color: var(--accent)">{{p.author.title}}</span>
+<sc-if value="{{p.author.hasStatus}}" hint-placeholder-val="{{true}}">
+<span style="font-style: italic; margin-top: 4px">“{{p.author.status}}”</span>
+</sc-if>
+<span style="margin-top: 6px">Joined {{p.author.joined}} · {{p.author.posts}} posts</span>
+</aside>
+
+<div style="flex: 1 1 480px; min-width: 0; padding: 12px 20px 12px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 13px; color: var(--muted)">
+<a href="#p{{p.id}}" title="Permalink" style="font-family: 'IBM Plex Mono', monospace; color: var(--muted)">#{{p.id}}</a>
+<span>{{p.when}}</span>
+<sc-if value="{{p.hasReplyTo}}" hint-placeholder-val="{{false}}">
+<a href="#p{{p.replyTo}}" style="display: inline-flex; align-items: center; gap: 3px">in reply to @{{p.replyToName}} <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"></path><path d="m6 11 6-6 6 6"></path></svg></a>
+</sc-if>
+<sc-if value="{{p.edited}}" hint-placeholder-val="{{false}}">
+<a href="Revisions.dc.html" style="color: var(--muted); text-decoration: underline dotted">edited {{p.editedWhen}}</a>
+</sc-if>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<sc-if value="{{p.hasQuote}}" hint-placeholder-val="{{false}}">
+<blockquote style="margin: 0; padding: 6px 12px; border-left: 3px solid var(--border); background: var(--bg); color: var(--muted); border-radius: 0 6px 6px 0"><a href="#p{{p.replyTo}}" style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 2px">@{{p.replyToName}} wrote:</a>{{p.quote}}</blockquote>
+</sc-if>
+<sc-for list="{{p.paras}}" as="para" hint-placeholder-count="2">
+<p style="margin: 0; max-width: 72ch">{{para}}</p>
+</sc-for>
+</div>
+
+<sc-for list="{{p.forks}}" as="f" hint-placeholder-count="0">
+<a href="Fork.dc.html" style="align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; background: var(--bg)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4v7a4 4 0 0 0 4 4h10"></path><path d="m15 11 4 4-4 4"></path></svg><span>Continued in <strong>{{f.title}}</strong> <span style="color: var(--muted)">· {{f.meta}}</span></span></a>
+</sc-for>
+
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 2px">
+<sc-for list="{{p.reactions}}" as="r" hint-placeholder-count="2">
+<sc-if value="{{r.interactive}}" hint-placeholder-val="{{true}}">
+<button type="button" onClick="{{r.toggle}}" aria-pressed="{{r.pressed}}" title="{{r.names}}" style="height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid; border-radius: 15px; font: inherit; font-size: 14px; color: var(--text); cursor: pointer; {{r.chipStyle}}"><span aria-hidden="true">{{r.e}}</span><span style="font-variant-numeric: tabular-nums; font-weight: 600">{{r.count}}</span></button>
+</sc-if>
+<sc-if value="{{r.static}}" hint-placeholder-val="{{false}}">
+<span title="{{r.names}}" style="height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--border); border-radius: 15px; font-size: 14px"><span aria-hidden="true">{{r.e}}</span><span style="font-variant-numeric: tabular-nums; font-weight: 600">{{r.count}}</span></span>
+</sc-if>
+</sc-for>
+<sc-if value="{{p.canAct}}" hint-placeholder-val="{{true}}">
+<button type="button" aria-label="Add reaction" style="height: 30px; width: 36px; display: inline-flex; align-items: center; justify-content: center; border: 1px dashed var(--border); border-radius: 15px; background: transparent; color: var(--muted); cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="12" r="8"></circle><path d="M8 14s1 1.5 3 1.5 3-1.5 3-1.5"></path><path d="M8.5 9.5h.01"></path><path d="M13.5 9.5h.01"></path><path d="M20 3v4"></path><path d="M18 5h4"></path></svg></button>
+<div style="flex-grow: 1"></div>
+<div style="display: flex; flex-wrap: wrap; gap: 2px">
+<button type="button" style="height: 32px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: none; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"></path><path d="M4 9h10a6 6 0 0 1 6 6v5"></path></svg>Reply</button>
+<button type="button" style="height: 32px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: none; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h6v6H6c0 2 1 4 3 4"></path><path d="M14 7h6v6h-4c0 2 1 4 3 4"></path></svg>Quote</button>
+<button type="button" onClick="{{p.openFork}}" style="height: 32px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: none; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"></circle><circle cx="6" cy="19" r="2"></circle><circle cx="18" cy="12" r="2"></circle><path d="M6 7v10"></path><path d="M6 9c0 3 3 3 6 3h4"></path></svg>Quote in new thread</button>
+<button type="button" aria-label="Report post" style="height: 32px; width: 32px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4"></path><path d="M5 4h11l-2 4 2 4H5"></path></svg></button>
+</div>
+</sc-if>
+</div>
+</div>
+
+<sc-if value="{{p.forkOpen}}" hint-placeholder-val="{{false}}">
+<form style="flex: 1 1 100%; box-sizing: border-box; border-top: 1px solid var(--border); background: var(--bg); padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: center; gap: 8px">
+<h2 style="margin: 0; font-size: 16px; font-weight: 600">Start a new thread from #{{p.id}}</h2>
+<div style="flex-grow: 1"></div>
+<button type="button" onClick="{{closeFork}}" style="height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer">Cancel</button>
+</div>
+<div style="border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 10px 14px; display: flex; gap: 12px; font-size: 14px">
+<span style="width: 32px; height: 32px; flex-shrink: 0; border-radius: 6px; background: {{p.author.color}}; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-weight: 600">{{p.author.initial}}</span>
+<div style="min-width: 0"><div style="font-size: 13px; color: var(--muted)"><strong style="color: var(--text)">{{p.author.display}}</strong> in Board games · #{{p.id}}</div><div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{p.excerpt}}</div></div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<label style="flex: 2 1 320px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600">Title
+<input type="text" value="Do solo modes count as ‘playing’ a game?" style="height: 38px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 15px; font-weight: 400">
+</label>
+<label style="flex: 1 1 200px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600">Category
+<select style="height: 38px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 15px; font-weight: 400">
+<option>Board games</option>
+<option>General chat</option>
+<option>Members’ lounge (members only)</option>
+<option>Organisers (Organisers group)</option>
+</select>
+</label>
+</div>
+<p style="margin: 0; font-size: 13px; color: var(--muted)">The quoted post stays where it is and appears at the top of the new thread. You can only quote into categories at least as private as this one, so that nobody can read the post through your thread who couldn’t read it here.</p>
+<label style="display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600">Your opening post
+<textarea rows="4" style="padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 15px; font-weight: 400; resize: vertical">Strong disagree, but it deserves its own thread rather than derailing this one. Is a solo game a different hobby, or the same hobby with fewer snacks?</textarea>
+</label>
+<div style="display: flex; gap: 8px">
+<a href="Fork.dc.html" style="height: 38px; display: inline-flex; align-items: center; padding: 0 16px; border-radius: 6px; background: var(--accent); color: var(--onAccent); font-weight: 600; font-size: 14px">Create thread</a>
+</div>
+</form>
+</sc-if>
+</article>
+</sc-if>
+</div>
+</sc-for>
+
+<sc-if value="{{loggedIn}}" hint-placeholder-val="{{true}}">
+<div role="status" style="display: flex; align-items: center; justify-content: center; gap: 10px; padding: 10px; border: 1px solid var(--accent); border-radius: 8px; background: var(--surface); font-size: 14px">
+<span style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent)"></span>
+<span>1 new post since you opened this page</span>
+<button type="button" style="height: 30px; padding: 0 12px; border: none; border-radius: 6px; background: var(--accent); color: var(--onAccent); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer">Show</button>
+</div>
+</sc-if>
+
+<nav aria-label="Pages" style="display: flex; align-items: center; gap: 6px; font-size: 14px">
+<span style="color: var(--muted); margin-right: 6px">Page 3 of 3</span>
+<a href="#" style="height: 32px; display: inline-flex; align-items: center; padding: 0 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface)">‹ Prev</a>
+<a href="#" style="min-width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; border: 1px solid var(--border); background: var(--surface)">1</a>
+<a href="#" style="min-width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; border: 1px solid var(--border); background: var(--surface)">2</a>
+<span aria-current="page" style="min-width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; background: var(--accent); color: var(--onAccent); font-weight: 600">3</span>
+</nav>
+
+<sc-if value="{{loggedIn}}" hint-placeholder-val="{{true}}">
+<section aria-label="Reply" style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden">
+<div style="display: flex; align-items: center; gap: 4px; padding: 0 12px; border-bottom: 1px solid var(--border); background: var(--surface2); flex-wrap: wrap">
+<button type="button" onClick="{{showWrite}}" style="height: 40px; padding: 0 12px; border: none; background: transparent; color: var(--text); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; {{writeTabStyle}}">Write</button>
+<button type="button" onClick="{{showPreview}}" style="height: 40px; padding: 0 12px; border: none; background: transparent; color: var(--text); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; {{previewTabStyle}}">Preview</button>
+<div style="flex-grow: 1"></div>
+<span style="font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px">Replying to <a href="#p107">#107 by dev</a> <button type="button" aria-label="Stop replying to #107" style="width: 28px; height: 28px; border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px">×</button></span>
+</div>
+<sc-if value="{{writing}}" hint-placeholder-val="{{true}}">
+<div style="padding: 12px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; gap: 2px; flex-wrap: wrap">
+<button type="button" aria-label="Bold" style="width: 34px; height: 32px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-weight: 700; cursor: pointer">B</button>
+<button type="button" aria-label="Italic" style="width: 34px; height: 32px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-style: italic; cursor: pointer">I</button>
+<button type="button" aria-label="Link" style="width: 34px; height: 32px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"></path><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"></path></svg></button>
+<button type="button" aria-label="Quote" style="width: 34px; height: 32px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h6v6H6c0 2 1 4 3 4"></path><path d="M14 7h6v6h-4c0 2 1 4 3 4"></path></svg></button>
+<button type="button" aria-label="Code" style="width: 34px; height: 32px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5"></path><path d="m16 7 5 5-5 5"></path></svg></button>
+<button type="button" aria-label="Upload image" style="width: 34px; height: 32px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="m21 16-5-5-9 9"></path></svg></button>
+</div>
+<label style="display: flex; flex-direction: column; gap: 4px"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Reply text</span>
+<textarea rows="7" style="padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 14px; line-height: 1.5; resize: vertical">> Heat: Pedal to the Metal with five. Teaching took ten minutes
+
+Which expansion were you using? We tried Heavy Rain last month and the weather tiles made the teach twice as long.</textarea>
+</label>
+</div>
+</sc-if>
+<sc-if value="{{previewing}}" hint-placeholder-val="{{false}}">
+<div style="padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; min-height: 180px">
+<blockquote style="margin: 0; padding: 6px 12px; border-left: 3px solid var(--border); background: var(--bg); color: var(--muted); border-radius: 0 6px 6px 0"><span style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 2px; color: var(--accent)">@dev wrote:</span>Heat: Pedal to the Metal with five. Teaching took ten minutes</blockquote>
+<p style="margin: 0; max-width: 72ch">Which expansion were you using? We tried Heavy Rain last month and the weather tiles made the teach twice as long.</p>
+</div>
+</sc-if>
+<div style="display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-top: 1px solid var(--border); flex-wrap: wrap">
+<span style="font-size: 13px; color: var(--muted)">Markdown supported. Paste or drop images to upload.</span>
+<div style="flex-grow: 1"></div>
+<button type="button" style="height: 38px; padding: 0 18px; border: none; border-radius: 6px; background: var(--accent); color: var(--onAccent); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Post reply</button>
+</div>
+</section>
+</sc-if>
+
+<sc-if value="{{loggedOut}}" hint-placeholder-val="{{false}}">
+<section aria-label="Join the conversation" style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px">
+<div style="flex: 1 1 360px">
+<h2 style="margin: 0; font-size: 17px; font-weight: 600">Want to join in?</h2>
+<p style="margin: 4px 0 0; color: var(--muted)">The Tuesday Club is invite-only. If you know a member, ask them for an invite. Members can log in to reply.</p>
+</div>
+<a href="#" style="height: 38px; display: inline-flex; align-items: center; padding: 0 18px; border-radius: 6px; background: var(--accent); color: var(--onAccent); font-weight: 600; font-size: 14px">Log in</a>
+</section>
+</sc-if>
+</main>
+
+<footer style="border-top: 1px solid var(--border); background: var(--surface)">
+<div style="max-width: 1160px; margin: 0 auto; padding: 16px 24px; display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 13px; color: var(--muted)">
+<a href="ModQueue.dc.html">Moderation log</a>
+<a href="InviteTree.dc.html">Invite tree</a>
+<a href="#">Contact &amp; report</a>
+<a href="#">Terms &amp; privacy</a>
+<div style="flex-grow: 1"></div>
+<span>Powered by Parlour</span>
+</div>
+</footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"loggedOut":{"editor":"boolean","default":false,"section":"View"},"dark":{"editor":"boolean","default":false,"section":"Theme"},"accent":{"editor":"color","default":"#1F5A44","options":["#1F5A44","#2B4C7E","#7A2E3A","#5B3F8C"],"section":"Theme"},"$preview":{"width":1280,"height":2900}}'>
+class Component extends DCLogic {
+  constructor(...args) {
+    super(...args);
+    this.state = { mine: { '104:🙏': true, '107:❤️': true }, forkFrom: null, tab: 'write' };
+  }
+  renderVals() {
+    var self = this;
+    var DARK_ACCENT = { '#1F5A44': '#7CCBA8', '#2B4C7E': '#8FB4EA', '#7A2E3A': '#E79AA6', '#5B3F8C': '#BBA3E8' };
+    var dark = !!this.props.dark;
+    var accent = this.props.accent ?? '#1F5A44';
+    var v = dark
+      ? { bg: '#111513', surface: '#191E1B', surface2: '#212823', info: '#161A18', border: '#323B35', text: '#E4E9E5', muted: '#A0AAA3', accent: DARK_ACCENT[accent] || accent, onAccent: '#0E1612', unread: '#F2A65A', onUnread: '#1A1206' }
+      : { bg: '#F2F3F0', surface: '#FFFFFF', surface2: '#E8ECE7', info: '#F7F8F6', border: '#D0D6CF', text: '#1A1E1B', muted: '#545D57', accent: accent, onAccent: '#FFFFFF', unread: '#A34B06', onUnread: '#FFFFFF' };
+    var themeVars = Object.keys(v).map(function (k) { return '--' + k + ': ' + v[k]; }).join('; ');
+    var loggedOut = !!this.props.loggedOut;
+    var loggedIn = !loggedOut;
+
+    var users = {
+      jonah: { name: 'jonah', display: 'Jonah', initial: 'J', color: '#3B5A8A', title: 'Rules lawyer', pronouns: 'he/him', status: 'Learning Spirit Island the hard way', joined: 'Mar 2024', posts: '1,204' },
+      ruth: { name: 'ruth', display: 'Ruth', initial: 'R', color: '#7A4A1E', title: 'Book club host', pronouns: 'she/her', status: 'Reading: Le Guin, again', joined: 'Jan 2024', posts: '2,310' },
+      kit: { name: 'kit', display: 'Kit', initial: 'K', color: '#4F6B2A', title: 'Paint-stained', pronouns: 'they/them', status: '', joined: 'Jun 2024', posts: '488' },
+      maya: { name: 'maya', display: 'Maya', initial: 'M', color: '#2F6B55', title: 'Solo gamer', pronouns: 'she/her', status: 'Mostly solo, mostly Arkham', joined: 'Jan 2024', posts: '3,051' },
+      ollie: { name: 'ollie', display: 'Ollie', initial: 'O', color: '#5A4A8A', title: 'Contrarian', pronouns: 'he/him', status: 'Wrong on the internet since 2003', joined: 'Feb 2024', posts: '1,877' },
+      dev: { name: 'dev', display: 'Dev', initial: 'D', color: '#8A5A1E', title: 'Tuesday regular', pronouns: 'he/they', status: 'Will teach anything once', joined: 'Aug 2024', posts: '640' }
+    };
+    Object.keys(users).forEach(function (k) { users[k].hasStatus = !!users[k].status; });
+
+    var raw = [
+      { id: 101, user: 'jonah', when: 'Yesterday 21:14', paras: ['Finally got Spirit Island to the table with the Jagged Earth spirits. Played Finder of Paths Unseen, which is every bit as confusing as people warned.', 'We lost on turn 6 to a blight cascade and I immediately wanted to play again.'], reactions: [{ e: '👍', n: 4, names: 'ruth, maya, dev, kit' }, { e: '😂', n: 1, names: 'ollie' }] },
+      { id: 102, user: 'ruth', when: 'Yesterday 21:40', replyTo: 101, replyToName: 'jonah', quote: 'We lost on turn 6 to a blight cascade', paras: ['This is the Spirit Island experience in one sentence. Finder is the spirit I’d least recommend for a first Jagged Earth game. Try Lure of the Deep Wilderness next.'], reactions: [{ e: '❤️', n: 2, names: 'jonah, kit' }] },
+      { id: 103, user: 'kit', when: 'Today 08:02', edited: '08:09', paras: ['Cascadia twice with my partner. We’ve started using the landmark variant from the extras box and it makes the end game much tighter.'], reactions: [{ e: '👍', n: 3, names: 'maya, dev, jonah' }] },
+      { id: 104, user: 'maya', when: 'Today 13:02', unreadDivider: true, edited: '13:10', paras: ['Mostly solo this week: three games of Arkham Horror LCG and one very long game of Mage Knight.', 'I’m starting to think solo play is its own hobby that happens to share equipment with this one.'], forks: [{ title: 'Do solo modes count as ‘playing’ a game?', meta: '23 posts, by ollie' }], reactions: [{ e: '😂', n: 5, names: 'ollie, jonah, ruth, kit, dev' }, { e: '🙏', n: 0, names: 'priya' }] },
+      { id: 105, user: 'ollie', when: 'Today 13:18', replyTo: 104, replyToName: 'maya', quote: 'solo play is its own hobby that happens to share equipment with this one', paras: ['Strong disagree, but this deserves its own thread rather than derailing this one. Starting one now.'], reactions: [{ e: '👍', n: 2, names: 'maya, ruth' }] },
+      { id: 106, deleted: true, when: 'Today 14:02' },
+      { id: 107, user: 'dev', when: 'Today 14:51', paras: ['Tuesday group played Heat: Pedal to the Metal with five. Teaching took ten minutes and the race took forty. Best new-to-us game of the year so far.'], reactions: [{ e: '👍', n: 6, names: 'jonah, maya, kit, ollie, ruth, lin' }, { e: '❤️', n: 2, names: 'lin, felix' }, { e: '😮', n: 1, names: 'tomasz' }] }
+    ];
+
+    var posts = raw.map(function (p) {
+      var out = { id: p.id, when: p.when, deleted: !!p.deleted, live: !p.deleted, showUnreadDivider: !!p.unreadDivider && loggedIn };
+      if (p.deleted) { out.author = users.jonah; out.paras = []; out.reactions = []; out.forks = []; return out; }
+      out.author = users[p.user];
+      out.paras = p.paras;
+      out.excerpt = p.paras.join(' ');
+      out.hasReplyTo = !!p.replyTo;
+      out.replyTo = p.replyTo || '';
+      out.replyToName = p.replyToName || '';
+      out.hasQuote = !!p.quote;
+      out.quote = p.quote || '';
+      out.edited = !!p.edited;
+      out.editedWhen = p.edited || '';
+      out.forks = p.forks || [];
+      out.canAct = loggedIn;
+      out.forkOpen = loggedIn && self.state.forkFrom === p.id;
+      out.openFork = function () { self.setState({ forkFrom: p.id }); };
+      out.reactions = p.reactions.map(function (r) {
+        var key = p.id + ':' + r.e;
+        var mine = loggedIn && !!self.state.mine[key];
+        var count = r.n + (mine ? 1 : 0);
+        return {
+          e: r.e,
+          count: count,
+          names: mine ? (r.n ? 'You, ' + r.names : 'You') : r.names,
+          interactive: loggedIn,
+          static: loggedOut,
+          pressed: mine ? 'true' : 'false',
+          chipStyle: mine ? 'border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--surface))' : 'border-color: var(--border); background: var(--surface)',
+          toggle: function () {
+            var next = Object.assign({}, self.state.mine);
+            next[key] = !next[key];
+            self.setState({ mine: next });
+          }
+        };
+      }).filter(function (r) { return r.count > 0; });
+      return out;
+    });
+
+    var writing = this.state.tab === 'write';
+    var activeTab = 'box-shadow: inset 0 -2px 0 var(--accent)';
+    var idleTab = 'color: var(--muted)';
+    return {
+      themeVars: themeVars,
+      loggedIn: loggedIn,
+      loggedOut: loggedOut,
+      posts: posts,
+      closeFork: function () { self.setState({ forkFrom: null }); },
+      writing: writing,
+      previewing: !writing,
+      writeTabStyle: writing ? activeTab : idleTab,
+      previewTabStyle: writing ? idleTab : activeTab,
+      showWrite: function () { self.setState({ tab: 'write' }); },
+      showPreview: function () { self.setState({ tab: 'preview' }); }
+    };
+  }
+}
+</script>
+</body>
+</html>
