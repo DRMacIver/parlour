@@ -682,3 +682,30 @@ async fn pages_have_no_inline_styles_or_scripts_and_set_no_cookies(pool: PgPool)
         assert!(response.body.contains("name=\"viewport\""), "{path}");
     }
 }
+
+#[sqlx::test]
+async fn huge_page_numbers_are_not_found(pool: PgPool) {
+    let f = Forum::new(pool);
+    let ruth = f.user("ruth").await;
+    let games = f.category("games", "public", None, 0).await;
+    let t = f.thread(games, ruth, "Spirit Island", "x").await;
+    let id = t.thread_id;
+    for page in [
+        i64::MAX.to_string(),
+        (i64::MAX / 30 + 1).to_string(),
+        (i64::MAX / 50 + 1).to_string(),
+        (i64::from(i32::MAX) / 50 + 2).to_string(),
+        // Wraps to page 1 when truncated to 32 bits.
+        ((1i64 << 32) + 1).to_string(),
+        "99999999999999999999999".to_owned(),
+    ] {
+        for path in [
+            format!("/latest?page={page}"),
+            format!("/c/games?page={page}"),
+            format!("/t/{id}/spirit-island?page={page}"),
+        ] {
+            let response = f.get(&path).await;
+            assert_eq!(response.status, StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+}

@@ -47,6 +47,13 @@ pub fn page_count(items: i64, per_page: i64) -> i64 {
     ((items + per_page - 1) / per_page).max(1)
 }
 
+/// The offset of the first item on `page`, or `None` if the page is so far
+/// past the end that the offset doesn't fit in an `i64`. Such a page is
+/// necessarily empty.
+pub fn page_offset(page: i64, per_page: i64) -> Option<i64> {
+    page.checked_sub(1)?.checked_mul(per_page)
+}
+
 /// The page of a thread that post number `seq` is on.
 pub fn page_of_seq(seq: i64) -> i64 {
     page_count(seq, POSTS_PER_PAGE)
@@ -257,15 +264,7 @@ pub async fn category_page(
         return Ok(None);
     };
     deps.add(Tag::Category(category.id));
-    let threads = thread_rows(
-        db,
-        viewer,
-        Some(category.id),
-        THREADS_PER_PAGE,
-        (page - 1) * THREADS_PER_PAGE,
-        deps,
-    )
-    .await?;
+    let threads = thread_rows(db, viewer, Some(category.id), page, THREADS_PER_PAGE, deps).await?;
     Ok(Some(CategoryPage {
         category: CategoryRef {
             id: category.id,
@@ -316,7 +315,7 @@ pub async fn latest(
         deps.add(Tag::Category(category.id));
         thread_count += category.thread_count;
     }
-    let threads = thread_rows(db, viewer, None, per_page, (page - 1) * per_page, deps).await?;
+    let threads = thread_rows(db, viewer, None, page, per_page, deps).await?;
     Ok(LatestPage {
         thread_count,
         threads,
@@ -327,10 +326,13 @@ async fn thread_rows(
     db: &PgPool,
     viewer: &Viewer,
     category_id: Option<i64>,
-    limit: i64,
-    offset: i64,
+    page: i64,
+    per_page: i64,
     deps: &mut Deps,
 ) -> sqlx::Result<Vec<ThreadRow>> {
+    let Some(offset) = page_offset(page, per_page) else {
+        return Ok(Vec::new());
+    };
     let filter = viewer.filter();
     // With a category, pinned threads come first; /latest ignores pins.
     let rows = sqlx::query!(
@@ -368,7 +370,7 @@ async fn thread_rows(
         &filter.visibilities,
         &filter.group_category_ids,
         category_id,
-        limit,
+        per_page,
         offset,
     )
     .fetch_all(db)
@@ -545,8 +547,11 @@ pub async fn thread_page(
         None => None,
     };
 
-    let first = (page - 1) * POSTS_PER_PAGE + 1;
-    let last = page * POSTS_PER_PAGE;
+    // Post numbers are 32-bit, so a page whose numbers don't fit is empty.
+    let seq_range = page_offset(page, POSTS_PER_PAGE)
+        .and_then(|offset| Some((offset.checked_add(1)?, offset.checked_add(POSTS_PER_PAGE)?)))
+        .and_then(|(first, last)| Some((i32::try_from(first).ok()?, i32::try_from(last).ok()?)));
+    let (first, last) = seq_range.unwrap_or((1, 0));
     let rows = sqlx::query!(
         r#"
         SELECT p.id, p.seq, p.created_at, p.edited_at,
@@ -562,8 +567,8 @@ pub async fn thread_page(
         ORDER BY p.seq
         "#,
         thread.id,
-        first as i32,
-        last as i32,
+        first,
+        last,
     )
     .fetch_all(db)
     .await?;
@@ -891,5 +896,18 @@ mod tests {
         );
         let page = page_of_seq(seq);
         assert!((page - 1) * POSTS_PER_PAGE < seq && seq <= page * POSTS_PER_PAGE);
+    }
+
+    #[hegel::test]
+    fn page_offsets_never_overflow(tc: TestCase) {
+        let page = tc.draw(gs::integers::<i64>().min_value(1));
+        let per_page = tc.draw(gs::integers::<i64>().min_value(1).max_value(1000));
+        match page_offset(page, per_page) {
+            Some(offset) => assert_eq!(
+                i128::from(offset),
+                (i128::from(page) - 1) * i128::from(per_page)
+            ),
+            None => assert!((i128::from(page) - 1) * i128::from(per_page) > i128::from(i64::MAX)),
+        }
     }
 }
