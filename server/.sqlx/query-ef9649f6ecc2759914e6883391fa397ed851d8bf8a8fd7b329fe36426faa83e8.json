@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.id, c.slug, c.name, c.description, c.read_level, s.name AS \"section_name?\",\n               counts.threads AS \"thread_count!\", counts.posts AS \"post_count!\",\n               lt.id AS \"last_thread_id?\", lt.title AS \"last_thread_title?\", lt.slug AS \"last_thread_slug?\",\n               lt.last_post_at AS \"last_at?\", lp.id AS \"last_post_id?\",\n               lu.id AS \"last_user_id?\", lu.username AS \"last_username?\", lu.display_name AS \"last_display_name?\"\n        FROM categories c\n        LEFT JOIN sections s ON s.id = c.section_id\n        CROSS JOIN LATERAL (\n            SELECT count(*) AS threads, coalesce(sum(t.last_seq), 0)::bigint AS posts\n            FROM threads t\n            WHERE t.category_id = c.id AND t.deleted_at IS NULL\n              AND thread_readable(t.visibility, t.category_id, $1, $2)\n        ) counts\n        LEFT JOIN LATERAL (\n            SELECT t.id, t.title, t.slug, t.last_post_at\n            FROM threads t\n            WHERE t.category_id = c.id AND t.deleted_at IS NULL\n              AND thread_readable(t.visibility, t.category_id, $1, $2)\n            ORDER BY t.last_post_at DESC, t.id DESC\n            LIMIT 1\n        ) lt ON true\n        LEFT JOIN LATERAL (\n            SELECT p.id, p.author_id FROM posts p\n            WHERE p.thread_id = lt.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL\n            ORDER BY p.seq DESC\n            LIMIT 1\n        ) lp ON true\n        LEFT JOIN users lu ON lu.id = lp.author_id\n        WHERE category_readable(c.read_level, c.id, $1, $2)\n        ORDER BY s.position NULLS FIRST, s.id NULLS FIRST, c.position, c.id\n        ",
+  "query": "\n        SELECT c.id, c.slug, c.name, c.description, c.read_level, s.name AS \"section_name?\",\n               counts.threads AS \"thread_count!\", counts.posts AS \"post_count!\",\n               lt.id AS \"last_thread_id?\", lt.title AS \"last_thread_title?\", lt.slug AS \"last_thread_slug?\",\n               coalesce(lp.created_at, lt.last_post_at) AS \"last_at?\", lp.id AS \"last_post_id?\",\n               lu.id AS \"last_user_id?\", lu.username AS \"last_username?\", lu.display_name AS \"last_display_name?\"\n        FROM categories c\n        LEFT JOIN sections s ON s.id = c.section_id\n        CROSS JOIN LATERAL (\n            SELECT count(*) AS threads, coalesce(sum(t.last_seq), 0)::bigint AS posts\n            FROM threads t\n            WHERE t.category_id = c.id AND t.deleted_at IS NULL\n              AND thread_readable(t.visibility, t.category_id, $1, $2)\n        ) counts\n        LEFT JOIN LATERAL (\n            SELECT t.id, t.title, t.slug, t.last_post_at\n            FROM threads t\n            WHERE t.category_id = c.id AND t.deleted_at IS NULL\n              AND thread_readable(t.visibility, t.category_id, $1, $2)\n            ORDER BY t.last_post_at DESC, t.id DESC\n            LIMIT 1\n        ) lt ON true\n        LEFT JOIN LATERAL (\n            SELECT p.id, p.author_id, p.created_at FROM posts p\n            WHERE p.thread_id = lt.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL\n            ORDER BY p.seq DESC\n            LIMIT 1\n        ) lp ON true\n        LEFT JOIN users lu ON lu.id = lp.author_id\n        WHERE category_readable(c.read_level, c.id, $1, $2)\n        ORDER BY s.position NULLS FIRST, s.id NULLS FIRST, c.position, c.id\n        ",
   "describe": {
     "columns": [
       {
@@ -118,12 +118,7 @@
         "ordinal": 11,
         "name": "last_at?",
         "type_info": "Timestamptz",
-        "origin": {
-          "Table": {
-            "table": "threads",
-            "name": "last_post_at"
-          }
-        }
+        "origin": "Expression"
       },
       {
         "ordinal": 12,
@@ -193,12 +188,12 @@
       false,
       false,
       false,
-      false,
+      null,
       false,
       false,
       false,
       false
     ]
   },
-  "hash": "80d625a27e613510e5308dc925f02baa347da584d5c43d94c9c68938b070f0b6"
+  "hash": "ef9649f6ecc2759914e6883391fa397ed851d8bf8a8fd7b329fe36426faa83e8"
 }

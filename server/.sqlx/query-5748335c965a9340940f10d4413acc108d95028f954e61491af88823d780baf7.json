@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq, t.last_post_at, t.pinned, t.locked,\n               c.id AS category_id, c.slug AS category_slug, c.name AS category_name,\n               a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name,\n               lp.id AS \"last_post_id?\", lu.id AS \"last_user_id?\", lu.username AS \"last_username?\",\n               lu.display_name AS \"last_display_name?\",\n               src.id AS \"source_thread_id?\", src.title AS \"source_title?\", src.slug AS \"source_slug?\",\n               src.visible AS \"source_visible?\"\n        FROM threads t\n        JOIN categories c ON c.id = t.category_id\n        JOIN users a ON a.id = t.author_id\n        LEFT JOIN LATERAL (\n            SELECT p.id, p.author_id FROM posts p\n            WHERE p.thread_id = t.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL\n            ORDER BY p.seq DESC\n            LIMIT 1\n        ) lp ON true\n        LEFT JOIN users lu ON lu.id = lp.author_id\n        LEFT JOIN LATERAL (\n            SELECT st.id, st.title, st.slug,\n                   st.deleted_at IS NULL AND thread_readable(st.visibility, st.category_id, $1, $2) AS visible\n            FROM posts sp JOIN threads st ON st.id = sp.thread_id\n            WHERE sp.id = t.forked_from_post_id\n        ) src ON true\n        WHERE t.deleted_at IS NULL\n          AND thread_readable(t.visibility, t.category_id, $1, $2)\n          AND ($3::bigint IS NULL OR t.category_id = $3)\n        ORDER BY CASE WHEN $3::bigint IS NULL THEN false ELSE t.pinned END DESC,\n                 t.last_post_at DESC, t.id DESC\n        LIMIT $4 OFFSET $5\n        ",
+  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,\n               coalesce(lp.created_at, t.last_post_at) AS \"last_post_at!\", t.pinned, t.locked,\n               c.id AS category_id, c.slug AS category_slug, c.name AS category_name,\n               a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name,\n               lp.id AS \"last_post_id?\", lu.id AS \"last_user_id?\", lu.username AS \"last_username?\",\n               lu.display_name AS \"last_display_name?\",\n               src.id AS \"source_thread_id?\", src.title AS \"source_title?\", src.slug AS \"source_slug?\",\n               src.visible AS \"source_visible?\"\n        FROM threads t\n        JOIN categories c ON c.id = t.category_id\n        JOIN users a ON a.id = t.author_id\n        LEFT JOIN LATERAL (\n            SELECT p.id, p.author_id, p.created_at FROM posts p\n            WHERE p.thread_id = t.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL\n            ORDER BY p.seq DESC\n            LIMIT 1\n        ) lp ON true\n        LEFT JOIN users lu ON lu.id = lp.author_id\n        LEFT JOIN LATERAL (\n            SELECT st.id, st.title, st.slug,\n                   st.deleted_at IS NULL AND thread_readable(st.visibility, st.category_id, $1, $2) AS visible\n            FROM posts sp JOIN threads st ON st.id = sp.thread_id\n            WHERE sp.id = t.forked_from_post_id\n        ) src ON true\n        WHERE t.deleted_at IS NULL\n          AND thread_readable(t.visibility, t.category_id, $1, $2)\n          AND ($3::bigint IS NULL OR t.category_id = $3)\n        ORDER BY CASE WHEN $3::bigint IS NULL THEN false ELSE t.pinned END DESC,\n                 t.last_post_at DESC, t.id DESC\n        LIMIT $4 OFFSET $5\n        ",
   "describe": {
     "columns": [
       {
@@ -60,14 +60,9 @@
       },
       {
         "ordinal": 5,
-        "name": "last_post_at",
+        "name": "last_post_at!",
         "type_info": "Timestamptz",
-        "origin": {
-          "Table": {
-            "table": "threads",
-            "name": "last_post_at"
-          }
-        }
+        "origin": "Expression"
       },
       {
         "ordinal": 6,
@@ -266,7 +261,7 @@
       false,
       false,
       false,
-      false,
+      null,
       false,
       false,
       false,
@@ -285,5 +280,5 @@
       null
     ]
   },
-  "hash": "aad3871a4eb7afc17d786171ede7854ecf713568c6ab1902fa88110a23943428"
+  "hash": "5748335c965a9340940f10d4413acc108d95028f954e61491af88823d780baf7"
 }

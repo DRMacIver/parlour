@@ -103,6 +103,7 @@ pub struct CategorySummary {
 #[derive(Debug)]
 pub struct LastActivity {
     pub thread: ThreadRef,
+    /// When the newest visible post was written.
     pub at: DateTime<Utc>,
     /// The author of the newest post that is still visible, if any.
     pub by: Option<UserRef>,
@@ -120,7 +121,7 @@ pub async fn index_sections(
         SELECT c.id, c.slug, c.name, c.description, c.read_level, s.name AS "section_name?",
                counts.threads AS "thread_count!", counts.posts AS "post_count!",
                lt.id AS "last_thread_id?", lt.title AS "last_thread_title?", lt.slug AS "last_thread_slug?",
-               lt.last_post_at AS "last_at?", lp.id AS "last_post_id?",
+               coalesce(lp.created_at, lt.last_post_at) AS "last_at?", lp.id AS "last_post_id?",
                lu.id AS "last_user_id?", lu.username AS "last_username?", lu.display_name AS "last_display_name?"
         FROM categories c
         LEFT JOIN sections s ON s.id = c.section_id
@@ -139,7 +140,7 @@ pub async fn index_sections(
             LIMIT 1
         ) lt ON true
         LEFT JOIN LATERAL (
-            SELECT p.id, p.author_id FROM posts p
+            SELECT p.id, p.author_id, p.created_at FROM posts p
             WHERE p.thread_id = lt.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL
             ORDER BY p.seq DESC
             LIMIT 1
@@ -215,6 +216,9 @@ pub struct ThreadRow {
     pub author: UserRef,
     pub created_at: DateTime<Utc>,
     pub post_count: i64,
+    /// When the newest post the viewer can read was written: the post
+    /// `last_by` and `last_post_id` describe. Threads are still ordered by
+    /// their last activity, which counts removed posts.
     pub last_post_at: DateTime<Utc>,
     pub last_by: Option<UserRef>,
     pub last_post_id: Option<i64>,
@@ -337,7 +341,8 @@ async fn thread_rows(
     // With a category, pinned threads come first; /latest ignores pins.
     let rows = sqlx::query!(
         r#"
-        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq, t.last_post_at, t.pinned, t.locked,
+        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,
+               coalesce(lp.created_at, t.last_post_at) AS "last_post_at!", t.pinned, t.locked,
                c.id AS category_id, c.slug AS category_slug, c.name AS category_name,
                a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name,
                lp.id AS "last_post_id?", lu.id AS "last_user_id?", lu.username AS "last_username?",
@@ -348,7 +353,7 @@ async fn thread_rows(
         JOIN categories c ON c.id = t.category_id
         JOIN users a ON a.id = t.author_id
         LEFT JOIN LATERAL (
-            SELECT p.id, p.author_id FROM posts p
+            SELECT p.id, p.author_id, p.created_at FROM posts p
             WHERE p.thread_id = t.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL
             ORDER BY p.seq DESC
             LIMIT 1

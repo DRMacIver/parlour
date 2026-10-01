@@ -941,3 +941,58 @@ async fn only_canonical_urls_are_served_or_cached_property(pool: PgPool) {
         .await
         .unwrap();
 }
+
+#[sqlx::test]
+async fn last_post_time_and_author_come_from_the_same_post(pool: PgPool) {
+    use chrono::{Duration, TimeZone, Utc};
+    use parlour::store::{self, NewPost};
+    let f = Forum::new(pool);
+    let ruth = f.user("ruth").await;
+    let jonah = f.user("jonah").await;
+    let maya = f.user("maya").await;
+    let games = f.category("games", "public", None, 0).await;
+    let start = Utc.with_ymd_and_hms(2026, 9, 1, 20, 0, 0).unwrap();
+    let t = f
+        .new_thread(NewThread {
+            category_id: games,
+            title: "Spirit Island".into(),
+            author_id: ruth,
+            body_md: "x".into(),
+            forked_from_post_id: None,
+            pinned: false,
+            locked: false,
+            created_at: Some(start),
+        })
+        .await;
+    let mut ids = Vec::new();
+    for (author, minutes) in [(jonah, 30), (maya, 74)] {
+        ids.push(
+            store::create_post(
+                &f.db,
+                &NewPost {
+                    thread_id: t.thread_id,
+                    author_id: author,
+                    body_md: "y".into(),
+                    reply_to_post_id: None,
+                    created_at: Some(start + Duration::minutes(minutes)),
+                },
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    f.exec(&format!(
+        "UPDATE posts SET deleted_at = now() WHERE id = {}",
+        ids[1]
+    ))
+    .await;
+    f.changed(Change::PostRemoved { post_id: ids[1] }).await;
+
+    let live = parlour::format::datetime(&(start + Duration::minutes(30)));
+    let removed = parlour::format::datetime(&(start + Duration::minutes(74)));
+    for path in ["/", "/latest", "/c/games"] {
+        let page = f.page(path).await;
+        assert!(page.contains(&live), "{path} lacks {live}");
+        assert!(!page.contains(&removed), "{path} shows {removed}");
+    }
+}
