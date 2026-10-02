@@ -27,9 +27,11 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
     let filter = viewer.filter();
     let pool = db.pool();
     let account = sqlx::query!(
-        r#"SELECT u.username AS "username!: String", u.display_name, u.email AS "email!: String",
-                  u.email_verified_at, u.role, u.title, u.pronouns, u.status_line, u.location,
-                  u.created_at, u.last_seen_at, u.dm_policy, u.email_prefs,
+        r#"SELECT u.username AS "username!: String", u.display_name AS "display_name!",
+                  u.email AS "email!: String", u.email_verified_at, u.role AS "role!",
+                  u.title, u.pronouns, u.status_line, u.location,
+                  u.created_at AS "created_at!", u.last_seen_at,
+                  u.dm_policy AS "dm_policy!", u.email_prefs AS "email_prefs!",
                   i.username AS "invited_by?: String", av.sha256 AS "avatar_sha256?", av.ext AS "avatar_ext?"
            FROM users u
            LEFT JOIN users i ON i.id = u.invited_by_user_id

@@ -1,0 +1,8 @@
+[env]
+# Check sqlx queries against the committed offline data in server/.sqlx, so
+# the server builds even when DATABASE_URL points at an empty database (the
+# tables only appear when the server starts and runs its migrations). When
+# changing queries, set SQLX_OFFLINE=false to check them against the dev
+# database instead, then run `cargo sqlx prepare -- --all-targets`. A
+# variable already set in the environment takes precedence over this one.
+SQLX_OFFLINE = "true"

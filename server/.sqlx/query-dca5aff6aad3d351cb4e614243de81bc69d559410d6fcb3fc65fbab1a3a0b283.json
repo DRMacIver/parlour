@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT u.username AS \"username!: String\", u.display_name, u.email AS \"email!: String\",\n                  u.email_verified_at, u.role, u.title, u.pronouns, u.status_line, u.location,\n                  u.created_at, u.last_seen_at, u.dm_policy, u.email_prefs,\n                  i.username AS \"invited_by?: String\", av.sha256 AS \"avatar_sha256?\", av.ext AS \"avatar_ext?\"\n           FROM users u\n           LEFT JOIN users i ON i.id = u.invited_by_user_id\n           LEFT JOIN uploads av ON av.id = u.avatar_upload_id\n           WHERE u.id = $1",
+  "query": "SELECT u.username AS \"username!: String\", u.display_name AS \"display_name!\",\n                  u.email AS \"email!: String\", u.email_verified_at, u.role AS \"role!\",\n                  u.title, u.pronouns, u.status_line, u.location,\n                  u.created_at AS \"created_at!\", u.last_seen_at,\n                  u.dm_policy AS \"dm_policy!\", u.email_prefs AS \"email_prefs!\",\n                  i.username AS \"invited_by?: String\", av.sha256 AS \"avatar_sha256?\", av.ext AS \"avatar_ext?\"\n           FROM users u\n           LEFT JOIN users i ON i.id = u.invited_by_user_id\n           LEFT JOIN uploads av ON av.id = u.avatar_upload_id\n           WHERE u.id = $1",
   "describe": {
     "columns": [
       {
@@ -21,7 +21,7 @@
       },
       {
         "ordinal": 1,
-        "name": "display_name",
+        "name": "display_name!",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -59,7 +59,7 @@
       },
       {
         "ordinal": 4,
-        "name": "role",
+        "name": "role!",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -114,7 +114,7 @@
       },
       {
         "ordinal": 9,
-        "name": "created_at",
+        "name": "created_at!",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
@@ -136,7 +136,7 @@
       },
       {
         "ordinal": 11,
-        "name": "dm_policy",
+        "name": "dm_policy!",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -147,7 +147,7 @@
       },
       {
         "ordinal": 12,
-        "name": "email_prefs",
+        "name": "email_prefs!",
         "type_info": "Jsonb",
         "origin": {
           "Table": {
@@ -201,23 +201,23 @@
       ]
     },
     "nullable": [
+      false,
+      false,
+      false,
       true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
+      false,
       true,
       true,
       true,
       true,
       false,
       true,
+      false,
+      false,
+      true,
+      true,
       true
     ]
   },
-  "hash": "76656e5884dd541ed4d6366bccd460d40a1dcda037cb210fd97175e66a01368b"
+  "hash": "dca5aff6aad3d351cb4e614243de81bc69d559410d6fcb3fc65fbab1a3a0b283"
 }

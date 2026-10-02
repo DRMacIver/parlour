@@ -123,9 +123,10 @@ async fn rows(
     let rows = sqlx::query_as!(
         Row,
         r#"
-        SELECT a.id, a.action, a.reason, a.public, a.details, a.created_at, a.post_id,
-               actor.id AS actor_id, actor.username AS "actor_username!: String",
-               actor.display_name AS actor_name,
+        SELECT a.id AS "id!", a.action AS "action!", a.reason AS "reason!", a.public AS "public!",
+               a.details AS "details!", a.created_at AS "created_at!", a.post_id AS "post_id?",
+               actor.id AS "actor_id!", actor.username AS "actor_username!: String",
+               actor.display_name AS "actor_name!",
                u.id AS "user_id?", u.username AS "username?: String", u.display_name AS "user_name?",
                t.id AS "thread_id?", t.title AS "thread_title?", t.slug AS "thread_slug?",
                t.category_id IS NULL AS "thread_private?", t.deleted_at IS NULL AS "thread_live?",
@@ -226,9 +227,10 @@ pub async fn entry_for_member(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result
     let rows = sqlx::query_as!(
         Row,
         r#"
-        SELECT a.id, a.action, a.reason, a.public, a.details, a.created_at, a.post_id,
-               actor.id AS actor_id, actor.username AS "actor_username!: String",
-               actor.display_name AS actor_name,
+        SELECT a.id AS "id!", a.action AS "action!", a.reason AS "reason!", a.public AS "public!",
+               a.details AS "details!", a.created_at AS "created_at!", a.post_id AS "post_id?",
+               actor.id AS "actor_id!", actor.username AS "actor_username!: String",
+               actor.display_name AS "actor_name!",
                u.id AS "user_id?", u.username AS "username?: String", u.display_name AS "user_name?",
                t.id AS "thread_id?", t.title AS "thread_title?", t.slug AS "thread_slug?",
                t.category_id IS NULL AS "thread_private?", t.deleted_at IS NULL AS "thread_live?",

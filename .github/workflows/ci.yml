@@ -65,6 +65,10 @@ jobs:
           cargo install sqlx-cli --no-default-features --features rustls,postgres --locked
           sqlx migrate run
           cargo sqlx prepare --check -- --all-targets
+      - name: The build doesn't depend on the database's contents
+        env:
+          CHECK_POSTGRES: postgres://parlour:parlour@localhost:5432
+        run: python3 dev/check_builds.py
       - name: Clippy
         working-directory: server
         run: cargo clippy --all-targets -- -D warnings

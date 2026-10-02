@@ -181,12 +181,26 @@ tests are described in [e2e/README.md](e2e/README.md):
 
 ### sqlx offline data
 
-Queries are checked at compile time against `DATABASE_URL`, or, with
-`SQLX_OFFLINE=true` (as the browser tests and CI build), against
-`server/.sqlx`. After changing a query or adding a migration, apply it to
-the dev database and update the offline data:
+Queries are checked at compile time. By default (set in `.cargo/config.toml`)
+they're checked against the committed offline data in `server/.sqlx`, so the
+server builds whatever `DATABASE_URL` points at, including a brand-new empty
+database: the tables only appear when the server starts and migrates it.
 
-    cd server && sqlx migrate run && cargo sqlx prepare -- --all-targets
+After changing a query or adding a migration, check the queries against the
+dev database and update the offline data:
+
+    cd server
+    sqlx migrate run
+    SQLX_OFFLINE=false cargo check --all-targets
+    cargo sqlx prepare -- --all-targets
+
+Postgres works out whether a column can be null partly from the query plan,
+which depends on what is in the database, so mark nullability explicitly
+(`AS "name!"` / `AS "name?"`) on columns from joins and other places where
+it could go either way. `python3 dev/check_builds.py` checks that the build
+works against an empty database, and that live checking agrees between a
+migrated empty database and a seeded one. CI runs it, and generates and
+checks the offline data against a freshly migrated database.
 
 ## Continuous integration
 

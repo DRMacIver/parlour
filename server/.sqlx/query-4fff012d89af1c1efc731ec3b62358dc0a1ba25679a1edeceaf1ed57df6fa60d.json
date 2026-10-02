@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT a.id, a.action, a.reason, a.public, a.details, a.created_at, a.post_id,\n               actor.id AS actor_id, actor.username AS \"actor_username!: String\",\n               actor.display_name AS actor_name,\n               u.id AS \"user_id?\", u.username AS \"username?: String\", u.display_name AS \"user_name?\",\n               t.id AS \"thread_id?\", t.title AS \"thread_title?\", t.slug AS \"thread_slug?\",\n               t.category_id IS NULL AS \"thread_private?\", t.deleted_at IS NULL AS \"thread_live?\",\n               (thread_readable(t.visibility, t.category_id, $4, $5)\n                OR dm_readable(t.id, t.visibility, $6)) AS \"thread_readable?\",\n               t2.id AS \"to_thread_id?\", t2.title AS \"to_title?\", t2.slug AS \"to_slug?\",\n               t2.deleted_at IS NULL AS \"to_live?\",\n               thread_readable(t2.visibility, t2.category_id, $4, $5) AS \"to_readable?\",\n               CASE WHEN category_readable(c1.read_level, c1.id, $4, $5) THEN c1.name END AS \"from_category?\",\n               CASE WHEN category_readable(c1.read_level, c1.id, $4, $5) THEN c1.slug END AS \"from_category_slug?\",\n               CASE WHEN category_readable(c2.read_level, c2.id, $4, $5) THEN c2.name END AS \"to_category?\",\n               CASE WHEN category_readable(c2.read_level, c2.id, $4, $5) THEN c2.slug END AS \"to_category_slug?\"\n        FROM mod_actions a\n        JOIN users actor ON actor.id = a.actor_id\n        LEFT JOIN users u ON u.id = a.user_id\n        LEFT JOIN threads t ON t.id = a.thread_id\n        LEFT JOIN threads t2 ON t2.id = (a.details->>'to_thread_id')::bigint\n        LEFT JOIN categories c1 ON c1.id = (a.details->>'from_category_id')::bigint\n        LEFT JOIN categories c2 ON c2.id = (a.details->>'to_category_id')::bigint\n        WHERE ($1 OR a.public) AND ($2::bigint IS NULL OR a.user_id = $2)\n          AND ($3::bigint IS NULL OR a.id = $3)\n        ORDER BY a.created_at DESC, a.id DESC\n        LIMIT $7 OFFSET $8\n        ",
+  "query": "\n        SELECT a.id AS \"id!\", a.action AS \"action!\", a.reason AS \"reason!\", a.public AS \"public!\",\n               a.details AS \"details!\", a.created_at AS \"created_at!\", a.post_id AS \"post_id?\",\n               actor.id AS \"actor_id!\", actor.username AS \"actor_username!: String\",\n               actor.display_name AS \"actor_name!\",\n               u.id AS \"user_id?\", u.username AS \"username?: String\", u.display_name AS \"user_name?\",\n               t.id AS \"thread_id?\", t.title AS \"thread_title?\", t.slug AS \"thread_slug?\",\n               t.category_id IS NULL AS \"thread_private?\", t.deleted_at IS NULL AS \"thread_live?\",\n               (thread_readable(t.visibility, t.category_id, $2, $3)\n                OR dm_readable(t.id, t.visibility, $4)) AS \"thread_readable?\",\n               NULL::bigint AS \"to_thread_id?\", NULL::text AS \"to_title?\", NULL::text AS \"to_slug?\",\n               NULL::boolean AS \"to_live?\", NULL::boolean AS \"to_readable?\",\n               NULL::text AS \"from_category?\", NULL::text AS \"from_category_slug?\",\n               NULL::text AS \"to_category?\", NULL::text AS \"to_category_slug?\"\n        FROM mod_actions a\n        JOIN users actor ON actor.id = a.actor_id\n        LEFT JOIN users u ON u.id = a.user_id\n        LEFT JOIN threads t ON t.id = a.thread_id\n        WHERE a.id = $1\n        ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
+        "name": "id!",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -16,7 +16,7 @@
       },
       {
         "ordinal": 1,
-        "name": "action",
+        "name": "action!",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -27,7 +27,7 @@
       },
       {
         "ordinal": 2,
-        "name": "reason",
+        "name": "reason!",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -38,7 +38,7 @@
       },
       {
         "ordinal": 3,
-        "name": "public",
+        "name": "public!",
         "type_info": "Bool",
         "origin": {
           "Table": {
@@ -49,7 +49,7 @@
       },
       {
         "ordinal": 4,
-        "name": "details",
+        "name": "details!",
         "type_info": "Jsonb",
         "origin": {
           "Table": {
@@ -60,7 +60,7 @@
       },
       {
         "ordinal": 5,
-        "name": "created_at",
+        "name": "created_at!",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
@@ -71,7 +71,7 @@
       },
       {
         "ordinal": 6,
-        "name": "post_id",
+        "name": "post_id?",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -82,7 +82,7 @@
       },
       {
         "ordinal": 7,
-        "name": "actor_id",
+        "name": "actor_id!",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -109,7 +109,7 @@
       },
       {
         "ordinal": 9,
-        "name": "actor_name",
+        "name": "actor_name!",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -211,34 +211,19 @@
         "ordinal": 19,
         "name": "to_thread_id?",
         "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "threads",
-            "name": "id"
-          }
-        }
+        "origin": "Expression"
       },
       {
         "ordinal": 20,
         "name": "to_title?",
         "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "threads",
-            "name": "title"
-          }
-        }
+        "origin": "Expression"
       },
       {
         "ordinal": 21,
         "name": "to_slug?",
         "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "threads",
-            "name": "slug"
-          }
-        }
+        "origin": "Expression"
       },
       {
         "ordinal": 22,
@@ -279,13 +264,9 @@
     ],
     "parameters": {
       "Left": [
-        "Bool",
-        "Int8",
         "Int8",
         "TextArray",
         "Int8Array",
-        "Int8",
-        "Int8",
         "Int8"
       ]
     },
@@ -300,18 +281,18 @@
       false,
       false,
       false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
       null,
       null,
       null,
-      false,
-      false,
-      false,
+      null,
+      null,
+      null,
       null,
       null,
       null,
@@ -320,5 +301,5 @@
       null
     ]
   },
-  "hash": "e02fa10688686e1581d8908243f1720f1127f751d40b88b6f261219d23f47c70"
+  "hash": "4fff012d89af1c1efc731ec3b62358dc0a1ba25679a1edeceaf1ed57df6fa60d"
 }

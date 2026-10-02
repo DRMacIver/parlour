@@ -82,8 +82,8 @@
       false,
       false,
       false,
-      false,
-      false
+      true,
+      true
     ]
   },
   "hash": "6260503d005bf78bce9d490c9cfc11240d66c19f219c75f31a7cce46c26368ca"
