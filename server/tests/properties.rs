@@ -42,6 +42,7 @@ use parlour::sessions;
 use parlour::store::{self, CategorySettings, NewCategory, NewPost, NewThread, NewUser};
 use parlour::users::{self, RoleChange};
 use parlour::viewer::Viewer;
+use parlour::writing;
 use sqlx::PgPool;
 use tokio::runtime::Handle;
 
@@ -927,6 +928,8 @@ struct AccessCategory {
     slug: String,
     level: &'static str,
     read_groups: BTreeSet<usize>,
+    write_level: &'static str,
+    write_groups: BTreeSet<usize>,
 }
 
 struct AccessThread {
@@ -949,6 +952,7 @@ struct Access {
     rt: Handle,
     pool: PgPool,
     db: Db,
+    state: AppState,
     users: Vec<UserModel>,
     groups: Vec<i64>,
     categories: Vec<AccessCategory>,
@@ -971,6 +975,7 @@ impl Access {
         });
         let mut world = Access {
             db: Db::new(pool.clone()),
+            state: AppState::with_cache(pool.clone(), PageCache::disabled()),
             pool,
             rt,
             users: Vec::new(),
@@ -1007,7 +1012,7 @@ impl Access {
         for _ in 0..2 {
             world.add_group();
         }
-        for level in ["public", "members", "groups"] {
+        for level in ["public", "members", "groups", "groups"] {
             world.add_category(level);
         }
         world
@@ -1060,6 +1065,8 @@ impl Access {
             slug,
             level,
             read_groups: BTreeSet::new(),
+            write_level: "members",
+            write_groups: BTreeSet::new(),
         });
     }
 
@@ -1113,6 +1120,125 @@ impl Access {
     /// Whether the viewer may see the post's text.
     fn reads_post(&self, who: Option<usize>, post: usize) -> bool {
         self.post_live(post) && self.reads_thread(who, self.posts[post].thread)
+    }
+
+    /// Whether the viewer may start threads in a category: they read it,
+    /// and they are staff, or it lets every member post, or they are in
+    /// one of its write groups.
+    fn posts_in_category(&self, who: Option<usize>, category: usize) -> bool {
+        let Some(u) = who else { return false };
+        let (c, user) = (&self.categories[category], &self.users[u]);
+        self.reads_category(who, category)
+            && match c.write_level {
+                "members" => true,
+                "groups" => user.staff || !user.groups.is_disjoint(&c.write_groups),
+                _ => user.staff,
+            }
+    }
+
+    /// The "at most as visible" table in DESIGN.md §3.1: may content from
+    /// category `source` be quoted into category `dest`?
+    fn may_quote_into(&self, source: usize, dest: usize) -> bool {
+        let (s, d) = (&self.categories[source], &self.categories[dest]);
+        match (s.level, d.level) {
+            ("public", _) => true,
+            ("members", "members" | "groups") => true,
+            ("groups", "groups") => d.read_groups.is_subset(&s.read_groups),
+            _ => false,
+        }
+    }
+
+    /// Where the viewer may start new threads, and where they may quote
+    /// each post they can read.
+    fn check_writing(&self, who: Option<usize>, viewer: &Viewer) {
+        let db = &self.db;
+        let readable = self
+            .block(content::readable_categories(db, viewer))
+            .unwrap();
+        let may_post: BTreeSet<i64> = readable
+            .iter()
+            .filter(|c| writing::may_post_in(viewer, c))
+            .map(|c| c.category.id)
+            .collect();
+        let expected = Self::ids(
+            &self.categories,
+            |c| self.posts_in_category(who, c),
+            |c| c.id,
+        );
+        assert_eq!(may_post, expected, "{who:?}: categories to post in");
+        for (p, post) in self.posts.iter().enumerate() {
+            if !self.reads_post(who, p) {
+                continue;
+            }
+            let source = self
+                .block(content::post_target(db, viewer, post.id))
+                .unwrap()
+                .expect("a readable post is found");
+            let destinations: BTreeSet<i64> = self
+                .block(writing::fork_destinations(&self.state, viewer, &source))
+                .unwrap_or_else(|_| panic!("{who:?}: fork destinations of post {p} failed"))
+                .iter()
+                .map(|c| c.category.id)
+                .collect();
+            let from = self.threads[post.thread].category;
+            let expected = Self::ids(
+                &self.categories,
+                |c| self.posts_in_category(who, c) && self.may_quote_into(from, c),
+                |c| c.id,
+            );
+            assert_eq!(
+                destinations, expected,
+                "{who:?}: where post {p} can be quoted"
+            );
+        }
+    }
+
+    /// Gives category `c` random read and write levels and groups, as an
+    /// admin can with the category form.
+    fn set_category_access(&mut self, tc: &TestCase, c: usize) {
+        let level = tc.draw(gs::sampled_from(LEVELS.to_vec()));
+        let read_groups: BTreeSet<usize> = (0..self.groups.len())
+            .filter(|_| tc.draw(gs::booleans()))
+            .collect();
+        let write_level = tc.draw(gs::sampled_from(vec!["members", "groups", "staff"]));
+        let mut write_groups: BTreeSet<usize> = (0..self.groups.len())
+            .filter(|_| tc.draw(gs::booleans()))
+            .collect();
+        if level == "groups" && write_level == "groups" {
+            // The form refuses groups that may post but not read.
+            write_groups.retain(|g| read_groups.contains(g));
+        }
+        let category = &self.categories[c];
+        let to_ids = |groups: &BTreeSet<usize>| groups.iter().map(|&g| self.groups[g]).collect();
+        let settings = CategorySettings {
+            section_id: None,
+            slug: category.slug.clone(),
+            name: format!("Category {c}"),
+            description: String::new(),
+            position: c as i32,
+            read_level: level.into(),
+            write_level: write_level.into(),
+            read_groups: to_ids(&read_groups),
+            write_groups: to_ids(&write_groups),
+        }
+        .clean()
+        .unwrap();
+        self.block(store::update_category(&self.db, category.id, &settings))
+            .unwrap()
+            .unwrap();
+        let category = &mut self.categories[c];
+        category.level = level;
+        category.read_groups = if level == "groups" {
+            read_groups
+        } else {
+            BTreeSet::new()
+        };
+        category.write_level = write_level;
+        category.write_groups = if write_level == "groups" {
+            write_groups
+        } else {
+            BTreeSet::new()
+        };
     }
 
     fn viewer(&self, who: Option<usize>) -> Viewer {
@@ -1310,6 +1436,8 @@ impl Access {
                 .count() as i64;
             assert_eq!(count, expected, "{who:?}: posts by {u}");
         }
+
+        self.check_writing(who, &viewer);
     }
 }
 
@@ -1364,33 +1492,12 @@ impl Access {
         self.add_category(level);
     }
 
-    /// What the admin's category form does: a new read level and read
+    /// What the admin's category form does: new read and write levels and
     /// groups.
     #[rule]
     fn set_access(&mut self, tc: TestCase) {
         let c = tc.draw(gs::integers::<usize>().max_value(self.categories.len() - 1));
-        let level = tc.draw(gs::sampled_from(LEVELS.to_vec()));
-        let read_groups: BTreeSet<usize> = (0..self.groups.len())
-            .filter(|_| tc.draw(gs::booleans()))
-            .collect();
-        let category = &self.categories[c];
-        let settings = CategorySettings {
-            section_id: None,
-            slug: category.slug.clone(),
-            name: format!("Category {c}"),
-            description: String::new(),
-            position: c as i32,
-            read_level: level.into(),
-            write_level: "members".into(),
-            read_groups: read_groups.iter().map(|&g| self.groups[g]).collect(),
-            write_groups: Vec::new(),
-        };
-        self.block(store::update_category(&self.db, category.id, &settings))
-            .unwrap()
-            .unwrap();
-        let category = &mut self.categories[c];
-        category.level = level;
-        category.read_groups = read_groups;
+        self.set_category_access(&tc, c);
     }
 
     #[rule]
@@ -1531,7 +1638,12 @@ impl Access {
 
 #[hegel::standalone_function(test_cases = 100, suppress_health_check = [HealthCheck::TooSlow])]
 fn run_access(tc: TestCase, rt: &Handle, pool: &PgPool) {
-    let world = Access::new(rt.clone(), pool.clone());
+    let mut world = Access::new(rt.clone(), pool.clone());
+    // Start from random settings, so that every run has a mix of levels
+    // and groups to read, post and quote across.
+    for c in 0..world.categories.len() {
+        world.set_category_access(&tc, c);
+    }
     hegel::stateful::machine(world).steps(30).run(tc);
 }
 
