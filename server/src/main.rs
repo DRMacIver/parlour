@@ -72,13 +72,14 @@ async fn main() -> anyhow::Result<()> {
             }
             let summary = seed::seed(&db).await?;
             println!(
-                "Seeded {} users, {} categories, {} threads and {} posts. \
+                "Seeded {} users, {} categories, {} threads, {} posts and {} conversations. \
                  Every member's password is {:?} (try sam, the admin, or priya). \
                  Restart any running server so it doesn't serve cached pages from before.",
                 summary.users,
                 summary.categories,
                 summary.threads,
                 summary.posts,
+                summary.conversations,
                 seed::DEV_PASSWORD
             );
             Ok(())

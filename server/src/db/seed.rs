@@ -74,6 +74,7 @@ pub struct SeedSummary {
     pub categories: usize,
     pub threads: usize,
     pub posts: usize,
+    pub conversations: usize,
 }
 
 /// The highest id in each table that `reset` deletes from, as JSON. Later
@@ -912,6 +913,166 @@ impl Seeder<'_> {
 
         self.reactions(maya_post).await?;
         self.read_markers(september_id).await?;
+        self.conversations().await?;
+        self.notifications(september_id).await?;
+        Ok(())
+    }
+
+    /// The conversations in Messages.dc.html, all with Priya. She hasn't
+    /// read Dev's latest message about the Brass evening.
+    async fn conversations(&mut self) -> sqlx::Result<()> {
+        // (title, people, messages as (who, minutes ago, text)), oldest
+        // message first; the first person started it.
+        type Message = (&'static str, i64, &'static str);
+        let conversations: [(&str, &[&str], &[Message]); 4] = [
+            (
+                "Tuesday 7th: Brass",
+                &["dev", "lin", "priya"],
+                &[
+                    (
+                        "dev",
+                        26 * 60,
+                        "Booked the back room at the Fox for 7pm. Lin, are you still bringing your copy?",
+                    ),
+                    (
+                        "lin",
+                        25 * 60 + 38,
+                        "Yes, and the playmat. Priya, do you want to do the teach or shall I?",
+                    ),
+                    (
+                        "priya",
+                        25 * 60 + 15,
+                        "You do it. I’ll bring the snacks and try to remember the canal era this time.",
+                    ),
+                    (
+                        "dev",
+                        50,
+                        "Heads up: the Fox has changed its kitchen hours. Food stops at 8:30 now, so order before we start.",
+                    ),
+                ],
+            ),
+            (
+                "",
+                &["maya", "priya"],
+                &[
+                    (
+                        "maya",
+                        28 * 60 + 9,
+                        "Did you still want to borrow Mage Knight? Fair warning: the box weighs about as much as a small dog.",
+                    ),
+                    (
+                        "priya",
+                        27 * 60 + 50,
+                        "Yes please! I can pick it up on Tuesday if you bring it.",
+                    ),
+                ],
+            ),
+            (
+                "From the organisers",
+                &["sam", "priya"],
+                &[(
+                    "sam",
+                    4 * 24 * 60,
+                    "Thanks for reporting that spam thread. It’s been removed and the account has been suspended. The person who invited them has been told too.",
+                )],
+            ),
+            (
+                "",
+                &["ruth", "priya"],
+                &[(
+                    "ruth",
+                    10 * 24 * 60,
+                    "Your Le Guin recommendation for October won the vote, so you get to open the discussion thread.",
+                )],
+            ),
+        ];
+        for (title, people, messages) in conversations {
+            let (first, rest) = messages.split_first().expect("conversations have messages");
+            let now = self.now;
+            let at = |minutes: i64| now - Duration::minutes(minutes);
+            let author_id = self.user(first.0);
+            let recipient_ids = people[1..].iter().map(|name| self.user(name)).collect();
+            let created = store::create_conversation(
+                &mut *self.db,
+                &store::NewConversation {
+                    author_id,
+                    title: title.to_owned(),
+                    recipient_ids,
+                    body_md: first.2.to_owned(),
+                    created_at: Some(at(first.1)),
+                },
+            )
+            .await?;
+            let mut last = created.first_post_id;
+            for (who, minutes, text) in rest {
+                let author_id = self.user(who);
+                last = store::create_post(
+                    &mut *self.db,
+                    &NewPost {
+                        thread_id: created.thread_id,
+                        author_id,
+                        body_md: (*text).to_owned(),
+                        reply_to_post_id: None,
+                        created_at: Some(at(*minutes)),
+                    },
+                )
+                .await?;
+            }
+            self.summary.conversations += 1;
+            for name in people.iter() {
+                let unread = *name == "priya" && title == "Tuesday 7th: Brass";
+                let seen = messages.len() as i64 - i64::from(unread);
+                let user = self.user(name);
+                store::mark_read(&mut *self.db, user, created.thread_id, seen).await?;
+            }
+            if title == "Tuesday 7th: Brass" {
+                let (priya, dev) = (self.user("priya"), self.user("dev"));
+                crate::notifications::insert(
+                    &mut *self.db,
+                    priya,
+                    crate::content::notifications::Kind::Message,
+                    dev,
+                    created.thread_id,
+                    last,
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Priya watches the September thread, as its author would, and has
+    /// notifications about the posts since she last read it.
+    async fn notifications(&mut self, september: i64) -> sqlx::Result<()> {
+        let priya = self.user("priya");
+        crate::social::set_watch(
+            &mut *self.db,
+            priya,
+            crate::social::Watched::Thread(september),
+            crate::social::WatchLevel::Watching,
+        )
+        .await?;
+        let unread = sqlx::query!(
+            r#"SELECT p.id, p.author_id FROM posts p JOIN thread_reads r ON r.thread_id = p.thread_id
+               WHERE p.thread_id = $1 AND r.user_id = $2 AND p.seq > r.last_read_seq
+                 AND p.author_id <> $2 AND p.deleted_at IS NULL AND p.hidden_at IS NULL
+               ORDER BY p.seq"#,
+            september,
+            priya
+        )
+        .fetch_all(&mut *self.db)
+        .await?;
+        for post in unread {
+            crate::notifications::insert(
+                &mut *self.db,
+                priya,
+                crate::content::notifications::Kind::WatchedThread,
+                post.author_id,
+                september,
+                post.id,
+            )
+            .await?;
+        }
         Ok(())
     }
 

@@ -823,10 +823,217 @@ p.quick-reply { font-style: italic; }
 .reaction-names { flex: 1 1 200px; }
 .reaction-types .reaction-emoji { font-size: 22px; }
 
+
+/* ----------------------------------------------- Messages and notifications */
+
+/* Counts beside "Notifications" and "Messages" in the top navigation. */
+.count-badge {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 5px;
+  background: var(--badge);
+  color: var(--on-badge);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant: normal;
+  letter-spacing: 0;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.page-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 10px; }
+.page-head .page-title { margin-bottom: 4px; }
+.page-head + .notice { margin-bottom: 14px; }
+
+/* The list of conversations beside the open one (Messages.dc.html). */
+.messages-layout {
+  display: grid;
+  grid-template-columns: minmax(0, var(--sidebar)) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.conversations { list-style: none; margin: 0; padding: 0; }
+.conversation-row { border-top: 1px solid var(--rule); }
+.conversation-row:first-child { border-top: none; }
+.conversation-link {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.conversation-link:hover .conversation-name { text-decoration: underline; }
+.conversation-current { background: var(--panel-alt); box-shadow: inset 3px 0 0 var(--accent); }
+.conversation-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.conversation-top, .conversation-bottom { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.conversation-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conversation-unread .conversation-name { color: var(--accent); }
+.conversation-people { font-size: var(--font-size-small); color: var(--ink-muted); font-style: italic; }
+.conversation-snippet {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-small);
+  color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.unread-count {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: var(--font-size-small);
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+.conversation-list .pagination { padding: 6px 12px; border-top: 1px solid var(--rule); }
+
+.conversation-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--ink);
+}
+.conversation-title { flex: 1 1 260px; min-width: 0; }
+.conversation-title h2 { margin: 0; font-size: 22px; font-weight: 500; line-height: 1.2; }
+.conversation-title .row-meta { margin: 2px 0 0; font-style: italic; }
+.conversation-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.conversation-actions .form-inline { margin: 0; }
+.add-person input {
+  width: 9em;
+  min-height: 30px;
+  padding: 2px 6px;
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+}
+.flag-staff { color: var(--accent); }
+.conversation > .notice { margin: 12px 14px 0; }
+.conversation > .pagination { padding: 6px 14px; }
+.conversation-none .empty { padding: 24px 14px; }
+
+.messages { border-top: 1px solid var(--rule); }
+.message {
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px 0;
+  border-top: 1px solid var(--rule);
+}
+.messages > .message:first-child { border-top: none; }
+.message .avatar { margin-top: 2px; }
+.message-main { flex: 1; min-width: 0; }
+.message-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  font-size: var(--font-size-small);
+  color: var(--ink-muted);
+}
+.message-info time, .message-info .reply-to, .message-info .edited { font-style: italic; }
+.message-author {
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+  text-decoration: none;
+}
+.message .post-number { font-size: 15px; }
+.message .post-body { padding: 6px 0 4px; }
+.message .reactions { padding: 0 0 10px; }
+.message-tombstone {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 8px 14px;
+  font-style: italic;
+  color: var(--ink-muted);
+  font-size: var(--font-size-small);
+}
+.messages .unread-divider { border-left: none; border-right: none; }
+
+.message-reply { padding: 12px 14px 14px; border-top: 1px solid var(--ink); }
+.message-reply label { display: block; margin-bottom: 4px; font-variant: small-caps; letter-spacing: 0.1em; font-size: var(--font-size-label); }
+.message-reply textarea {
+  width: 100%;
+  min-height: 6em;
+  padding: 8px 10px;
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  resize: vertical;
+}
+.message-reply textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.message-reply .form-actions { margin-top: 8px; }
+.conversation p.quick-reply { margin: 0; padding: 12px 14px; border-top: 1px solid var(--ink); }
+
+/* A post or message by someone the reader blocked, folded away. */
+.blocked-post { padding: 8px 16px; }
+.message .blocked-post { padding: 6px 0; }
+.blocked-post summary {
+  cursor: pointer;
+  font-style: italic;
+  color: var(--ink-muted);
+  font-size: var(--font-size-small);
+}
+.blocked-post .post-body { padding-left: 0; padding-right: 0; }
+
+.profile-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; }
+.profile-actions .form-inline { margin: 0; }
+.panel-list { margin: 0 0 12px; padding-left: 1.2em; }
+.panel-list li { margin-bottom: 4px; }
+
+/* Watching a thread, conversation or category. */
+.watch-form { gap: 6px; font-size: 15px; color: var(--ink-muted); }
+.watch-form label { font-variant: small-caps; letter-spacing: 0.08em; }
+.watch-form select {
+  max-width: 100%;
+  min-height: 30px;
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+}
+
+/* The notifications page. */
+.notification-list { list-style: none; margin: 0; padding: 0; }
+.notification {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--rule);
+}
+.notification:first-child { border-top: none; }
+.notification .avatar { margin: 2px 0 0; }
+.notification-text { min-width: 0; }
+.notification-text .row-meta { display: block; }
+.notification-unread { background: var(--panel-alt); box-shadow: inset 3px 0 0 var(--accent); }
+.notification-unread a { font-weight: 700; }
+
 /* -------------------------------------------------------- Narrow screens */
 
 @media (max-width: 900px) {
-  .index-layout, .with-sidebar { grid-template-columns: minmax(0, 1fr); }
+  .index-layout, .with-sidebar, .messages-layout { grid-template-columns: minmax(0, 1fr); }
+  /* An open conversation comes before the list on narrow screens. */
+  .messages-layout .conversation:not(.conversation-none) { order: -1; }
 }
 
 @media (max-width: 700px) {
@@ -885,4 +1092,9 @@ p.quick-reply { font-style: italic; }
   .tree > li > details > ul { margin-left: 20px; }
   .tree ul.tree-flat-narrow { margin-left: 0; padding-left: 0; border-left: none; }
   .tree-level { display: inline; }
+
+  .message { padding: 10px 12px 0; gap: 8px; }
+  .message .avatar { --avatar-size: 28px; font-size: 15px; }
+  .message-reply, .conversation-head { padding: 10px 12px; }
+  .conversation-actions { width: 100%; }
 }

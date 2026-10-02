@@ -4,7 +4,8 @@ Playwright tests for Parlour's pages and main flows (DESIGN.md §12). They
 check that every page renders without JavaScript, fits a 320px screen with
 no horizontal scroll, works in light and dark mode, and makes no requests to
 other hosts; and they walk through logging in (with a password, an emailed
-link and an emailed code), inviting someone and joining with the invite.
+link and an emailed code), inviting someone and joining with the invite,
+writing, private categories, and direct messages with their notifications.
 Email goes over SMTP to the dev compose Mailpit, which the tests read
 through its API (`E2E_MAILPIT_URL`, default http://127.0.0.1:8025).
 

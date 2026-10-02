@@ -337,3 +337,37 @@ async fn the_seeded_invite_tree_has_everyone(pool: PgPool) {
     let profile = f.page("/u/priya").await;
     assert!(profile.contains("href=\"/u/ruth\">Ruth</a>"));
 }
+
+/// The conversations from the Messages mockup, with an unread message and
+/// notifications waiting for Priya, seen only by the people in them.
+#[sqlx::test]
+async fn seed_has_conversations_and_notifications(pool: PgPool) {
+    let summary = seed::seed(&pool).await.unwrap();
+    assert_eq!(summary.conversations, 4);
+    let f = Forum::new(pool.clone());
+    let id = |name: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT id FROM users WHERE username = $1")
+                .bind(name)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let priya = f.session(id("priya").await).await;
+    let list = f.page_as("/messages", &priya).await;
+    assert!(list.contains("Tuesday 7th: Brass"), "{list}");
+    assert!(list.contains("From the organisers"), "{list}");
+    assert!(list.contains("1 new"), "{list}");
+    assert!(list.contains("data-count=\"notifications\""), "{list}");
+    let notifications = f.page_as("/notifications", &priya).await;
+    assert!(
+        notifications.contains("Tuesday 7th: Brass"),
+        "{notifications}"
+    );
+    // Jonah is in none of them.
+    let jonah = f.session(id("jonah").await).await;
+    let list = f.page_as("/messages", &jonah).await;
+    assert!(list.contains("No conversations yet"), "{list}");
+}

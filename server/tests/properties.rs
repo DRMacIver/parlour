@@ -24,6 +24,13 @@
 //!   quoting posts in their own and other threads, forks, edits and
 //!   deletions. The member writes posts of their own, so that leaving a
 //!   group can strand them in a category they no longer read.
+//! - Conversations (DMs) come and go among the members, the member viewer
+//!   and the moderator viewer, who join, leave and are added back: a
+//!   conversation's title and messages are seen by its current
+//!   participants and nobody else (staff included), never through the
+//!   anonymous cache, the category lists, the notifications page or any
+//!   page about a post. Every new post is put through the notification
+//!   fan-out, so the notifications page is checked too.
 
 mod common;
 
@@ -80,6 +87,22 @@ struct CategoryModel {
     token: String,
 }
 
+struct ConversationModel {
+    id: i64,
+    title_token: String,
+    /// The current participants, by user id.
+    participants: BTreeSet<i64>,
+    last_seq: i64,
+}
+
+struct MessageModel {
+    id: i64,
+    conversation: usize,
+    seq: i64,
+    body_token: String,
+    deleted: bool,
+}
+
 struct ThreadModel {
     id: i64,
     category: usize,
@@ -123,13 +146,16 @@ struct World {
     groups: Vec<i64>,
     member_id: i64,
     member_groups: BTreeSet<usize>,
+    staff_id: i64,
+    conversations: Vec<ConversationModel>,
+    messages: Vec<MessageModel>,
 }
 
 impl World {
     fn new(rt: Handle, db: PgPool, mode: Mode) -> World {
         rt.block_on(async {
             sqlx::raw_sql(
-                "TRUNCATE settings, posts, threads, categories, sections, groups, users RESTART IDENTITY CASCADE",
+                "TRUNCATE settings, jobs, posts, threads, categories, sections, groups, users RESTART IDENTITY CASCADE",
             )
             .execute(&db)
             .await
@@ -157,6 +183,9 @@ impl World {
             groups: Vec::new(),
             member_id: 0,
             member_groups: BTreeSet::new(),
+            staff_id: 0,
+            conversations: Vec::new(),
+            messages: Vec::new(),
         };
         for name in ["ruth", "jonah", "maya"] {
             let id = world
@@ -195,6 +224,7 @@ impl World {
                 world.users.push(id);
             } else {
                 world.staff_cookie = cookie;
+                world.staff_id = id;
             }
         }
         for n in 0..2 {
@@ -284,6 +314,66 @@ impl World {
             settled: false,
         });
         self.changed(Change::PostCreated { post_id: id });
+        self.notify(id);
+    }
+
+    /// Runs the notification fan-out for a new post, as its job would.
+    fn notify(&self, post_id: i64) {
+        self.block(parlour::notify::post_created(&self.cached.state, post_id))
+            .unwrap();
+    }
+
+    /// Everyone who can be in a conversation: the members and both viewers.
+    fn dm_people(&self) -> Vec<i64> {
+        let mut people = self.users.clone();
+        people.push(self.staff_id);
+        people
+    }
+
+    fn viewer_id(&self, who: Who) -> Option<i64> {
+        match who {
+            Who::Anonymous => None,
+            Who::Member => Some(self.member_id),
+            Who::Staff => Some(self.staff_id),
+        }
+    }
+
+    /// DESIGN.md §3.7: a conversation is read by its current participants
+    /// and nobody else.
+    fn conversation_readable(&self, conversation: usize, who: Who) -> bool {
+        self.viewer_id(who)
+            .is_some_and(|id| self.conversations[conversation].participants.contains(&id))
+    }
+
+    fn add_message(&mut self, conversation: usize, author: i64, mention: bool) {
+        let token = self.token();
+        let body = if mention {
+            format!("Message {token} for @viewer and @watcher")
+        } else {
+            format!("Message {token}")
+        };
+        let id = self
+            .block(store::create_post(
+                self.db(),
+                &NewPost {
+                    thread_id: self.conversations[conversation].id,
+                    author_id: author,
+                    body_md: body,
+                    reply_to_post_id: None,
+                    created_at: None,
+                },
+            ))
+            .unwrap();
+        self.conversations[conversation].last_seq += 1;
+        self.messages.push(MessageModel {
+            id,
+            conversation,
+            seq: self.conversations[conversation].last_seq,
+            body_token: token,
+            deleted: false,
+        });
+        self.changed(Change::PostCreated { post_id: id });
+        self.notify(id);
     }
 
     // -- The reference permission function, independent of the app's SQL.
@@ -327,6 +417,16 @@ impl World {
             if self.post_readable(i, who) {
                 tokens.insert(p.body_token.as_str());
                 tokens.extend(p.history.iter().map(String::as_str));
+            }
+        }
+        for (i, c) in self.conversations.iter().enumerate() {
+            if self.conversation_readable(i, who) {
+                tokens.insert(c.title_token.as_str());
+            }
+        }
+        for m in &self.messages {
+            if !m.deleted && self.conversation_readable(m.conversation, who) {
+                tokens.insert(m.body_token.as_str());
             }
         }
         tokens
@@ -374,6 +474,20 @@ impl World {
             paths.push(format!("/p/{}/revisions?v=1", p.id));
             paths.push(format!("/p/{}/reactions", p.id));
         }
+        paths.push("/messages".to_owned());
+        paths.push("/notifications".to_owned());
+        for c in &self.conversations {
+            paths.push(format!("/messages/{}", c.id));
+            paths.push(format!("/messages/{}/unread", c.id));
+            paths.push(format!("/t/{}", c.id));
+            paths.push(format!("/t/{}/message", c.id));
+            paths.push(format!("/t/{}/unread", c.id));
+        }
+        for m in &self.messages {
+            paths.push(format!("/p/{}", m.id));
+            paths.push(format!("/p/{}/revisions", m.id));
+            paths.push(format!("/p/{}/reactions", m.id));
+        }
         if who != Who::Anonymous {
             paths.extend(self.writing_paths());
         }
@@ -405,6 +519,23 @@ impl World {
                         paths.push(format!("/t/{}/reply?quote={}", other.id, p.id));
                     }
                 }
+            }
+        }
+        for c in &self.conversations {
+            paths.push(format!("/t/{}/reply", c.id));
+        }
+        for m in &self.messages {
+            let conversation = self.conversations[m.conversation].id;
+            for action in ["fork", "edit", "delete"] {
+                paths.push(format!("/p/{}/{action}", m.id));
+            }
+            paths.push(format!("/t/{conversation}/reply?quote={}", m.id));
+            // Quoting a message into a thread is refused, and must not
+            // show the message on the way.
+            if m.seq == 1
+                && let Some(t) = self.threads.first()
+            {
+                paths.push(format!("/t/{}/reply?quote={}", t.id, m.id));
             }
         }
         paths
@@ -548,6 +679,37 @@ impl World {
             };
             assert_eq!(response.status, expected);
         }
+        for (i, c) in self.conversations.iter().enumerate() {
+            let response = self.get_as(who, &format!("/messages/{}", c.id));
+            let expected = match who {
+                Who::Anonymous => StatusCode::SEE_OTHER,
+                _ if self.conversation_readable(i, who) => StatusCode::OK,
+                _ => StatusCode::NOT_FOUND,
+            };
+            assert_eq!(response.status, expected, "{who:?} conversation {i}");
+            if expected == StatusCode::OK {
+                assert!(response.body.contains(&c.title_token));
+            }
+        }
+        for m in &self.messages {
+            let permalink = self.get_as(who, &format!("/p/{}", m.id));
+            if !self.conversation_readable(m.conversation, who) {
+                assert_eq!(permalink.status, StatusCode::NOT_FOUND);
+                continue;
+            }
+            let c = &self.conversations[m.conversation];
+            let page = page_of_seq(m.seq);
+            let expected = if page == 1 {
+                format!("/messages/{}#p{}", c.id, m.id)
+            } else {
+                format!("/messages/{}?page={page}#p{}", c.id, m.id)
+            };
+            assert_eq!(permalink.location(), expected);
+            if !m.deleted {
+                let body = self.get_as(who, expected.split('#').next().unwrap()).body;
+                assert!(body.contains(&m.body_token), "message {} missing", m.id);
+            }
+        }
     }
 }
 
@@ -601,6 +763,7 @@ impl World {
         self.changed(Change::PostCreated {
             post_id: created.first_post_id,
         });
+        self.notify(created.first_post_id);
     }
 
     #[rule]
@@ -872,6 +1035,106 @@ impl World {
         self.changed(Change::SiteChanged);
     }
 
+    #[rule]
+    fn start_conversation(&mut self, tc: TestCase) {
+        tc.assume(self.conversations.len() < 4);
+        let people = self.dm_people();
+        let author = tc.draw(gs::sampled_from(people.clone()));
+        let mut others: BTreeSet<i64> = people
+            .iter()
+            .copied()
+            .filter(|&u| u != author && tc.draw(gs::booleans()))
+            .collect();
+        if others.is_empty() {
+            others.insert(*people.iter().find(|&&u| u != author).unwrap());
+        }
+        let title_token = self.token();
+        let body_token = self.token();
+        let mention = tc.draw(gs::booleans());
+        let created = self
+            .block(store::create_conversation(
+                self.db(),
+                &store::NewConversation {
+                    author_id: author,
+                    title: format!("Chat {title_token}"),
+                    recipient_ids: others.iter().copied().collect(),
+                    body_md: if mention {
+                        format!("Message {body_token} for @viewer and @watcher")
+                    } else {
+                        format!("Message {body_token}")
+                    },
+                    created_at: None,
+                },
+            ))
+            .unwrap();
+        let mut participants = others;
+        participants.insert(author);
+        self.conversations.push(ConversationModel {
+            id: created.thread_id,
+            title_token,
+            participants,
+            last_seq: 1,
+        });
+        self.messages.push(MessageModel {
+            id: created.first_post_id,
+            conversation: self.conversations.len() - 1,
+            seq: 1,
+            body_token,
+            deleted: false,
+        });
+        self.changed(Change::PostCreated {
+            post_id: created.first_post_id,
+        });
+        self.notify(created.first_post_id);
+    }
+
+    #[rule]
+    fn send_message(&mut self, tc: TestCase) {
+        tc.assume(!self.conversations.is_empty());
+        let c = tc.draw(gs::integers::<usize>().max_value(self.conversations.len() - 1));
+        let people: Vec<i64> = self.conversations[c].participants.iter().copied().collect();
+        tc.assume(!people.is_empty());
+        let author = tc.draw(gs::sampled_from(people));
+        let mention = tc.draw(gs::booleans());
+        self.add_message(c, author, mention);
+    }
+
+    /// Someone leaves a conversation, or is added (back) to one.
+    #[rule]
+    fn toggle_participant(&mut self, tc: TestCase) {
+        tc.assume(!self.conversations.is_empty());
+        let c = tc.draw(gs::integers::<usize>().max_value(self.conversations.len() - 1));
+        let user = tc.draw(gs::sampled_from(self.dm_people()));
+        let id = self.conversations[c].id;
+        if self.conversations[c].participants.remove(&user) {
+            assert!(
+                self.block(store::leave_conversation(self.db(), id, user))
+                    .unwrap()
+            );
+        } else {
+            let adder = *self.dm_people().first().unwrap();
+            assert!(
+                self.block(store::add_participant(self.db(), id, user, adder))
+                    .unwrap()
+            );
+            self.conversations[c].participants.insert(user);
+        }
+    }
+
+    #[rule]
+    fn delete_message(&mut self, tc: TestCase) {
+        tc.assume(!self.messages.is_empty());
+        let m = tc.draw(gs::integers::<usize>().max_value(self.messages.len() - 1));
+        let message = &mut self.messages[m];
+        message.deleted = !message.deleted;
+        let (id, deleted) = (message.id, message.deleted);
+        self.exec(format!(
+            "UPDATE posts SET deleted_at = {} WHERE id = {id}",
+            if deleted { "now()" } else { "NULL" }
+        ));
+        self.changed(Change::PostRemoved { post_id: id });
+    }
+
     /// Requests every page through the cache, so that later changes have
     /// something to invalidate.
     #[rule]
@@ -989,6 +1252,18 @@ struct AccessPost {
     hidden: bool,
 }
 
+struct AccessConversation {
+    id: i64,
+    /// Current participants, as indexes into `users`.
+    participants: BTreeSet<usize>,
+}
+
+struct AccessMessage {
+    id: i64,
+    conversation: usize,
+    deleted: bool,
+}
+
 struct Access {
     rt: Handle,
     pool: PgPool,
@@ -999,6 +1274,8 @@ struct Access {
     categories: Vec<AccessCategory>,
     threads: Vec<AccessThread>,
     posts: Vec<AccessPost>,
+    conversations: Vec<AccessConversation>,
+    messages: Vec<AccessMessage>,
 }
 
 /// The members who never change role; there is always an admin among them.
@@ -1008,7 +1285,7 @@ impl Access {
     fn new(rt: Handle, pool: PgPool) -> Access {
         rt.block_on(async {
             sqlx::raw_sql(
-                "TRUNCATE settings, posts, threads, categories, sections, groups, users RESTART IDENTITY CASCADE",
+                "TRUNCATE settings, jobs, posts, threads, categories, sections, groups, users RESTART IDENTITY CASCADE",
             )
             .execute(&pool)
             .await
@@ -1024,6 +1301,8 @@ impl Access {
             categories: Vec::new(),
             threads: Vec::new(),
             posts: Vec::new(),
+            conversations: Vec::new(),
+            messages: Vec::new(),
         };
         for (name, role) in [
             ("boss", "admin"),
@@ -1161,6 +1440,120 @@ impl Access {
     /// Whether the viewer may see the post's text.
     fn reads_post(&self, who: Option<usize>, post: usize) -> bool {
         self.post_live(post) && self.reads_thread(who, self.posts[post].thread)
+    }
+
+    /// DESIGN.md §3.7: only a conversation's current participants read it;
+    /// being staff makes no difference.
+    fn reads_conversation(&self, who: Option<usize>, conversation: usize) -> bool {
+        who.is_some_and(|u| self.conversations[conversation].participants.contains(&u))
+    }
+
+    /// Checks everything the content module says about conversations.
+    fn check_conversations(&self, who: Option<usize>, viewer: &Viewer) {
+        let db = &self.db;
+        let mut deps = Deps::new();
+        let listed: BTreeSet<i64> = self
+            .block(content::messages::conversations(db, viewer, 1))
+            .unwrap()
+            .rows
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        let expected = Self::ids(
+            &self.conversations,
+            |c| self.reads_conversation(who, c),
+            |c| c.id,
+        );
+        assert_eq!(listed, expected, "{who:?}: conversations");
+        for (c, conversation) in self.conversations.iter().enumerate() {
+            let visible = self.reads_conversation(who, c);
+            let page = self
+                .block(content::messages::conversation_page(
+                    db,
+                    viewer,
+                    conversation.id,
+                    1,
+                    &mut deps,
+                ))
+                .unwrap();
+            assert_eq!(page.is_some(), visible, "{who:?}: conversation {c}");
+            if let Some(page) = page {
+                let people: BTreeSet<i64> = page
+                    .conversation
+                    .participants
+                    .iter()
+                    .map(|p| p.user.id)
+                    .collect();
+                let expected: BTreeSet<i64> = conversation
+                    .participants
+                    .iter()
+                    .map(|&u| self.users[u].id)
+                    .collect();
+                assert_eq!(people, expected, "{who:?}: people in {c}");
+            }
+            for found in [
+                self.block(content::thread_target(db, viewer, conversation.id))
+                    .unwrap()
+                    .is_some(),
+                self.block(content::first_unread(db, viewer, conversation.id))
+                    .unwrap()
+                    .is_some(),
+            ] {
+                assert_eq!(found, visible, "{who:?}: conversation {c}");
+            }
+            // Conversations never have category pages.
+            assert!(
+                self.block(content::thread_slug(db, viewer, conversation.id))
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                self.block(content::thread_page(
+                    db,
+                    viewer,
+                    conversation.id,
+                    1,
+                    &mut deps
+                ))
+                .unwrap()
+                .is_none()
+            );
+        }
+        for (m, message) in self.messages.iter().enumerate() {
+            let visible = self.reads_conversation(who, message.conversation);
+            let live = visible && !message.deleted;
+            let target = self
+                .block(content::post_target(db, viewer, message.id))
+                .unwrap();
+            assert_eq!(target.is_some(), visible, "{who:?}: message {m}");
+            let location = self
+                .block(content::post_location(db, viewer, message.id))
+                .unwrap();
+            assert_eq!(location.is_some(), visible, "{who:?}: message {m}");
+            assert!(location.is_none_or(|l| l.private));
+            let history = self
+                .block(content::post_history(db, viewer, message.id, &mut deps))
+                .unwrap();
+            assert_eq!(history.is_some(), live, "{who:?}: history of message {m}");
+            let reactions = self
+                .block(content::post_reactions(db, viewer, message.id, &mut deps))
+                .unwrap();
+            assert_eq!(
+                reactions.is_some(),
+                live,
+                "{who:?}: reactions to message {m}"
+            );
+            // Messages can never be quoted into a thread.
+            if let Some(target) = target {
+                let destinations = self
+                    .block(writing::fork_destinations(&self.state, viewer, &target))
+                    .unwrap_or_else(|_| panic!("{who:?}: fork destinations of message {m} failed"));
+                assert!(
+                    destinations.is_empty(),
+                    "{who:?}: message {m} can be forked"
+                );
+            }
+        }
     }
 
     /// Whether the viewer may start threads in a category: they read it,
@@ -1479,6 +1872,7 @@ impl Access {
         }
 
         self.check_writing(who, &viewer);
+        self.check_conversations(who, &viewer);
     }
 }
 
@@ -1635,6 +2029,103 @@ impl Access {
             if post.deleted { "now()" } else { "NULL" },
             if post.hidden { "now()" } else { "NULL" },
             post.id
+        );
+        self.exec(sql);
+    }
+
+    #[rule]
+    fn start_conversation(&mut self, tc: TestCase) {
+        tc.assume(self.conversations.len() < 4);
+        let author = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
+        let mut others: BTreeSet<usize> = (0..self.users.len())
+            .filter(|&u| u != author && tc.draw(gs::booleans()))
+            .collect();
+        if others.is_empty() {
+            others.insert((author + 1) % self.users.len());
+        }
+        let created = self
+            .block(store::create_conversation(
+                &self.pool,
+                &store::NewConversation {
+                    author_id: self.users[author].id,
+                    title: String::new(),
+                    recipient_ids: others.iter().map(|&u| self.users[u].id).collect(),
+                    body_md: "Psst".into(),
+                    created_at: None,
+                },
+            ))
+            .unwrap();
+        others.insert(author);
+        self.conversations.push(AccessConversation {
+            id: created.thread_id,
+            participants: others,
+        });
+        self.messages.push(AccessMessage {
+            id: created.first_post_id,
+            conversation: self.conversations.len() - 1,
+            deleted: false,
+        });
+    }
+
+    #[rule]
+    fn send_message(&mut self, tc: TestCase) {
+        tc.assume(!self.conversations.is_empty() && self.messages.len() < 20);
+        let c = tc.draw(gs::integers::<usize>().max_value(self.conversations.len() - 1));
+        let author = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
+        let id = self
+            .block(store::create_post(
+                &self.pool,
+                &NewPost {
+                    thread_id: self.conversations[c].id,
+                    author_id: self.users[author].id,
+                    body_md: "Message".into(),
+                    reply_to_post_id: None,
+                    created_at: None,
+                },
+            ))
+            .unwrap();
+        self.messages.push(AccessMessage {
+            id,
+            conversation: c,
+            deleted: false,
+        });
+    }
+
+    #[rule]
+    fn toggle_participant(&mut self, tc: TestCase) {
+        tc.assume(!self.conversations.is_empty());
+        let c = tc.draw(gs::integers::<usize>().max_value(self.conversations.len() - 1));
+        let u = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
+        let (thread, user) = (self.conversations[c].id, self.users[u].id);
+        if self.conversations[c].participants.remove(&u) {
+            assert!(
+                self.block(store::leave_conversation(&self.db, thread, user))
+                    .unwrap()
+            );
+        } else {
+            assert!(
+                self.block(store::add_participant(
+                    &self.db,
+                    thread,
+                    user,
+                    self.users[0].id
+                ))
+                .unwrap()
+            );
+            self.conversations[c].participants.insert(u);
+        }
+    }
+
+    #[rule]
+    fn toggle_message_deleted(&mut self, tc: TestCase) {
+        tc.assume(!self.messages.is_empty());
+        let m = tc.draw(gs::integers::<usize>().max_value(self.messages.len() - 1));
+        let message = &mut self.messages[m];
+        message.deleted = !message.deleted;
+        let sql = format!(
+            "UPDATE posts SET deleted_at = {} WHERE id = {}",
+            if message.deleted { "now()" } else { "NULL" },
+            message.id
         );
         self.exec(sql);
     }
