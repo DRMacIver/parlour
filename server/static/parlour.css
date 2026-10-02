@@ -863,7 +863,8 @@ p.quick-reply { font-style: italic; }
   text-decoration: none;
 }
 .conversation-link:hover .conversation-name { text-decoration: underline; }
-.conversation-current { background: var(--panel-alt); box-shadow: inset 3px 0 0 var(--accent); }
+.conversation-current { background: var(--panel-alt); border-left: 3px solid var(--accent); }
+.conversation-current .conversation-link { padding-left: 9px; }
 .conversation-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .conversation-top, .conversation-bottom { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .conversation-name { flex: 1; min-width: 0; font-weight: 700; }
@@ -1019,7 +1020,7 @@ p.quick-reply { font-style: italic; }
 .notification .avatar { margin: 2px 0 0; }
 .notification-text { min-width: 0; }
 .notification-text .row-meta { display: block; }
-.notification-unread { background: var(--panel-alt); box-shadow: inset 3px 0 0 var(--accent); }
+.notification-unread { background: var(--panel-alt); border-left: 3px solid var(--accent); padding-left: 11px; }
 .notification-unread a { font-weight: 700; }
 
 /* -------------------------------------------------------- Narrow screens */

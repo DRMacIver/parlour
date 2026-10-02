@@ -629,6 +629,53 @@ async fn blocks_and_mutes_made_before_the_email_stop_it(pool: PgPool) {
     }
 }
 
+/// A notification email that can't be sent isn't kept with the private
+/// text it was to carry.
+#[sqlx::test]
+async fn failed_notification_email_keeps_no_private_text(pool: PgPool) {
+    let s = setup(pool).await;
+    let response =
+        s.f.submit(
+            "/messages/new",
+            &[
+                ("to", "jonah"),
+                ("title", "Secret plans"),
+                ("body", "Private words"),
+            ],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    let post = anchored_post(response.location());
+    let notified = parlour::notify::post_created(&s.f.state, post)
+        .await
+        .unwrap();
+    assert_eq!(notified, vec![s.jonah]);
+    let id = count(
+        &s.f,
+        &format!(
+            "SELECT id FROM notifications WHERE user_id = {} AND post_id = {post}",
+            s.jonah
+        ),
+    )
+    .await;
+    assert!(
+        parlour::notify::email_if_away(&s.f.state, id)
+            .await
+            .unwrap()
+    );
+    let payload: serde_json::Value =
+        sqlx::query_scalar("SELECT payload FROM jobs WHERE kind = 'email'")
+            .fetch_one(&s.f.db)
+            .await
+            .unwrap();
+    assert!(payload.to_string().contains("Private words"));
+    let kept = parlour::mail::scrub(payload).to_string();
+    for private in ["Private words", "Secret plans"] {
+        assert!(!kept.contains(private), "{kept}");
+    }
+    assert!(kept.contains("jonah@example.com"), "{kept}");
+}
+
 #[sqlx::test]
 async fn members_who_are_around_are_not_emailed(pool: PgPool) {
     let s = setup(pool).await;

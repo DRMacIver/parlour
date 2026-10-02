@@ -122,6 +122,12 @@ pub struct Email {
     /// kept only while it might still be sent (see [`scrub`]).
     #[serde(default)]
     pub secret: bool,
+    /// Whether the subject and body hold forum text that only the
+    /// recipient may read (notification email), which the access layer no
+    /// longer guards once it is in an email. Such an email is likewise
+    /// kept only while it might still be sent (see [`scrub`]).
+    #[serde(default)]
+    pub private: bool,
     /// For notification email: the one-click unsubscribe link, sent in the
     /// `List-Unsubscribe` and `List-Unsubscribe-Post` headers (RFC 8058).
     #[serde(default)]
@@ -159,17 +165,27 @@ pub async fn queue<'c>(db: impl Handle<'c>, email: &Email) -> sqlx::Result<()> {
 }
 
 /// What a failed email job keeps: everything but the body of an email with
-/// a secret in it. Registered with [`crate::jobs::Jobs::scrub_on_failure`].
+/// a secret in it, and everything but the subject and body of one carrying
+/// private forum text. Registered with
+/// [`crate::jobs::Jobs::scrub_on_failure`].
 ///
 /// While an email waits to be sent (retries take about an hour in all),
-/// its job does hold the link, as plain text in `jobs.payload`; a copy of
-/// the database taken then could use it until the link expires.
+/// its job does hold the link or text, as plain text in `jobs.payload`; a
+/// copy of the database taken then could use or read it.
 pub fn scrub(payload: serde_json::Value) -> serde_json::Value {
     match serde_json::from_value::<Email>(payload.clone()) {
         Ok(email) if email.secret => serde_json::to_value(Email {
             body: "(Removed: it held a link that could be used to log in, reset a password, \
                    confirm an address or join, and couldn't be sent.)"
                 .to_owned(),
+            ..email
+        })
+        .expect("emails serialise"),
+        Ok(email) if email.private => serde_json::to_value(Email {
+            subject: "(Removed: notifications)".to_owned(),
+            body:
+                "(Removed: it held notifications about posts and messages, and couldn't be sent.)"
+                    .to_owned(),
             ..email
         })
         .expect("emails serialise"),
@@ -318,6 +334,7 @@ mod tests {
             subject: "Hello".into(),
             body: "Body".into(),
             secret: false,
+            private: false,
             unsubscribe: Some("https://forum.example.com/unsubscribe/1.all.abc".into()),
         };
         let text = String::from_utf8(

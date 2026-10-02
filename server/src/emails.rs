@@ -28,6 +28,7 @@ pub fn invite(to: &str, site_name: &str, inviter: &str, url: &str, expires: &str
         .render()
         .expect("email templates render"),
         secret: true,
+        private: false,
         unsubscribe: None,
     }
 }
@@ -52,6 +53,7 @@ pub fn verify(to: &str, site_name: &str, name: &str, url: &str) -> Email {
         .render()
         .expect("email templates render"),
         secret: true,
+        private: false,
         unsubscribe: None,
     }
 }
@@ -78,6 +80,7 @@ pub fn magic_link(to: &str, site_name: &str, name: &str, url: &str, code: &str) 
         .render()
         .expect("email templates render"),
         secret: true,
+        private: false,
         unsubscribe: None,
     }
 }
@@ -102,6 +105,7 @@ pub fn reset(to: &str, site_name: &str, name: &str, url: &str) -> Email {
         .render()
         .expect("email templates render"),
         secret: true,
+        private: false,
         unsubscribe: None,
     }
 }
@@ -127,6 +131,7 @@ pub fn join(to: &str, site_name: &str, name: &str, url: &str) -> Email {
         .render()
         .expect("email templates render"),
         secret: true,
+        private: false,
         unsubscribe: None,
     }
 }
@@ -182,6 +187,7 @@ pub fn already_member(
         .render()
         .expect("email templates render"),
         secret: false,
+        private: false,
         unsubscribe: None,
     }
 }
@@ -200,6 +206,7 @@ pub fn test(to: &str, site_name: &str) -> Email {
             .render()
             .expect("email templates render"),
         secret: false,
+        private: false,
         unsubscribe: None,
     }
 }
@@ -244,6 +251,7 @@ pub fn notifications(
         .render()
         .expect("email templates render"),
         secret: false,
+        private: true,
         unsubscribe: Some(unsubscribe_url.to_owned()),
     }
 }
