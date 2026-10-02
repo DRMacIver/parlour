@@ -96,15 +96,19 @@
       {% else %}
       <div class="post-body">{{ body_html|safe }}</div>
       {% endif %}
-      {% if !post.reactions.is_empty() || !shown.reaction_types.is_empty() %}
+      {% if !post.reactions.is_empty() || (shown.participant && !shown.reaction_types.is_empty()) %}
       <div class="reactions">
         {% for r in post.reactions %}
+        {% if shown.participant %}
         <form class="reaction-form" method="post" action="/p/{{ post.id }}/reactions">
           <input type="hidden" name="emoji" value="{{ r.emoji }}">
           <button class="reaction{% if r.mine %} reaction-mine{% endif %}" type="submit" name="action" value="{% if r.mine %}remove{% else %}add{% endif %}" aria-pressed="{{ r.mine }}" title="{{ crate::format::names(r.names) }}"><span aria-hidden="true">{{ r.emoji }}</span> <span class="reaction-count">{{ r.count }}</span><span class="visually-hidden"> reactions; {% if r.mine %}take yours back{% else %}add yours{% endif %}</span></button>
         </form>
+        {% else %}
+        <span class="reaction" title="{{ crate::format::names(r.names) }}"><span aria-hidden="true">{{ r.emoji }}</span> <span class="reaction-count">{{ r.count }}</span><span class="visually-hidden"> {{ r.emoji }} reactions</span></span>
+        {% endif %}
         {% endfor %}
-        {% if !shown.reaction_types.is_empty() %}
+        {% if shown.participant && !shown.reaction_types.is_empty() %}
         <details class="react-menu">
           <summary>react</summary>
           <form class="react-choices" method="post" action="/p/{{ post.id }}/reactions">

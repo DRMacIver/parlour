@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM reports WHERE kind = 'appeal' AND mod_action_id = $1\n                                                 AND user_id = $2) AS \"appealed!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "appealed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "cea9a649d4c155ade480e1d4194144d1aea03044c777e606bb37d2a11c3ebf0a"
+}

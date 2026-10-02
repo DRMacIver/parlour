@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET silenced_until = CASE WHEN $2 THEN silenced_until ELSE NULL END,\n                            suspended_until = CASE WHEN $2 THEN NULL ELSE suspended_until END\n           WHERE id = ANY($1)\n             AND CASE WHEN $2 THEN suspended_until ELSE silenced_until END > now()\n             AND abs(extract(epoch FROM CASE WHEN $2 THEN suspended_until ELSE silenced_until END - $3))\n                 < 0.001\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Bool",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a2268b13e0bdaf5bfa95005140605d6a505d943704c4bf277dad47cd33bb9dac"
+}

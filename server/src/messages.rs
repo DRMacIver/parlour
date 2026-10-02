@@ -242,9 +242,13 @@ pub async fn send_refusal(
     if user.is_suspended() {
         return Ok(Some(writing::SUSPENDED));
     }
-    // A silenced member can still answer the moderators.
-    if user.is_silenced() && !conversation.others(Some(user.id)).iter().any(|p| p.staff) {
-        return Ok(Some(writing::SILENCED));
+    // A silenced member can still answer the moderators, in a conversation
+    // with nobody else.
+    if user.is_silenced() {
+        let others = conversation.others(Some(user.id));
+        if others.is_empty() || !others.iter().all(|p| p.staff) {
+            return Ok(Some(writing::SILENCED));
+        }
     }
     if user.is_staff() {
         return Ok(None);

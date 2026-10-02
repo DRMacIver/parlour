@@ -21,3 +21,8 @@
 
 {# How long to silence or suspend for. #}
 {% macro days_field(id, durations, chosen) %}<label class="visually-hidden" for="{{ id }}">For how long</label><select id="{{ id }}" name="days">{% for (days, label) in durations %}<option value="{{ days }}"{% if *days == chosen %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>{% endmacro %}
+
+{# Put first in a form with several actions. Pressing Enter in a text box
+   submits a form with its first submit button; this one is disabled, so
+   Enter does nothing and every action takes a deliberate click. #}
+{% macro no_enter() %}<button type="submit" disabled hidden aria-hidden="true" tabindex="-1">Choose an action</button>{% endmacro %}

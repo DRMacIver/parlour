@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT a.id, a.actor_id, a.action, a.user_id, a.thread_id, a.post_id, a.reason, a.details,\n                  a.created_at,\n                  EXISTS (SELECT 1 FROM reports r WHERE r.mod_action_id = a.id) AS \"appealed!\"\n           FROM mod_actions a WHERE a.id = $1",
+  "query": "SELECT a.id, a.actor_id, a.action, a.target_id, a.user_id, a.thread_id, a.post_id, a.reason,\n                  a.details, a.created_at\n           FROM mod_actions a WHERE a.id = $1",
   "describe": {
     "columns": [
       {
@@ -38,6 +38,17 @@
       },
       {
         "ordinal": 3,
+        "name": "target_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mod_actions",
+            "name": "target_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
         "name": "user_id",
         "type_info": "Int8",
         "origin": {
@@ -48,7 +59,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "thread_id",
         "type_info": "Int8",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "post_id",
         "type_info": "Int8",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "reason",
         "type_info": "Text",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "details",
         "type_info": "Jsonb",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -101,12 +112,6 @@
             "name": "created_at"
           }
         }
-      },
-      {
-        "ordinal": 9,
-        "name": "appealed!",
-        "type_info": "Bool",
-        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -118,14 +123,14 @@
       false,
       false,
       false,
+      false,
       true,
       true,
       true,
       false,
       false,
-      false,
-      null
+      false
     ]
   },
-  "hash": "02f11e90cc245278abf9766c5833e1a425f97824284ba4e27f9a34c2f8abcfe8"
+  "hash": "a952bb4efea34670944827a71b8e3bcf748be01e98cbcf39f86f22b178e9db2d"
 }

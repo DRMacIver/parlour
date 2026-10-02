@@ -12,6 +12,7 @@
 <section class="panel"><div class="post-body">{{ text.html|safe }}</div></section>
 {% endif %}
 <form class="panel queue-actions-panel" method="post" action="/mod/p/{{ post.post_id }}">
+  {% call md::no_enter() %}{% endcall %}
   <h2 class="panel-bar">Act on this post</h2>
   <div class="form">
     <div class="field">

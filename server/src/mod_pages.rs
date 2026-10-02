@@ -24,7 +24,9 @@ use crate::error::AppError;
 use crate::mod_records::{
     self, HeldPost, IpRecord, MemberRecord, MemberRow, Note, REASONS, Restriction,
 };
-use crate::moderation::{self, Destination, PostAction, QueueItem, QueueKind, ThreadAction};
+use crate::moderation::{
+    self, Destination, PostAction, QueueItem, QueueKind, Reversal, ThreadAction,
+};
 use crate::pages::parse_id;
 use crate::pagination::{PageItem, Pagination, page_href};
 use crate::settings::{self, ModerationSettings};
@@ -693,7 +695,15 @@ pub async fn queue(
     let params = params_of(&uri);
     let notice = match params.as_slice() {
         [] => None,
-        [(k, _)] if k == "done" => Some("Done."),
+        [(k, v)] if k == "done" => Some(match v.as_str() {
+            "superseded" => {
+                "Reversed, but a later action has since changed some or all of what that decision did, and was left alone. Change it from the member’s, the post’s or the thread’s page if you mean to."
+            }
+            "nothing" => {
+                "Reversed. There was nothing left to undo: it had run out or been undone already, or (for an edit or a redaction) it can’t be undone here."
+            }
+            _ => "Done.",
+        }),
         _ => return web::not_found(&state, &viewer).await,
     };
     let items = moderation::queue(&state, &viewer).await?;
@@ -767,7 +777,9 @@ pub async fn decide_appeal(
     };
     match moderation::decide_appeal(&state, &viewer, id, overturn, field(&fields, "reason")).await?
     {
-        Ok(()) => Ok(see_other(&back)),
+        Ok(Reversal::Superseded) => Ok(see_other("/mod/queue?done=superseded")),
+        Ok(Reversal::NothingToUndo) => Ok(see_other("/mod/queue?done=nothing")),
+        Ok(Reversal::Kept | Reversal::Undone) => Ok(see_other(&back)),
         Err(refusal) => refused(&state, &viewer, refusal, &back).await,
     }
 }
@@ -920,6 +932,14 @@ impl ModThreadTemplate {
     }
 }
 
+#[derive(Template)]
+#[template(path = "mod_deleted_thread.html")]
+struct ModDeletedThreadTemplate {
+    layout: Layout,
+    thread: content::moderation::DeletedThread,
+    notice: Option<&'static str>,
+}
+
 pub async fn thread_page(
     State(state): State<AppState>,
     viewer: Viewer,
@@ -933,20 +953,31 @@ pub async fn thread_page(
     let Some(thread_id) = parse_id(&id) else {
         return web::not_found(&state, &viewer).await;
     };
+    let notice = params_of(&uri)
+        .iter()
+        .any(|(k, _)| k == "done")
+        .then_some("Done.");
     let Some(thread) = content::thread_target(state.db(), &viewer, thread_id)
         .await?
         .filter(|t| t.category().is_some())
     else {
-        return web::not_found(&state, &viewer).await;
+        // A deleted thread can be restored from here.
+        return match content::moderation::deleted_thread(state.db(), &viewer, thread_id).await? {
+            Some(thread) => render(
+                StatusCode::OK,
+                &ModDeletedThreadTemplate {
+                    layout: Layout::load(&state, &viewer, Nav::Moderation).await?,
+                    thread,
+                    notice,
+                },
+            ),
+            None => web::not_found(&state, &viewer).await,
+        };
     };
     let mut deps = Deps::new();
     let pinned = content::thread_page(state.db(), &viewer, thread_id, 1, &mut deps)
         .await?
         .is_some_and(|t| t.pinned);
-    let notice = params_of(&uri)
-        .iter()
-        .any(|(k, _)| k == "done")
-        .then_some("Done.");
     render(
         StatusCode::OK,
         &ModThreadTemplate {
@@ -988,12 +1019,10 @@ pub async fn moderate_thread(
             .await;
         }
     };
-    let deleting = action == ThreadAction::Delete;
     match moderation::moderate_thread(&state, &viewer, thread_id, action, field(&fields, "reason"))
         .await?
     {
-        // A deleted thread has no page left to go back to.
-        Ok(_) if deleting => Ok(see_other("/mod/log")),
+        // A deleted thread's page here offers to restore it.
         Ok(_) => Ok(see_other(&back)),
         Err(refusal) => refused(&state, &viewer, refusal, &back).await,
     }
@@ -1158,8 +1187,21 @@ pub async fn user_page(
     )
 }
 
+#[derive(Template)]
+#[template(path = "mod_spammer.html")]
+struct ModSpammerTemplate {
+    layout: Layout,
+    preview: moderation::SpammerPreview,
+    reason: String,
+    /// Where to go once it is done.
+    back: String,
+    /// Where to go instead.
+    cancel: String,
+}
+
 /// `POST /mod/users/{username}/{action}`: silence, suspend, lift either,
-/// suspend the invite branch, delete as a spammer, or add a note.
+/// suspend the invite branch, delete as a spammer (once confirmed), or add
+/// a note.
 pub async fn user_action(
     State(state): State<AppState>,
     viewer: Viewer,
@@ -1229,6 +1271,25 @@ pub async fn user_action(
             }
             None => Err(no_days()),
         },
+        // It can't be undone, so the first press asks.
+        "spammer" if field(&fields, "confirm") != "yes" => {
+            return match moderation::spammer_preview(&state, &viewer, &username).await? {
+                Ok(preview) => {
+                    let back = back_to(&fields, &page);
+                    render(
+                        StatusCode::OK,
+                        &ModSpammerTemplate {
+                            layout: Layout::load(&state, &viewer, Nav::Moderation).await?,
+                            cancel: back.split('?').next().unwrap_or(&page).to_owned(),
+                            back,
+                            reason: reason.to_owned(),
+                            preview,
+                        },
+                    )
+                }
+                Err(refusal) => refused(&state, &viewer, refusal, &page).await,
+            };
+        }
         "spammer" => {
             return match moderation::delete_spammer(&state, &viewer, &username, reason).await? {
                 Ok(_) => Ok(see_other(&back_to(&fields, "/mod/queue?done=1"))),

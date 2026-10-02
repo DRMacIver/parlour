@@ -373,8 +373,8 @@ pub async fn contact(
     Ok(Ok(()))
 }
 
-/// An action the viewer may contest: one about them that they haven't
-/// contested yet.
+/// An action the viewer may contest: one that affected them (see
+/// [`ActionRecord::affected`]) that they haven't contested yet.
 pub async fn appealable(
     state: &AppState,
     viewer: &Viewer,
@@ -386,10 +386,10 @@ pub async fn appealable(
     let Some(action) = mod_records::action(state.db(), action_id).await? else {
         return Ok(Err(Refused::NotFound));
     };
-    if action.user_id != Some(user.id) || !appeals_allowed(&action.action) {
+    if !action.affected().contains(&user.id) || !appeals_allowed(&action.action) {
         return Ok(Err(Refused::NotFound));
     }
-    if action.appealed {
+    if mod_records::appealed_by(state.db(), action.id, user.id).await? {
         return Ok(Err(Refused::NotAllowed(
             "You’ve already contested this. The moderators will look at it again.",
         )));
@@ -970,8 +970,8 @@ pub async fn moderate_thread(
     let user = staff_or_refuse!(viewer);
     let db = state.db();
     let reason = clean_line(reason);
-    // A deleted thread can only be restored; to find it, staff use the
-    // log.
+    // A deleted thread can only be restored, from its page in the
+    // moderation pages, which the log links to.
     let thread = match &action {
         ThreadAction::Restore => None,
         _ => match content::thread_target(db, viewer, thread_id).await? {
@@ -1441,7 +1441,7 @@ pub async fn suspend_branch(
                 crate::format::datetime(&until),
                 member.user.username
             ),
-            (*id == member.user.id).then_some(action_id),
+            Some(action_id),
         )
         .await?;
         notify::counts_changed(state, *id);
@@ -1454,7 +1454,35 @@ pub async fn suspend_branch(
         .collect()))
 }
 
-/// Deletes a spammer: their account and everything they wrote.
+/// What deleting a member as a spammer would remove, to ask about first.
+pub struct SpammerPreview {
+    pub member: MemberRecord,
+    /// The threads they started, which go with everything in them.
+    pub threads: i64,
+    /// The replies other members wrote in those threads.
+    pub replies: i64,
+}
+
+/// What deleting a member as a spammer would remove, if they can be.
+pub async fn spammer_preview(
+    state: &AppState,
+    viewer: &Viewer,
+    username: &str,
+) -> Outcome<SpammerPreview> {
+    let member = match target_member(state, viewer, username).await? {
+        Ok(member) => member,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    let (threads, replies) = mod_records::spammer_reach(state.db(), member.user.id).await?;
+    Ok(Ok(SpammerPreview {
+        member,
+        threads,
+        replies,
+    }))
+}
+
+/// Deletes a spammer: their account and everything they wrote. It can't be
+/// undone, so the pages ask first (see [`spammer_preview`]).
 pub async fn delete_spammer(
     state: &AppState,
     viewer: &Viewer,
@@ -1561,11 +1589,38 @@ pub async fn add_note(
 /// still post there.
 pub async fn approve(state: &AppState, viewer: &Viewer, held_id: i64) -> Outcome<i64> {
     let user = staff_or_refuse!(viewer);
-    let db = state.db();
-    let mut tx = db.begin().await?;
-    let Some(held) = mod_records::claim_held(&mut tx, held_id).await? else {
+    let mut tx = state.db().begin().await?;
+    let Some(held) = mod_records::claim_held(&mut tx, held_id, "held").await? else {
         return Ok(Err(Refused::NotFound));
     };
+    let post_id = match publish_held(state, user, &mut tx, &held).await? {
+        Ok(post_id) => post_id,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    tx.commit().await?;
+    state.jobs().wake();
+    tell(
+        state,
+        held.author.id,
+        user,
+        "A moderator approved your post, and it is up now.".to_owned(),
+        None,
+    )
+    .await?;
+    state.changed(Change::PostCreated { post_id }).await?;
+    state.changed(Change::ModLogged).await?;
+    Ok(Ok(post_id))
+}
+
+/// Posts a held post claimed with [`mod_records::claim_held`], as its
+/// author, if they may still post there; and records it as approved.
+async fn publish_held(
+    state: &AppState,
+    user: &UserCtx,
+    tx: &mut crate::db::Tx,
+    held: &HeldPost,
+) -> Result<Result<i64, Refused>, AppError> {
+    let db = state.db();
     // Checked again as the author, as they are now.
     let Some(author) = sessions::user_ctx(db, held.author.id).await? else {
         return Ok(Err(Refused::NotFound));
@@ -1609,7 +1664,7 @@ pub async fn approve(state: &AppState, viewer: &Viewer, held_id: i64) -> Outcome
                 }
             }
             let created = store::create_thread(
-                &mut tx,
+                &mut *tx,
                 &NewThread {
                     category_id: *category_id,
                     title: title.clone(),
@@ -1623,7 +1678,7 @@ pub async fn approve(state: &AppState, viewer: &Viewer, held_id: i64) -> Outcome
             )
             .await?;
             social::set_watch(
-                &mut tx,
+                &mut *tx,
                 author.id,
                 Watched::Thread(created.thread_id),
                 WatchLevel::Watching,
@@ -1658,7 +1713,7 @@ pub async fn approve(state: &AppState, viewer: &Viewer, held_id: i64) -> Outcome
                 None => None,
             };
             let post_id = store::create_post(
-                &mut tx,
+                &mut *tx,
                 &NewPost {
                     thread_id: *thread_id,
                     author_id: author.id,
@@ -1671,10 +1726,10 @@ pub async fn approve(state: &AppState, viewer: &Viewer, held_id: i64) -> Outcome
             (post_id, *thread_id, is_public(&thread.audience()))
         }
     };
-    notify::queue_post(&mut tx, post_id).await?;
-    mod_records::decide_held(&mut tx, held.id, user.id, Some(post_id)).await?;
+    notify::queue_post(&mut *tx, post_id).await?;
+    mod_records::decide_held(&mut *tx, held.id, user.id, Some(post_id)).await?;
     mod_records::record(
-        &mut tx,
+        &mut *tx,
         &NewAction {
             actor_id: user.id,
             action: "approve_post",
@@ -1689,18 +1744,6 @@ pub async fn approve(state: &AppState, viewer: &Viewer, held_id: i64) -> Outcome
         },
     )
     .await?;
-    tx.commit().await?;
-    state.jobs().wake();
-    tell(
-        state,
-        author.id,
-        user,
-        "A moderator approved your post, and it is up now.".to_owned(),
-        None,
-    )
-    .await?;
-    state.changed(Change::PostCreated { post_id }).await?;
-    state.changed(Change::ModLogged).await?;
     Ok(Ok(post_id))
 }
 
@@ -1712,7 +1755,7 @@ pub async fn reject(state: &AppState, viewer: &Viewer, held_id: i64, reason: &st
         return Ok(Err(refusal));
     }
     let mut tx = state.db().begin().await?;
-    let Some(held) = mod_records::claim_held(&mut tx, held_id).await? else {
+    let Some(held) = mod_records::claim_held(&mut tx, held_id, "held").await? else {
         return Ok(Err(Refused::NotFound));
     };
     mod_records::decide_held(&mut tx, held.id, user.id, None).await?;
@@ -1762,16 +1805,38 @@ pub async fn held_for(state: &AppState, viewer: &Viewer, id: i64) -> Outcome<Hel
 // ---------------------------------------------------------------------------
 // Appeals
 
-/// Decides an appeal: `overturn` undoes the action where it can be undone
-/// (showing a hidden post, restoring a deleted post or thread, unlocking,
-/// lifting a silence or suspension); either way its member is told.
+/// What deciding an appeal did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reversal {
+    /// The decision was kept.
+    Kept,
+    /// The decision was reversed, and what it did undone.
+    Undone,
+    /// The decision was reversed, but what it did has since been changed
+    /// by a later, separate action, which was left alone.
+    Superseded,
+    /// The decision was reversed, but there was nothing to undo: it had run
+    /// out or been undone already, or it can't be undone (an edit or a
+    /// redaction).
+    NothingToUndo,
+}
+
+/// Decides an appeal. Reversing it (`overturn`) undoes the action where it
+/// can be undone and what it did still stands: showing a hidden post,
+/// restoring a deleted post or thread, unlocking a thread, lifting a
+/// silence or suspension, or posting a rejected post. A later, separate
+/// action (a new suspension, a post hidden again for another reason) is
+/// left alone. Reversing the appeal of the member an invite branch was
+/// suspended for lifts the suspension of the whole branch; reversing the
+/// appeal of anyone else in it lifts only theirs. Either way the member
+/// is told.
 pub async fn decide_appeal(
     state: &AppState,
     viewer: &Viewer,
     report_id: i64,
     overturn: bool,
     reason: &str,
-) -> Outcome<()> {
+) -> Outcome<Reversal> {
     let user = staff_or_refuse!(viewer);
     let Some(report) = mod_records::report(state.db(), report_id)
         .await?
@@ -1789,47 +1854,14 @@ pub async fn decide_appeal(
     };
     let member_id = report.user_id.expect("appeals have members");
     let db = state.db();
-    if overturn {
-        match (action.action.as_str(), action.post_id, action.thread_id) {
-            ("hide_post", Some(post_id), _) => {
-                if mod_records::set_hidden(db, post_id, None).await? {
-                    state.changed(Change::PostRemoved { post_id }).await?;
-                }
-            }
-            ("delete_post", Some(post_id), _) => {
-                if mod_records::set_deleted(db, post_id, user.id, true).await? {
-                    state.changed(Change::PostRemoved { post_id }).await?;
-                }
-            }
-            ("delete_thread", _, Some(thread_id)) => {
-                if mod_records::set_thread_deleted(db, thread_id, true).await? {
-                    state
-                        .changed(Change::ThreadChanged {
-                            thread_id,
-                            previous_category_id: None,
-                        })
-                        .await?;
-                }
-            }
-            ("lock_thread", _, Some(thread_id)) => {
-                if mod_records::set_locked(db, thread_id, false).await? {
-                    state
-                        .changed(Change::ThreadChanged {
-                            thread_id,
-                            previous_category_id: None,
-                        })
-                        .await?;
-                }
-            }
-            ("silence", _, _) => {
-                mod_records::restrict(db, &[member_id], Restriction::Silence, None).await?;
-            }
-            ("suspend" | "suspend_branch", _, _) => {
-                mod_records::restrict(db, &[member_id], Restriction::Suspend, None).await?;
-            }
-            _ => {}
+    let reversal = if overturn {
+        match undo(state, user, &action, member_id).await? {
+            Ok(reversal) => reversal,
+            Err(refusal) => return Ok(Err(refusal)),
         }
-    }
+    } else {
+        Reversal::Kept
+    };
     mod_records::settle(db, Settles::Report(report.id), !overturn, user.id, &reason).await?;
     mod_records::record(
         db,
@@ -1847,7 +1879,10 @@ pub async fn decide_appeal(
             post_id: action.post_id,
             reason: &reason,
             public: false,
-            details: json!({ "mod_action_id": action.id }),
+            details: json!({
+                "mod_action_id": action.id,
+                "undone": reversal == Reversal::Undone,
+            }),
         },
     )
     .await?;
@@ -1865,7 +1900,150 @@ pub async fn decide_appeal(
     .await?;
     notify::counts_changed(state, member_id);
     state.changed(Change::ModLogged).await?;
-    Ok(Ok(()))
+    Ok(Ok(reversal))
+}
+
+/// Undoes an action contested by `member_id`, if what it did still
+/// stands.
+async fn undo(
+    state: &AppState,
+    user: &UserCtx,
+    action: &ActionRecord,
+    member_id: i64,
+) -> Result<Result<Reversal, Refused>, AppError> {
+    let db = state.db();
+    // A member deleted since has nothing to get back.
+    if member_by_id(state, member_id)
+        .await?
+        .is_none_or(|m| m.deleted)
+    {
+        return Ok(Ok(Reversal::NothingToUndo));
+    }
+    // Whether this is still the newest of the actions that set the same
+    // state of a post or thread.
+    let newest = |kind: &'static str, id: i64, family: &'static [&'static str]| async move {
+        Ok::<bool, AppError>(
+            mod_records::latest_action(db, kind, id, family).await? == Some(action.id),
+        )
+    };
+    let thread_changed = |thread_id: i64| async move {
+        state
+            .changed(Change::ThreadChanged {
+                thread_id,
+                previous_category_id: None,
+            })
+            .await
+    };
+    let undone = |changed: bool| {
+        if changed {
+            Reversal::Undone
+        } else {
+            Reversal::NothingToUndo
+        }
+    };
+    Ok(Ok(
+        match (action.action.as_str(), action.post_id, action.thread_id) {
+            ("hide_post", Some(post_id), _) => {
+                if !newest("post", post_id, &["hide_post", "unhide_post"]).await? {
+                    Reversal::Superseded
+                } else if mod_records::set_hidden(db, post_id, None).await? {
+                    state.changed(Change::PostRemoved { post_id }).await?;
+                    Reversal::Undone
+                } else {
+                    // Deleted since.
+                    Reversal::Superseded
+                }
+            }
+            ("delete_post", Some(post_id), _) => {
+                if !newest("post", post_id, &["delete_post", "restore_post"]).await? {
+                    Reversal::Superseded
+                } else {
+                    let changed = mod_records::set_deleted(db, post_id, user.id, true).await?;
+                    if changed {
+                        state.changed(Change::PostRemoved { post_id }).await?;
+                    }
+                    undone(changed)
+                }
+            }
+            ("delete_thread", _, Some(thread_id)) => {
+                if !newest("thread", thread_id, &["delete_thread", "restore_thread"]).await? {
+                    Reversal::Superseded
+                } else {
+                    let changed = mod_records::set_thread_deleted(db, thread_id, true).await?;
+                    if changed {
+                        thread_changed(thread_id).await?;
+                    }
+                    undone(changed)
+                }
+            }
+            ("lock_thread", _, Some(thread_id)) => {
+                if !newest("thread", thread_id, &["lock_thread", "unlock_thread"]).await? {
+                    Reversal::Superseded
+                } else {
+                    let changed = mod_records::set_locked(db, thread_id, false).await?;
+                    if changed {
+                        thread_changed(thread_id).await?;
+                    }
+                    undone(changed)
+                }
+            }
+            ("silence" | "suspend" | "suspend_branch", _, _) => {
+                let restriction = if action.action == "silence" {
+                    Restriction::Silence
+                } else {
+                    Restriction::Suspend
+                };
+                // The member the branch was suspended for contests it for
+                // the whole branch; anyone else, for themselves.
+                let ids = if action.user_id == Some(member_id) {
+                    action.affected()
+                } else {
+                    vec![member_id]
+                };
+                let Some(until) = action.until() else {
+                    return Ok(Ok(Reversal::NothingToUndo));
+                };
+                let lifted = mod_records::lift_if_until(db, &ids, restriction, until).await?;
+                for id in &lifted {
+                    notify::counts_changed(state, *id);
+                    if *id != member_id {
+                        tell(
+                            state,
+                            *id,
+                            user,
+                            "A moderator lifted your suspension: the suspension of the invite branch you were suspended with was reversed.".to_owned(),
+                            None,
+                        )
+                        .await?;
+                    }
+                }
+                if lifted.len() == ids.len() {
+                    Reversal::Undone
+                } else if mod_records::restricted_now(db, &ids, restriction).await? > 0 {
+                    Reversal::Superseded
+                } else {
+                    undone(!lifted.is_empty())
+                }
+            }
+            ("reject_post", _, _) => {
+                let mut tx = db.begin().await?;
+                let Some(held) =
+                    mod_records::claim_held(&mut tx, action.target_id, "rejected").await?
+                else {
+                    return Ok(Ok(Reversal::NothingToUndo));
+                };
+                let post_id = match publish_held(state, user, &mut tx, &held).await? {
+                    Ok(post_id) => post_id,
+                    Err(refusal) => return Ok(Err(refusal)),
+                };
+                tx.commit().await?;
+                state.jobs().wake();
+                state.changed(Change::PostCreated { post_id }).await?;
+                Reversal::Undone
+            }
+            _ => Reversal::NothingToUndo,
+        },
+    ))
 }
 
 // ---------------------------------------------------------------------------

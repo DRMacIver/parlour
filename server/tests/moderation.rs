@@ -1281,7 +1281,7 @@ async fn deleting_a_spammer_removes_everything(pool: PgPool) {
     ok(
         &s.f,
         "/mod/users/cheapdeals/spammer",
-        &[("reason", "Spam")],
+        &[("reason", "Spam"), ("confirm", "yes")],
         &s.mo_cookie,
     )
     .await;
@@ -1709,12 +1709,13 @@ enum Try {
     StartConversation,
     MessageMember,
     MessageStaff,
+    MessageStaffAndMember,
     Invite,
     Report,
     Delete,
 }
 
-const TRIES: [Try; 13] = [
+const TRIES: [Try; 14] = [
     Try::ReadMembersThread,
     Try::ReadConversation,
     Try::NewThread,
@@ -1725,6 +1726,7 @@ const TRIES: [Try; 13] = [
     Try::StartConversation,
     Try::MessageMember,
     Try::MessageStaff,
+    Try::MessageStaffAndMember,
     Try::Invite,
     Try::Report,
     Try::Delete,
@@ -1733,8 +1735,8 @@ const TRIES: [Try; 13] = [
 /// The reference rule (DESIGN.md §3.1, §8), written separately from the
 /// app's: a suspended member does nothing but read what visitors read; a
 /// silenced one reads everything, and may report, delete their own posts
-/// and answer staff, but writes nothing else; a restriction that has run
-/// out restricts nothing.
+/// and answer staff (in conversations with nobody else), but writes
+/// nothing else; a restriction that has run out restricts nothing.
 fn may(standing: Standing, attempt: Try) -> bool {
     let suspended = standing == Standing::Suspended;
     let silenced = suspended || standing == Standing::Silenced;
@@ -1748,6 +1750,7 @@ fn may(standing: Standing, attempt: Try) -> bool {
         | Try::Fork
         | Try::StartConversation
         | Try::MessageMember
+        | Try::MessageStaffAndMember
         | Try::Invite => !silenced,
     }
 }
@@ -1824,6 +1827,7 @@ fn restrictions_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle
         };
         let with_ruth = start(&ruth_cookie, "me").await;
         let with_staff = start(&mo_cookie, "me").await;
+        let with_both = start(&mo_cookie, "me, ruth").await;
         let restriction = match standing {
             Standing::Good => None,
             Standing::Silenced => Some(("silenced_until", "now() + interval '1 day'")),
@@ -1864,6 +1868,9 @@ fn restrictions_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle
                 ),
                 Try::MessageMember => (format!("/messages/{with_ruth}"), vec![("body", "Hi".into())]),
                 Try::MessageStaff => (format!("/messages/{with_staff}"), vec![("body", "Sorry".into())]),
+                Try::MessageStaffAndMember => {
+                    (format!("/messages/{with_both}"), vec![("body", "Ruth, listen".into())])
+                }
                 Try::Invite => ("/invites".into(), vec![("note", "A friend".into())]),
                 Try::Report => (
                     format!("/p/{}/report", t.first_post_id),
@@ -1912,4 +1919,757 @@ async fn silenced_and_suspended_members_are_kept_to_what_they_may_do(pool: PgPoo
     tokio::task::spawn_blocking(move || restrictions_follow_the_rule(&rt, &pool))
         .await
         .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Appeals
+
+/// The appeal a member made against an action.
+async fn appeal_against(f: &Forum, action: i64, user: i64) -> i64 {
+    count(
+        f,
+        &format!(
+            "SELECT id FROM reports WHERE kind = 'appeal' AND mod_action_id = {action} AND user_id = {user}"
+        ),
+    )
+    .await
+}
+
+/// Reverses an appeal, and returns the page the moderator is sent to.
+async fn reverse(f: &Forum, appeal: i64, cookie: &str) -> String {
+    let response = ok(
+        f,
+        &format!("/mod/appeals/{appeal}"),
+        &[("decision", "overturn"), ("reason", "Fair enough")],
+        cookie,
+    )
+    .await;
+    f.page_as(response.location(), cookie).await
+}
+
+async fn holds(f: &Forum, condition: &str) -> bool {
+    count(f, &format!("SELECT count(*) FROM {condition}")).await == 1
+}
+
+/// Reversing an appeal undoes the action contested only while what it did
+/// still stands. A later, separate action is left alone, and the moderator
+/// is told so.
+#[sqlx::test]
+async fn reversing_an_appeal_leaves_later_actions_alone(pool: PgPool) {
+    let mut s = setup(pool).await;
+    s.f = s.f.without_rate_limits();
+    let jonah = s.jonah;
+    let contest = |action: i64| {
+        let f = &s.f;
+        let cookie = s.jonah_cookie.clone();
+        async move {
+            ok_or_200(
+                f,
+                &format!("/appeal/{action}"),
+                &[("details", "That was unfair")],
+                &cookie,
+            )
+            .await;
+            appeal_against(f, action, jonah).await
+        }
+    };
+    let act = |path: String, fields: Vec<(&'static str, &'static str)>| {
+        let f = &s.f;
+        let cookie = s.mo_cookie.clone();
+        async move {
+            ok(f, &path, &fields, &cookie).await;
+            last_action(f).await
+        }
+    };
+
+    // A day's suspension, contested; then a separate year's suspension.
+    let short = act(
+        "/mod/users/jonah/suspend".into(),
+        vec![("days", "1"), ("reason", "Rude")],
+    )
+    .await;
+    let appeal = contest(short).await;
+    act(
+        "/mod/users/jonah/suspend".into(),
+        vec![("days", "365"), ("reason", "Threats")],
+    )
+    .await;
+    let page = reverse(&s.f, appeal, &s.mo_cookie).await;
+    assert!(page.contains("a later action"), "{page}");
+    assert!(
+        holds(
+            &s.f,
+            &format!("users WHERE id = {jonah} AND suspended_until > now() + interval '300 days'")
+        )
+        .await
+    );
+    // He is told it was reversed all the same.
+    let notes = s.f.page_as("/notifications", &s.jonah_cookie).await;
+    assert!(notes.contains("reversed their decision"), "{notes}");
+    s.f.exec(&format!(
+        "UPDATE users SET suspended_until = NULL WHERE id = {jonah}"
+    ))
+    .await;
+
+    // The same for a silence lifted and then imposed again.
+    let first = act(
+        "/mod/users/jonah/silence".into(),
+        vec![("days", "1"), ("reason", "Rude")],
+    )
+    .await;
+    let appeal = contest(first).await;
+    act(
+        "/mod/users/jonah/unsilence".into(),
+        vec![("reason", "Calmer")],
+    )
+    .await;
+    act(
+        "/mod/users/jonah/silence".into(),
+        vec![("days", "30"), ("reason", "Rude again")],
+    )
+    .await;
+    reverse(&s.f, appeal, &s.mo_cookie).await;
+    assert!(
+        holds(
+            &s.f,
+            &format!("users WHERE id = {jonah} AND silenced_until > now() + interval '20 days'")
+        )
+        .await
+    );
+    s.f.exec(&format!(
+        "UPDATE users SET silenced_until = NULL WHERE id = {jonah}"
+    ))
+    .await;
+
+    // A post hidden, shown, and hidden again for another reason.
+    let t = s.f.thread(s.games, s.ruth, "Thread", "Opening").await;
+    let post = s.f.post(t.thread_id, jonah, "A reply").await;
+    let hide = |action: &'static str, reason: &'static str| {
+        act(
+            format!("/mod/p/{post}"),
+            vec![("action", action), ("reason", reason)],
+        )
+    };
+    let first = hide("hide", "Off topic").await;
+    let appeal = contest(first).await;
+    hide("unhide", "On reflection").await;
+    hide("hide", "Personal information").await;
+    let page = reverse(&s.f, appeal, &s.mo_cookie).await;
+    assert!(page.contains("a later action"), "{page}");
+    assert!(
+        holds(
+            &s.f,
+            &format!("posts WHERE id = {post} AND hidden_at IS NOT NULL")
+        )
+        .await
+    );
+    // Deleted, restored and deleted again.
+    hide("unhide", "Fixed").await;
+    let first = hide("delete", "Spam").await;
+    let appeal = contest(first).await;
+    hide("restore", "Not spam").await;
+    hide("delete", "Spam after all").await;
+    reverse(&s.f, appeal, &s.mo_cookie).await;
+    assert!(
+        holds(
+            &s.f,
+            &format!("posts WHERE id = {post} AND deleted_at IS NOT NULL")
+        )
+        .await
+    );
+
+    // A thread locked, unlocked and locked again; then the same for
+    // deleting it.
+    let own = s.f.thread(s.games, jonah, "Jonah's", "Mine").await;
+    let thread = |action: &'static str, reason: &'static str| {
+        act(
+            format!("/mod/t/{}", own.thread_id),
+            vec![("action", action), ("reason", reason)],
+        )
+    };
+    let first = thread("lock", "Heated").await;
+    let appeal = contest(first).await;
+    thread("unlock", "Cooler").await;
+    thread("lock", "Heated again").await;
+    reverse(&s.f, appeal, &s.mo_cookie).await;
+    assert!(
+        holds(
+            &s.f,
+            &format!("threads WHERE id = {} AND locked", own.thread_id)
+        )
+        .await
+    );
+    let first = thread("delete", "Spam").await;
+    let appeal = contest(first).await;
+    thread("restore", "Not spam").await;
+    thread("delete", "Spam after all").await;
+    reverse(&s.f, appeal, &s.mo_cookie).await;
+    assert!(
+        holds(
+            &s.f,
+            &format!(
+                "threads WHERE id = {} AND deleted_at IS NOT NULL",
+                own.thread_id
+            )
+        )
+        .await
+    );
+
+    // With nothing later, reversing undoes it.
+    let other = s.f.post(t.thread_id, jonah, "Another reply").await;
+    ok(
+        &s.f,
+        &format!("/mod/p/{other}"),
+        &[("action", "hide"), ("reason", "Hmm")],
+        &s.mo_cookie,
+    )
+    .await;
+    let appeal = contest(last_action(&s.f).await).await;
+    let page = reverse(&s.f, appeal, &s.mo_cookie).await;
+    assert!(!page.contains("a later action"), "{page}");
+    assert!(
+        holds(
+            &s.f,
+            &format!("posts WHERE id = {other} AND hidden_at IS NULL")
+        )
+        .await
+    );
+}
+
+/// Everyone suspended with an invite branch can contest it. Reversing a
+/// member's appeal lifts their own suspension; reversing the appeal of
+/// the member the branch was suspended for lifts it for the whole branch,
+/// except for anyone suspended again since.
+#[sqlx::test]
+async fn invite_branch_members_contest_a_branch_suspension(pool: PgPool) {
+    let mut s = setup(pool).await;
+    s.f = s.f.without_rate_limits();
+    let nell = s.f.invitee("nell", s.jonah).await;
+    let otto = s.f.invitee("otto", nell).await;
+    s.f.invitee("pia", otto).await;
+    let nell_cookie = s.f.session(nell).await;
+    let otto_cookie = s.f.session(otto).await;
+    ok(
+        &s.f,
+        "/mod/users/nell/suspend-branch",
+        &[("days", "30"), ("reason", "Spam ring")],
+        &s.mo_cookie,
+    )
+    .await;
+    let action = last_action(&s.f).await;
+    for cookie in [&nell_cookie, &otto_cookie] {
+        let page = s.f.page_as("/", cookie).await;
+        assert!(page.contains("Your account is suspended"), "{page}");
+        assert!(page.contains(&format!("/appeal/{action}")), "{page}");
+        let notes = s.f.page_as("/notifications", cookie).await;
+        assert!(notes.contains(&format!("/appeal/{action}")), "{notes}");
+        s.f.page_as(&format!("/appeal/{action}"), cookie).await;
+        ok_or_200(
+            &s.f,
+            &format!("/appeal/{action}"),
+            &[("details", "I’m not a spammer")],
+            cookie,
+        )
+        .await;
+        // Once each.
+        let response =
+            s.f.submit(
+                &format!("/appeal/{action}"),
+                &[("details", "again")],
+                Some(cookie),
+            )
+            .await;
+        assert_status(&response, StatusCode::FORBIDDEN);
+    }
+    // Someone outside the branch can't.
+    let response =
+        s.f.get_as(&format!("/appeal/{action}"), Some(&s.ruth_cookie))
+            .await;
+    assert_status(&response, StatusCode::NOT_FOUND);
+    let suspended = || async {
+        sqlx::query_scalar::<_, String>(
+            "SELECT username::text FROM users WHERE suspended_until > now() ORDER BY username",
+        )
+        .fetch_all(&s.f.db)
+        .await
+        .unwrap()
+    };
+    reverse(&s.f, appeal_against(&s.f, action, otto).await, &s.mo_cookie).await;
+    assert_eq!(suspended().await, vec!["nell", "pia"]);
+    // Pia is suspended again on her own account; reversing Nell's appeal
+    // lifts the rest of the branch but not that.
+    ok(
+        &s.f,
+        "/mod/users/pia/suspend",
+        &[("days", "7"), ("reason", "Spam of her own")],
+        &s.mo_cookie,
+    )
+    .await;
+    reverse(&s.f, appeal_against(&s.f, action, nell).await, &s.mo_cookie).await;
+    assert_eq!(suspended().await, vec!["pia"]);
+}
+
+/// Reversing a rejected post's appeal posts it after all.
+#[sqlx::test]
+async fn reversing_a_rejection_posts_it(pool: PgPool) {
+    let mut s = setup(pool).await;
+    s.f = s.f.without_rate_limits();
+    settings::set(&s.f.db, "messages", &MessageSettings::default())
+        .await
+        .unwrap();
+    let tomasz = s.f.member("tomasz", "user", None).await;
+    let cookie = s.f.session(tomasz).await;
+    ok(
+        &s.f,
+        "/c/games/new",
+        &[("title", "Hi from Leeds!"), ("body", "Hello, I love Brass")],
+        &cookie,
+    )
+    .await;
+    let held = count(&s.f, "SELECT id FROM held_posts").await;
+    ok(
+        &s.f,
+        &format!("/mod/held/{held}/reject"),
+        &[("reason", "Looks like spam")],
+        &s.mo_cookie,
+    )
+    .await;
+    let action = last_action(&s.f).await;
+    ok_or_200(
+        &s.f,
+        &format!("/appeal/{action}"),
+        &[("details", "I really do love Brass")],
+        &cookie,
+    )
+    .await;
+    reverse(
+        &s.f,
+        appeal_against(&s.f, action, tomasz).await,
+        &s.mo_cookie,
+    )
+    .await;
+    assert!(s.f.page("/c/games").await.contains("Hi from Leeds!"));
+    assert!(
+        holds(
+            &s.f,
+            &format!("held_posts WHERE id = {held} AND status = 'approved'")
+        )
+        .await
+    );
+}
+
+/// The notice on every page links to the restriction in force, not merely
+/// the newest one.
+#[sqlx::test]
+async fn the_restriction_notice_contests_the_one_in_force(pool: PgPool) {
+    let s = setup(pool).await;
+    ok(
+        &s.f,
+        "/mod/users/jonah/silence",
+        &[("days", "30"), ("reason", "Rude")],
+        &s.mo_cookie,
+    )
+    .await;
+    let silence = last_action(&s.f).await;
+    ok(
+        &s.f,
+        "/mod/users/jonah/suspend",
+        &[("days", "1"), ("reason", "Very rude")],
+        &s.mo_cookie,
+    )
+    .await;
+    let suspension = last_action(&s.f).await;
+    let page = s.f.page_as("/", &s.jonah_cookie).await;
+    assert!(page.contains(&format!("/appeal/{suspension}")), "{page}");
+    // The suspension runs out.
+    s.f.exec(&format!(
+        "UPDATE users SET suspended_until = now() - interval '1 second' WHERE id = {}",
+        s.jonah
+    ))
+    .await;
+    let page = s.f.page_as("/", &s.jonah_cookie).await;
+    assert!(page.contains("Your account is silenced"), "{page}");
+    assert!(page.contains(&format!("/appeal/{silence}")), "{page}");
+    assert!(!page.contains(&format!("/appeal/{suspension}")), "{page}");
+}
+
+// ---------------------------------------------------------------------------
+// The moderators' pages
+
+/// Staff reading a reported conversation can't react in it either.
+#[sqlx::test]
+async fn staff_dont_react_in_reported_conversations(pool: PgPool) {
+    let s = setup(pool).await;
+    let response = ok(
+        &s.f,
+        "/messages/new",
+        &[("to", "ruth"), ("body", "why are you ignoring me")],
+        &s.jonah_cookie,
+    )
+    .await;
+    let conversation: String = response
+        .location()
+        .trim_start_matches("/messages/")
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    let post = count(&s.f, "SELECT max(id) FROM posts").await;
+    report(&s.f, &s.ruth_cookie, post, "harassment", "").await;
+    let page =
+        s.f.page_as(&format!("/messages/{conversation}"), &s.mo_cookie)
+            .await;
+    assert!(page.contains("why are you ignoring me"), "{page}");
+    assert!(
+        !page.contains(&format!("action=\"/p/{post}/reactions\"")),
+        "{page}"
+    );
+    let response =
+        s.f.submit(
+            &format!("/p/{post}/reactions"),
+            &[("emoji", "👍"), ("action", "add")],
+            Some(&s.mo_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+    assert_eq!(count(&s.f, "SELECT count(*) FROM reactions").await, 0);
+    // Those in it still can.
+    ok(
+        &s.f,
+        &format!("/p/{post}/reactions"),
+        &[("emoji", "👍"), ("action", "add")],
+        &s.ruth_cookie,
+    )
+    .await;
+    assert_eq!(count(&s.f, "SELECT count(*) FROM reactions").await, 1);
+}
+
+/// Deleted threads and posts can be found and restored from the pages.
+#[sqlx::test]
+async fn deleted_threads_and_posts_can_be_restored_from_the_pages(pool: PgPool) {
+    let s = setup(pool).await;
+    let t =
+        s.f.thread(s.games, s.jonah, "Christmas market", "Who’s going?")
+            .await;
+    let reply = s.f.post(t.thread_id, s.maya, "Buy watches").await;
+    let action = format!("/mod/t/{}", t.thread_id);
+    ok(
+        &s.f,
+        &format!("/mod/p/{reply}"),
+        &[("action", "delete"), ("reason", "Spam")],
+        &s.mo_cookie,
+    )
+    .await;
+    // The tombstone leads staff to the post, and the log does too.
+    let page =
+        s.f.page_as(
+            &format!("/t/{}/christmas-market", t.thread_id),
+            &s.mo_cookie,
+        )
+        .await;
+    assert!(
+        post_html(&page, reply).contains(&format!("href=\"/mod/p/{reply}\"")),
+        "{page}"
+    );
+    let page =
+        s.f.page_as(
+            &format!("/t/{}/christmas-market", t.thread_id),
+            &s.ruth_cookie,
+        )
+        .await;
+    assert!(!page.contains("/mod/p/"), "{page}");
+    let log = s.f.page_as("/mod/log", &s.mo_cookie).await;
+    assert!(log.contains(&format!("href=\"/mod/p/{reply}\"")), "{log}");
+    let page = s.f.page_as(&format!("/mod/p/{reply}"), &s.mo_cookie).await;
+    assert!(page.contains("value=\"restore\""), "{page}");
+
+    // Deleting the thread leads to its page, which offers to restore it.
+    let response = ok(
+        &s.f,
+        &action,
+        &[("action", "delete"), ("reason", "Spam")],
+        &s.mo_cookie,
+    )
+    .await;
+    assert!(
+        response.location().starts_with(&action),
+        "{}",
+        response.location()
+    );
+    let page = s.f.page_as(response.location(), &s.mo_cookie).await;
+    assert!(page.contains("Christmas market"), "{page}");
+    assert!(page.contains("value=\"restore\""), "{page}");
+    assert!(!page.contains("value=\"lock\""), "{page}");
+    let log = s.f.page_as("/mod/log", &s.mo_cookie).await;
+    assert!(log.contains(&format!("href=\"{action}\"")), "{log}");
+    // Members still find nothing there.
+    let response = s.f.get_as(&action, Some(&s.ruth_cookie)).await;
+    assert_status(&response, StatusCode::NOT_FOUND);
+    assert!(!response.body.contains("Christmas market"));
+    ok(
+        &s.f,
+        &action,
+        &[("action", "restore"), ("reason", "Not spam")],
+        &s.mo_cookie,
+    )
+    .await;
+    s.f.page_as(
+        &format!("/t/{}/christmas-market", t.thread_id),
+        &s.ruth_cookie,
+    )
+    .await;
+}
+
+/// The parts of a form, one string for each `<form>`.
+fn forms(html: &str) -> Vec<&str> {
+    html.split("<form")
+        .skip(1)
+        .map(|rest| rest.split("</form>").next().unwrap())
+        .collect()
+}
+
+/// Pressing Enter in a moderation form's text box does nothing: in forms
+/// with several actions, the first submit button, which implicit
+/// submission uses, is disabled.
+fn assert_enter_does_nothing(html: &str) {
+    let mut checked = 0;
+    for form in forms(html) {
+        let buttons: Vec<&str> = form
+            .split("<button")
+            .skip(1)
+            .map(|b| b.split('>').next().unwrap())
+            .filter(|b| !b.contains("type=\"button\""))
+            .collect();
+        if buttons.len() > 1 {
+            assert!(buttons[0].contains("disabled"), "{form}");
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "{html}");
+}
+
+#[sqlx::test]
+async fn enter_in_a_moderation_form_does_nothing(pool: PgPool) {
+    let mut s = setup(pool).await;
+    s.f = s.f.without_rate_limits();
+    let t = s.f.thread(s.games, s.jonah, "Thread", "Spam here").await;
+    report(&s.f, &s.ruth_cookie, t.first_post_id, "spam", "").await;
+    s.f.submit(
+        "/u/jonah/report",
+        &[("reason", "spam")],
+        Some(&s.ruth_cookie),
+    )
+    .await;
+    ok(
+        &s.f,
+        "/mod/users/maya/silence",
+        &[("days", "1"), ("reason", "Rude")],
+        &s.mo_cookie,
+    )
+    .await;
+    ok_or_200(
+        &s.f,
+        &format!("/appeal/{}", last_action(&s.f).await),
+        &[("details", "Unfair")],
+        &s.maya_cookie,
+    )
+    .await;
+    settings::set(&s.f.db, "messages", &MessageSettings::default())
+        .await
+        .unwrap();
+    let tomasz = s.f.member("tomasz", "user", None).await;
+    let cookie = s.f.session(tomasz).await;
+    ok(
+        &s.f,
+        "/c/games/new",
+        &[("title", "Hi"), ("body", "Hello")],
+        &cookie,
+    )
+    .await;
+    let queue = s.f.page_as("/mod/queue", &s.mo_cookie).await;
+    for kind in [
+        "Report",
+        "Report on a member",
+        "Appeal",
+        "Held for approval",
+    ] {
+        let item = queue
+            .split("<article class=\"panel queue-item\"")
+            .find(|item| item.contains(&format!(">{kind}</span>")))
+            .unwrap_or_else(|| panic!("{kind}: {queue}"));
+        assert_enter_does_nothing(item);
+    }
+    // The held post's item has no use for a duration.
+    let held = queue
+        .split("<article class=\"panel queue-item\"")
+        .find(|item| item.contains("Held for approval"))
+        .unwrap();
+    assert!(!held.contains("name=\"days\""), "{held}");
+    for path in [
+        "/mod/users/jonah".to_owned(),
+        format!("/mod/t/{}", t.thread_id),
+        format!("/mod/p/{}", t.first_post_id),
+    ] {
+        assert_enter_does_nothing(&s.f.page_as(&path, &s.mo_cookie).await);
+    }
+}
+
+/// Deleting a spammer can't be undone, so it is asked about first.
+#[sqlx::test]
+async fn deleting_a_spammer_is_confirmed_first(pool: PgPool) {
+    let s = setup(pool).await;
+    let t =
+        s.f.thread(s.games, s.jonah, "Jonah's thread", "Hello")
+            .await;
+    s.f.post(t.thread_id, s.ruth, "Ruth's reply").await;
+    let response =
+        s.f.submit(
+            "/mod/users/jonah/spammer",
+            &[("reason", "Spam"), ("back", "/mod/queue?done=1")],
+            Some(&s.mo_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::OK);
+    assert!(
+        response.body.contains("Delete jonah as a spammer?"),
+        "{}",
+        response.body
+    );
+    assert!(response.body.contains("1 thread"), "{}", response.body);
+    assert!(
+        response.body.contains("1 reply by other members"),
+        "{}",
+        response.body
+    );
+    assert!(
+        response.body.contains("value=\"Spam\""),
+        "{}",
+        response.body
+    );
+    assert_eq!(
+        count(
+            &s.f,
+            "SELECT count(*) FROM users WHERE deleted_at IS NOT NULL"
+        )
+        .await,
+        0
+    );
+    assert_eq!(count(&s.f, "SELECT count(*) FROM mod_actions").await, 0);
+    ok(
+        &s.f,
+        "/mod/users/jonah/spammer",
+        &[("reason", "Spam"), ("confirm", "yes")],
+        &s.mo_cookie,
+    )
+    .await;
+    assert_eq!(
+        count(
+            &s.f,
+            "SELECT count(*) FROM users WHERE deleted_at IS NOT NULL"
+        )
+        .await,
+        1
+    );
+}
+
+/// A silenced member may answer the moderators, but not other members in
+/// the same conversation.
+#[sqlx::test]
+async fn silenced_members_dont_message_members_through_staff(pool: PgPool) {
+    let s = setup(pool).await;
+    let response = ok(
+        &s.f,
+        "/messages/new",
+        &[("to", "jonah, ruth"), ("body", "Let’s sort this out")],
+        &s.mo_cookie,
+    )
+    .await;
+    let conversation: String = response
+        .location()
+        .trim_start_matches("/messages/")
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    ok(
+        &s.f,
+        "/mod/users/jonah/silence",
+        &[("days", "1"), ("reason", "x")],
+        &s.mo_cookie,
+    )
+    .await;
+    let response =
+        s.f.submit(
+            &format!("/messages/{conversation}"),
+            &[("body", "Ruth, listen")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+}
+
+/// A post moved out of a thread and back has one anchor there.
+#[sqlx::test]
+async fn a_post_moved_away_and_back_has_one_anchor(pool: PgPool) {
+    let s = setup(pool).await;
+    let a = s.f.thread(s.games, s.ruth, "Thread A", "A one").await;
+    let moving = s.f.post(a.thread_id, s.jonah, "Wanderer").await;
+    s.f.post(a.thread_id, s.ruth, "A three").await;
+    let b = s.f.thread(s.games, s.ruth, "Thread B", "B one").await;
+    let move_to = |from: i64, numbers: &'static str, to: i64| {
+        let f = &s.f;
+        let cookie = s.mo_cookie.clone();
+        async move {
+            ok(
+                f,
+                &format!("/mod/t/{from}/move-posts"),
+                &[
+                    ("numbers", numbers),
+                    ("to", "existing"),
+                    ("thread", &to.to_string()),
+                    ("reason", "Tidying"),
+                ],
+                &cookie,
+            )
+            .await;
+        }
+    };
+    move_to(a.thread_id, "2", b.thread_id).await;
+    move_to(b.thread_id, "2", a.thread_id).await;
+    let page = s.f.page(&format!("/t/{}/thread-a", a.thread_id)).await;
+    assert!(page.contains("Wanderer"), "{page}");
+    assert_eq!(
+        page.matches(&format!("id=\"p{moving}\"")).count(),
+        1,
+        "{page}"
+    );
+}
+
+/// The first unread post of a thread merged into another is found there.
+#[sqlx::test]
+async fn unread_follows_a_merge(pool: PgPool) {
+    let s = setup(pool).await;
+    let target = s.f.thread(s.games, s.ruth, "Main thread", "Main one").await;
+    let dupe = s.f.thread(s.games, s.jonah, "Duplicate", "Dupe one").await;
+    ok(
+        &s.f,
+        &format!("/mod/t/{}/move-posts", dupe.thread_id),
+        &[
+            ("numbers", "1"),
+            ("to", "existing"),
+            ("thread", &target.thread_id.to_string()),
+            ("reason", "Merge"),
+        ],
+        &s.mo_cookie,
+    )
+    .await;
+    let response =
+        s.f.get_as(
+            &format!("/t/{}/unread", dupe.thread_id),
+            Some(&s.maya_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        response.location(),
+        format!("/t/{}/unread", target.thread_id)
+    );
 }

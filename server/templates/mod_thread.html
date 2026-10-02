@@ -11,6 +11,7 @@
 <p class="lede"><a href="{{ thread.href() }}">{{ thread.thread.title }}</a> · {{ crate::format::plural(thread.last_seq, "post", "posts") }}{% if thread.locked %} · <span class="flag">Locked</span>{% endif %}{% if pinned %} · <span class="flag">Pinned</span>{% endif %}</p>
 
 <form class="panel" method="post" action="/mod/t/{{ thread.thread.id }}">
+  {% call md::no_enter() %}{% endcall %}
   <h2 class="panel-bar">Lock, pin or delete</h2>
   <div class="form">
     <div class="field"><label for="reason-state">Reason</label><input id="reason-state" name="reason" type="text" maxlength="500" required></div>
@@ -23,6 +24,7 @@
 </form>
 
 <form class="panel" method="post" action="/mod/t/{{ thread.thread.id }}">
+  {% call md::no_enter() %}{% endcall %}
   <h2 class="panel-bar">Rename or move</h2>
   <div class="form">
     <div class="field"><label for="title">Title</label><input id="title" name="title" type="text" maxlength="150" value="{{ thread.thread.title }}"></div>

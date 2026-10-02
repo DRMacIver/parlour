@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{%- import "_mod.html" as md -%}
+{% block title %}Moderate “{{ thread.title }}” · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb">{% if let Some((name, slug)) = thread.category %}<a href="/c/{{ slug }}">{{ name }}</a>{% else %}A category you can’t see{% endif %} › <span aria-current="page">{{ thread.title }}</span></nav>
+<h1 class="page-title">Moderate the thread</h1>
+{% call md::mod_nav("") %}{% endcall %}
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+<p class="lede">{{ thread.title }} · <span class="flag">Deleted</span></p>
+{% if let Some((id, title)) = thread.merged_into %}
+<section class="panel">
+  <h2 class="panel-bar">Merged</h2>
+  <div class="panel-text"><p>All its posts were moved to <a href="/mod/t/{{ id }}">{{ title }}</a>, which its address now leads to. To bring some back, move them from there.</p></div>
+</section>
+{% else %}
+<form class="panel" method="post" action="/mod/t/{{ thread.id }}">
+  <h2 class="panel-bar">Restore it</h2>
+  <div class="form">
+    <p class="form-note">Members can read it again where they could before, with its posts as they were.</p>
+    <div class="field"><label for="reason-restore">Reason</label><input id="reason-restore" name="reason" type="text" maxlength="500" required></div>
+    <div class="form-actions"><button class="button" type="submit" name="action" value="restore">Restore the thread</button></div>
+  </div>
+</form>
+{% endif %}
+</div>
+{% endblock %}

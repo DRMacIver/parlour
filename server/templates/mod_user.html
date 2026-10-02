@@ -32,6 +32,7 @@
 
 {% if !member.deleted && !member.role.is_staff() %}
 <form class="panel" method="post" action="/mod/users/{{ member.user.username }}/silence">
+  {% call md::no_enter() %}{% endcall %}
   <h2 class="panel-bar">Act on this member</h2>
   <div class="form">
     <div class="field-row">

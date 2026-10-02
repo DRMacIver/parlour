@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.id FROM users u\n           JOIN mod_actions a\n             ON a.action IN ('silence', 'suspend', 'suspend_branch')\n            AND (a.user_id = u.id\n                 OR (a.action = 'suspend_branch' AND a.details->'user_ids' @> to_jsonb(u.id)))\n           WHERE u.id = $1\n             AND CASE WHEN u.suspended_until > now()\n                        THEN a.action <> 'silence'\n                             AND abs(extract(epoch FROM (a.details->>'until')::timestamptz - u.suspended_until)) < 0.001\n                      WHEN u.silenced_until > now()\n                        THEN a.action = 'silence'\n                             AND abs(extract(epoch FROM (a.details->>'until')::timestamptz - u.silenced_until)) < 0.001\n                      ELSE false END\n           ORDER BY a.created_at DESC, a.id DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mod_actions",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c5887192f5b438ddae6184764504819f89c8d8ac85e10de5d366e57f680e4dec"
+}

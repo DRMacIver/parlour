@@ -130,13 +130,22 @@
     <a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a>
     <span>{% if *by_moderator %}Post deleted by a moderator{% else %}Post deleted by its author{% endif %}</span>
     {% call m::time(post.created_at) %}{% endcall %}
+    {% if staff %}<span class="post-actions"><a href="/mod/p/{{ post.id }}">moderate</a></span>{% endif %}
   </article>
   {% when PostBody::Moved { to } %}
+  {% if self.moved_back(to) %}
+  <article class="post post-tombstone">
+    <span class="post-number">№ {{ post.seq }}</span>
+    <span>Moved away and back, to <a href="/p/{{ post.id }}">later in this thread</a></span>
+    {% call m::time(post.created_at) %}{% endcall %}
+  </article>
+  {% else %}
   <article class="post post-tombstone" id="p{{ post.id }}">
     <a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a>
     <span>{% if let Some(dest) = to %}Moved to <a href="/p/{{ post.id }}">{{ dest.title }}</a>{% else %}Moved to another thread{% endif %}</span>
     {% call m::time(post.created_at) %}{% endcall %}
   </article>
+  {% endif %}
   {% when PostBody::Hidden %}
   <article class="post post-tombstone" id="p{{ post.id }}">
     <a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a>

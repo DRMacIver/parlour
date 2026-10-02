@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT h.id, h.author_id, u.username AS \"username!: String\", u.display_name, h.category_id,\n                  h.title, h.forked_from_post_id, h.thread_id, h.reply_to_post_id, h.body_md, h.status,\n                  h.post_id, h.created_at\n           FROM held_posts h JOIN users u ON u.id = h.author_id\n           WHERE h.id = $1 AND h.status = 'held'\n           FOR UPDATE OF h",
+  "query": "SELECT h.id, h.author_id, u.username AS \"username!: String\", u.display_name, h.category_id,\n                  h.title, h.forked_from_post_id, h.thread_id, h.reply_to_post_id, h.body_md, h.status,\n                  h.post_id, h.created_at\n           FROM held_posts h JOIN users u ON u.id = h.author_id\n           WHERE h.id = $1 AND h.status = $2\n           FOR UPDATE OF h",
   "describe": {
     "columns": [
       {
@@ -154,7 +154,8 @@
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int8",
+        "Text"
       ]
     },
     "nullable": [
@@ -173,5 +174,5 @@
       false
     ]
   },
-  "hash": "ac72bf3a8be62b8e32fbf4c08b0bd224314bdda591611cad92652a8122b534f1"
+  "hash": "b7e79e12ef384f9818157b9912d85768f2f9665195d5c28fe1883372ceb75a00"
 }

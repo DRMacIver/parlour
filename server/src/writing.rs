@@ -492,6 +492,13 @@ pub async fn react(
     if !post.is_live() {
         return Ok(Err(Refused::NotFound));
     }
+    // Staff can read a reported conversation without being in it, but only
+    // those in it write in it, reactions included.
+    if let Some(conversation) = post.thread.conversation()
+        && !conversation.includes(user.id)
+    {
+        return Ok(Err(Refused::NotAllowed("You aren’t in this conversation.")));
+    }
     if let Some(why) = restriction(user) {
         return Ok(Err(Refused::NotAllowed(why)));
     }

@@ -260,6 +260,12 @@ impl ThreadTemplate {
         self.divider_before == Some(*post_id)
     }
 
+    /// Whether a post that moved away from here has since moved back, so
+    /// that the post itself, not its old place, has its anchor.
+    fn moved_back(&self, to: &Option<content::ThreadRef>) -> bool {
+        to.as_ref().is_some_and(|t| t.id == self.thread.thread.id)
+    }
+
     fn login_href(&self) -> String {
         format!(
             "/login?next={}",
@@ -390,7 +396,11 @@ pub async fn thread_unread(
         Some((post_id, location)) => {
             Ok(Redirect::temporary(&location.href(post_id)).into_response())
         }
-        None => web::not_found(&state, &viewer).await,
+        // A thread merged into another: what is unread there.
+        None => match content::moderation::merged_into(&state.db, &viewer, id).await? {
+            Some((to, _)) => Ok(Redirect::temporary(&format!("/t/{to}/unread")).into_response()),
+            None => web::not_found(&state, &viewer).await,
+        },
     }
 }
 

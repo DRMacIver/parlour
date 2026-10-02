@@ -173,9 +173,14 @@ pub async fn waiting_held(db: &Db) -> sqlx::Result<Vec<HeldPost>> {
 }
 
 /// Takes a held post to decide on it, locking it until the transaction
-/// ends, so that two moderators can't both approve it. `None` if it isn't
-/// waiting any more.
-pub async fn claim_held<'c>(db: impl Handle<'c>, id: i64) -> sqlx::Result<Option<HeldPost>> {
+/// ends, so that two moderators can't both approve it. `None` if its
+/// status isn't `status` (`held`, waiting; or `rejected`, for reversing a
+/// rejection).
+pub async fn claim_held<'c>(
+    db: impl Handle<'c>,
+    id: i64,
+    status: &str,
+) -> sqlx::Result<Option<HeldPost>> {
     let mut conn = db.open(KEY).acquire().await?;
     let row = sqlx::query_as!(
         HeldRow,
@@ -183,9 +188,10 @@ pub async fn claim_held<'c>(db: impl Handle<'c>, id: i64) -> sqlx::Result<Option
                   h.title, h.forked_from_post_id, h.thread_id, h.reply_to_post_id, h.body_md, h.status,
                   h.post_id, h.created_at
            FROM held_posts h JOIN users u ON u.id = h.author_id
-           WHERE h.id = $1 AND h.status = 'held'
+           WHERE h.id = $1 AND h.status = $2
            FOR UPDATE OF h"#,
-        id
+        id,
+        status
     )
     .fetch_optional(&mut *conn)
     .await?;
@@ -494,21 +500,43 @@ pub struct ActionRecord {
     pub id: i64,
     pub actor_id: i64,
     pub action: String,
+    /// What it was done to, of the kind the action is about (see
+    /// [`NewAction::target_kind`]).
+    pub target_id: i64,
     pub user_id: Option<i64>,
     pub thread_id: Option<i64>,
     pub post_id: Option<i64>,
     pub reason: String,
     pub details: Value,
     pub created_at: DateTime<Utc>,
-    /// Whether its member has contested it.
-    pub appealed: bool,
+}
+
+impl ActionRecord {
+    /// The members it affected: its member, and for an invite branch's
+    /// suspension everyone suspended with them.
+    pub fn affected(&self) -> Vec<i64> {
+        let mut ids: Vec<i64> = self.user_id.into_iter().collect();
+        if let Some(others) = self.details["user_ids"].as_array() {
+            ids.extend(others.iter().filter_map(Value::as_i64));
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+
+    /// When the silence or suspension it imposed was to end.
+    pub fn until(&self) -> Option<DateTime<Utc>> {
+        self.details["until"]
+            .as_str()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.with_timezone(&Utc))
+    }
 }
 
 pub async fn action(db: &Db, id: i64) -> sqlx::Result<Option<ActionRecord>> {
     let row = sqlx::query!(
-        r#"SELECT a.id, a.actor_id, a.action, a.user_id, a.thread_id, a.post_id, a.reason, a.details,
-                  a.created_at,
-                  EXISTS (SELECT 1 FROM reports r WHERE r.mod_action_id = a.id) AS "appealed!"
+        r#"SELECT a.id, a.actor_id, a.action, a.target_id, a.user_id, a.thread_id, a.post_id, a.reason,
+                  a.details, a.created_at
            FROM mod_actions a WHERE a.id = $1"#,
         id
     )
@@ -518,25 +546,68 @@ pub async fn action(db: &Db, id: i64) -> sqlx::Result<Option<ActionRecord>> {
         id: row.id,
         actor_id: row.actor_id,
         action: row.action,
+        target_id: row.target_id,
         user_id: row.user_id,
         thread_id: row.thread_id,
         post_id: row.post_id,
         reason: row.reason,
         details: row.details,
         created_at: row.created_at,
-        appealed: row.appealed,
     }))
 }
 
-/// The newest silence or suspension of a member still in force, for the
-/// notice on every page and the link to contest it.
+/// Whether a member has contested an action.
+pub async fn appealed_by(db: &Db, action_id: i64, user_id: i64) -> sqlx::Result<bool> {
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM reports WHERE kind = 'appeal' AND mod_action_id = $1
+                                                 AND user_id = $2) AS "appealed!""#,
+        action_id,
+        user_id
+    )
+    .fetch_one(db.pool())
+    .await
+}
+
+/// The action that imposed the silence or suspension of a member in force
+/// now, for the notice on every page and the link to contest it: the one
+/// whose end is the end of the restriction (a suspension, if both).
 pub async fn current_restriction(db: &Db, user_id: i64) -> sqlx::Result<Option<i64>> {
     sqlx::query_scalar!(
-        r#"SELECT a.id FROM mod_actions a JOIN users u ON u.id = a.user_id
-           WHERE a.user_id = $1 AND a.action IN ('silence', 'suspend', 'suspend_branch')
-             AND (u.suspended_until > now() OR u.silenced_until > now())
+        r#"SELECT a.id FROM users u
+           JOIN mod_actions a
+             ON a.action IN ('silence', 'suspend', 'suspend_branch')
+            AND (a.user_id = u.id
+                 OR (a.action = 'suspend_branch' AND a.details->'user_ids' @> to_jsonb(u.id)))
+           WHERE u.id = $1
+             AND CASE WHEN u.suspended_until > now()
+                        THEN a.action <> 'silence'
+                             AND abs(extract(epoch FROM (a.details->>'until')::timestamptz - u.suspended_until)) < 0.001
+                      WHEN u.silenced_until > now()
+                        THEN a.action = 'silence'
+                             AND abs(extract(epoch FROM (a.details->>'until')::timestamptz - u.silenced_until)) < 0.001
+                      ELSE false END
            ORDER BY a.created_at DESC, a.id DESC LIMIT 1"#,
         user_id
+    )
+    .fetch_optional(db.pool())
+    .await
+}
+
+/// The newest of these actions on a post or thread (`target_kind`), if
+/// any.
+pub async fn latest_action(
+    db: &Db,
+    target_kind: &str,
+    target_id: i64,
+    actions: &[&str],
+) -> sqlx::Result<Option<i64>> {
+    let actions: Vec<String> = actions.iter().map(|a| (*a).to_owned()).collect();
+    sqlx::query_scalar!(
+        "SELECT id FROM mod_actions WHERE target_kind = $1 AND target_id = $2 AND action = ANY($3)
+         ORDER BY created_at DESC, id DESC LIMIT 1",
+        target_kind,
+        target_id,
+        &actions
     )
     .fetch_optional(db.pool())
     .await
@@ -738,6 +809,51 @@ pub async fn restrict<'c>(
     .await
 }
 
+/// Lifts the silence or suspension of these members that ends at `until`
+/// and is still in force, leaving alone any that a later action changed.
+/// Returns those it lifted.
+pub async fn lift_if_until<'c>(
+    db: impl Handle<'c>,
+    user_ids: &[i64],
+    restriction: Restriction,
+    until: DateTime<Utc>,
+) -> sqlx::Result<Vec<i64>> {
+    let mut conn = db.open(KEY).acquire().await?;
+    let suspend = restriction == Restriction::Suspend;
+    sqlx::query_scalar!(
+        r#"UPDATE users SET silenced_until = CASE WHEN $2 THEN silenced_until ELSE NULL END,
+                            suspended_until = CASE WHEN $2 THEN NULL ELSE suspended_until END
+           WHERE id = ANY($1)
+             AND CASE WHEN $2 THEN suspended_until ELSE silenced_until END > now()
+             AND abs(extract(epoch FROM CASE WHEN $2 THEN suspended_until ELSE silenced_until END - $3))
+                 < 0.001
+           RETURNING id"#,
+        user_ids,
+        suspend,
+        until,
+    )
+    .fetch_all(&mut *conn)
+    .await
+}
+
+/// How many of these members are silenced (or suspended) now.
+pub async fn restricted_now(
+    db: &Db,
+    user_ids: &[i64],
+    restriction: Restriction,
+) -> sqlx::Result<i64> {
+    let suspend = restriction == Restriction::Suspend;
+    sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM users
+           WHERE id = ANY($1)
+             AND CASE WHEN $2 THEN suspended_until ELSE silenced_until END > now()"#,
+        user_ids,
+        suspend,
+    )
+    .fetch_one(db.pool())
+    .await
+}
+
 /// A member and everyone below them in the invite tree, who aren't staff
 /// and haven't been deleted, nearest first.
 pub async fn invite_branch(db: &Db, user_id: i64) -> sqlx::Result<Vec<UserRef>> {
@@ -776,6 +892,22 @@ pub async fn revoke_invites_of<'c>(db: impl Handle<'c>, user_ids: &[i64]) -> sql
     .execute(&mut *conn)
     .await?;
     Ok(done.rows_affected())
+}
+
+/// What deleting a spammer would take with them besides their own posts:
+/// the threads they started, and the replies other members wrote in them.
+pub async fn spammer_reach(db: &Db, user_id: i64) -> sqlx::Result<(i64, i64)> {
+    let row = sqlx::query!(
+        r#"SELECT (SELECT count(*) FROM threads
+                   WHERE author_id = $1 AND deleted_at IS NULL AND category_id IS NOT NULL) AS "threads!",
+                  (SELECT count(*) FROM posts p JOIN threads t ON t.id = p.thread_id
+                   WHERE t.author_id = $1 AND t.deleted_at IS NULL AND t.category_id IS NOT NULL
+                     AND p.author_id <> $1 AND p.deleted_at IS NULL) AS "replies!""#,
+        user_id
+    )
+    .fetch_one(db.pool())
+    .await?;
+    Ok((row.threads, row.replies))
 }
 
 /// What deleting a spammer removed.

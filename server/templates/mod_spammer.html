@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{%- import "_mod.html" as md -%}
+{% block title %}Delete {{ preview.member.user.username }} as a spammer? · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/mod/users">Members</a> › <a href="/mod/users/{{ preview.member.user.username }}">{{ preview.member.user.display_name }}</a></nav>
+<h1 class="page-title">Delete {{ preview.member.user.username }} as a spammer?</h1>
+{% call md::mod_nav("") %}{% endcall %}
+<p>This deletes the account, which can’t be used again, and everything it wrote. It can’t be undone. It removes:</p>
+<ul>
+  <li>{{ crate::format::plural(preview.member.posts, "post", "posts") }} they wrote, private messages included;</li>
+  <li>{{ crate::format::plural(preview.threads, "thread", "threads") }} they started, with {{ crate::format::plural(preview.replies, "reply by other members", "replies by other members") }} in them.</li>
+</ul>
+<p>To keep what others wrote, suspend them instead.</p>
+<form class="form" method="post" action="/mod/users/{{ preview.member.user.username }}/spammer">
+  <input type="hidden" name="confirm" value="yes">
+  <input type="hidden" name="back" value="{{ back }}">
+  <div class="field"><label for="reason">Reason</label><input id="reason" name="reason" type="text" maxlength="500" value="{{ reason }}" required></div>
+  <div class="form-actions">
+    <button class="button button-danger" type="submit">Delete {{ preview.member.user.username }} and everything they wrote</button>
+    <a href="{{ cancel }}">Keep them</a>
+  </div>
+</form>
+</div>
+{% endblock %}

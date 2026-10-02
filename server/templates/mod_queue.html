@@ -38,6 +38,7 @@
     </ul>
     {% let report = reports[0].id %}
     <form class="queue-actions" method="post" action="/mod/reports/{{ report }}/dismiss">
+      {% call md::no_enter() %}{% endcall %}
       <input type="hidden" name="report" value="{{ report }}">
       <input type="hidden" name="back" value="/mod/queue?done=1">
       {% call md::reason_field(format!("reason-{}", n), self.main_reason(reports)) %}{% endcall %}
@@ -82,6 +83,7 @@
     </ul>
     {% let report = reports[0].id %}
     <form class="queue-actions" method="post" action="/mod/reports/{{ report }}/dismiss">
+      {% call md::no_enter() %}{% endcall %}
       <input type="hidden" name="report" value="{{ report }}">
       <input type="hidden" name="back" value="/mod/queue?done=1">
       {% call md::reason_field(format!("reason-{}", n), self.main_reason(reports)) %}{% endcall %}
@@ -117,6 +119,7 @@
     <ol class="log-list">{% call md::log_entry(action, true) %}{% endcall %}</ol>
     <blockquote class="queue-excerpt queue-message">{{ report.details }}</blockquote>
     <form class="queue-actions" method="post" action="/mod/appeals/{{ report.id }}">
+      {% call md::no_enter() %}{% endcall %}
       <input type="hidden" name="back" value="/mod/queue?done=1">
       {% call md::reason_field(format!("reason-{}", n), "") %}{% endcall %}
       <span class="queue-buttons">
@@ -136,9 +139,9 @@
       {{ crate::mod_pages::excerpt(held.body_md) }} <a href="/held/{{ held.id }}">Read it all</a>
     </blockquote>
     <form class="queue-actions" method="post" action="/mod/held/{{ held.id }}/approve">
+      {% call md::no_enter() %}{% endcall %}
       <input type="hidden" name="back" value="/mod/queue?done=1">
       {% call md::reason_field(format!("reason-{}", n), "Not suitable") %}{% endcall %}
-      {% call md::days_field(format!("days-{}", n), durations, 7) %}{% endcall %}
       <span class="queue-buttons">
         <button class="button button-small" type="submit">Approve</button>
         <button class="button button-small button-quiet" type="submit" formaction="/mod/held/{{ held.id }}/reject">Reject</button>

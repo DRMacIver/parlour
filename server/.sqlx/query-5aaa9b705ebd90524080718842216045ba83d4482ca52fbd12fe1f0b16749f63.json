@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"n!\" FROM users\n           WHERE id = ANY($1)\n             AND CASE WHEN $2 THEN suspended_until ELSE silenced_until END > now()",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5aaa9b705ebd90524080718842216045ba83d4482ca52fbd12fe1f0b16749f63"
+}

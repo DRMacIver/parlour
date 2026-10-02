@@ -1023,8 +1023,6 @@ p.quick-reply { font-style: italic; }
 .notification-unread { background: var(--panel-alt); border-left: 3px solid var(--accent); padding-left: 11px; }
 .notification-unread a { font-weight: 700; }
 
-/* -------------------------------------------------------- Narrow screens */
-
 /* ----------------------------------------------------------- Moderation */
 
 /* A destructive action: the one red button. */
@@ -1117,6 +1115,8 @@ p.quick-reply { font-style: italic; }
 .ip-list code { font-family: var(--font-mono); font-size: 14px; overflow-wrap: anywhere; }
 .form-inline-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .form-inline-row label { font-variant: small-caps; letter-spacing: 0.08em; }
+
+/* -------------------------------------------------------- Narrow screens */
 
 @media (max-width: 900px) {
   .index-layout, .with-sidebar, .messages-layout { grid-template-columns: minmax(0, 1fr); }

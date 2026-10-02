@@ -208,11 +208,18 @@ pub async fn entry_for_member(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result
     let Some(user_id) = viewer.user_id() else {
         return Ok(None);
     };
-    let owner = sqlx::query_scalar!("SELECT user_id FROM mod_actions WHERE id = $1", id)
-        .fetch_optional(db.pool())
-        .await?
-        .flatten();
-    if owner != Some(user_id) {
+    // An invite branch's suspension is about everyone suspended with it.
+    let theirs = sqlx::query_scalar!(
+        r#"SELECT user_id = $2
+                  OR (action = 'suspend_branch' AND details->'user_ids' @> to_jsonb($2::bigint))
+                  AS "theirs!"
+           FROM mod_actions WHERE id = $1"#,
+        id,
+        user_id
+    )
+    .fetch_optional(db.pool())
+    .await?;
+    if theirs != Some(true) {
         return Ok(None);
     }
     let filter = viewer.filter();
@@ -273,8 +280,12 @@ fn thread_bit(
             href: crate::format::thread_href(&id, &slug),
             text: format!("“{title}”"),
         },
-        // Only staff are told what a deleted thread was called.
-        (Some(_), Some(title), _, Some(true)) if staff => text(format!("“{title}” (deleted)")),
+        // Only staff are told what a deleted thread was called, and are
+        // led to where it can be restored.
+        (Some(id), Some(title), _, Some(true)) if staff => Bit::Link {
+            href: format!("/mod/t/{id}"),
+            text: format!("“{title}” (deleted)"),
+        },
         (Some(_), _, _, Some(true)) => text("a thread that has since been deleted"),
         (Some(_), ..) => text("a thread you can’t see"),
         (None, ..) => text("a thread"),
@@ -328,10 +339,15 @@ fn describe(row: Row, staff: bool) -> LogEntry {
         Some(d) => format!(" for {}", crate::format::plural(d, "day", "days")),
         None => String::new(),
     };
-    // A link to the post itself, where the viewer can follow it.
+    // A link to the post itself, where the viewer can follow it: for
+    // staff, to where it can be moderated (and restored, if deleted).
     let post_link = match row.post_id {
         Some(id) if readable && row.thread_live == Some(true) => Bit::Link {
-            href: format!("/p/{id}"),
+            href: if staff {
+                format!("/mod/p/{id}")
+            } else {
+                format!("/p/{id}")
+            },
             text: post(),
         },
         _ => text(post()),
@@ -459,6 +475,49 @@ pub async fn thread_author(db: &Db, thread_id: i64) -> sqlx::Result<Option<i64>>
     sqlx::query_scalar!("SELECT author_id FROM threads WHERE id = $1", thread_id)
         .fetch_optional(db.pool())
         .await
+}
+
+/// A deleted thread, as staff see it to restore it.
+pub struct DeletedThread {
+    pub id: i64,
+    pub title: String,
+    /// The category it was in, if the viewer can read it.
+    pub category: Option<(String, String)>,
+    /// If all its posts were moved, the thread they went to: its id and
+    /// title.
+    pub merged_into: Option<(i64, String)>,
+}
+
+/// A deleted thread in a category, for staff only.
+pub async fn deleted_thread(
+    db: &Db,
+    viewer: &Viewer,
+    thread_id: i64,
+) -> sqlx::Result<Option<DeletedThread>> {
+    if !viewer.is_staff() {
+        return Ok(None);
+    }
+    let filter = viewer.filter();
+    let row = sqlx::query!(
+        r#"SELECT t.id, t.title, c.name AS "category_name?", c.slug AS "category_slug?",
+                  d.id AS "merged_id?", d.title AS "merged_title?"
+           FROM threads t
+           JOIN categories c ON c.id = t.category_id
+           LEFT JOIN threads d ON d.id = t.merged_into_thread_id
+           WHERE t.id = $1 AND t.deleted_at IS NOT NULL
+             AND thread_readable(t.visibility, t.category_id, $2, $3)"#,
+        thread_id,
+        &filter.visibilities,
+        &filter.group_category_ids,
+    )
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(row.map(|row| DeletedThread {
+        id: row.id,
+        title: row.title,
+        category: row.category_name.zip(row.category_slug),
+        merged_into: row.merged_id.zip(row.merged_title),
+    }))
 }
 
 /// The thread a deleted one was merged into, if the viewer can read it:

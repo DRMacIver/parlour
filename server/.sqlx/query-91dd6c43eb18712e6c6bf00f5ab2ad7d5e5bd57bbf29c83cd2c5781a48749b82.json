@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT user_id = $2\n                  OR (action = 'suspend_branch' AND details->'user_ids' @> to_jsonb($2::bigint))\n                  AS \"theirs!\"\n           FROM mod_actions WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "theirs!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "91dd6c43eb18712e6c6bf00f5ab2ad7d5e5bd57bbf29c83cd2c5781a48749b82"
+}
