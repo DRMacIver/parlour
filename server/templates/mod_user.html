@@ -43,7 +43,7 @@
     <div class="form-actions">
       <button class="button" type="submit">Silence</button>
       <button class="button button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/suspend">Suspend</button>
-      <button class="button button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/suspend-branch">Suspend with everyone they invited ({{ branch.len() }})</button>
+      {% if branch.len() > 1 %}<button class="button button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/suspend-branch">Suspend with everyone they invited ({{ branch.len() }} accounts)</button>{% endif %}
       {% if member.is_silenced() %}<button class="button button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/unsilence">Lift silence</button>{% endif %}
       {% if member.is_suspended() %}<button class="button button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/unsuspend">Lift suspension</button>{% endif %}
       <button class="button button-danger" type="submit" formaction="/mod/users/{{ member.user.username }}/spammer">Delete as spammer</button>

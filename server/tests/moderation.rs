@@ -1244,9 +1244,13 @@ async fn suspending_an_invite_branch(pool: PgPool) {
     s.f.user("other").await;
     let page = s.f.page_as("/mod/users/felix", &s.mo_cookie).await;
     assert!(
-        page.contains("Suspend with everyone they invited (2)"),
+        page.contains("Suspend with everyone they invited (2 accounts)"),
         "{page}"
     );
+    // Someone who invited nobody (or only staff) has no branch to suspend.
+    let page = s.f.page_as("/mod/users/other", &s.mo_cookie).await;
+    assert!(page.contains("/mod/users/other/suspend\""), "{page}");
+    assert!(!page.contains("suspend-branch"), "{page}");
     ok(
         &s.f,
         "/mod/users/felix/suspend-branch",
