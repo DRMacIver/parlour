@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE private_thread_participants SET left_at = now()\n         WHERE thread_id = $1 AND user_id = $2 AND left_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b3a7fb23f1c811edae4ce3c356f86d83b175d20cef40e839091d21b357c5fc41"
+}

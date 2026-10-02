@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Block {{ member.display_name }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Block {{ member.display_name }}?</h1>
+<section class="panel">
+  <h2 class="panel-bar">What blocking does</h2>
+  <div class="form">
+    <ul class="panel-list">
+      <li>Neither of you can start a conversation with the other, or add the other to one, and conversations between just the two of you end.</li>
+      <li>Their posts and messages are folded away for you, and you aren’t notified about them.</li>
+      <li>They aren’t told, though they may notice that they can’t write to you.</li>
+    </ul>
+    <form method="post" action="/u/{{ member.username }}/block">
+      <div class="form-actions">
+        <button class="button" type="submit">Block @{{ member.username }}</button>
+        <a href="/u/{{ member.username }}">Cancel</a>
+      </div>
+    </form>
+  </div>
+</section>
+</div>
+{% endblock %}

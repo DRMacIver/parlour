@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"n!\" FROM private_thread_participants me JOIN threads t ON t.id = me.thread_id\n           WHERE me.user_id = $1 AND me.left_at IS NULL AND t.deleted_at IS NULL\n             AND dm_readable(t.id, t.visibility, $1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "96dba9d7ee6a2ecb11063134afaca2e97cd805bfa585cf789b376a5db7ed5c25"
+}

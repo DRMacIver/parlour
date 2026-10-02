@@ -8,6 +8,9 @@
 //! recorded even for things the viewer can't see (such as a fork in a
 //! private category), because a later change could make them visible.
 
+pub mod messages;
+pub mod notifications;
+
 use std::collections::{BTreeSet, HashMap};
 
 use crate::db::Db;
@@ -517,6 +520,8 @@ pub struct PostView {
     pub forks: Vec<ForkLink>,
     /// Reactions to a live post, in the order the admin set.
     pub reactions: Vec<ReactionCount>,
+    /// Whether the viewer blocked its author, so it is folded away.
+    pub from_blocked: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -608,6 +613,46 @@ pub async fn thread_page(
         None => None,
     };
 
+    let posts = posts_on_page(db, viewer, thread.id, page, deps).await?;
+
+    Ok(Some(ThreadPage {
+        thread: ThreadRef {
+            id: thread.id,
+            title: thread.title,
+            slug: thread.slug,
+        },
+        category: CategoryRef {
+            id: thread.category_id,
+            slug: thread.category_slug,
+            name: thread.category_name,
+        },
+        section_name: thread.section_name,
+        author: UserRef {
+            id: thread.author_id,
+            username: thread.author_username.to_string(),
+            display_name: thread.author_display_name,
+        },
+        created_at: thread.created_at,
+        last_seq: i64::from(thread.last_seq),
+        pinned: thread.pinned,
+        locked: thread.locked,
+        read_level: thread.read_level,
+        write_level: thread.write_level,
+        embed,
+        posts,
+        read_marker: thread.read_marker.map(i64::from),
+    }))
+}
+
+/// The posts on one page of a thread the caller has checked the viewer can
+/// read: a category thread or a conversation.
+pub(super) async fn posts_on_page(
+    db: &Db,
+    viewer: &Viewer,
+    thread_id: i64,
+    page: i64,
+    deps: &mut Deps,
+) -> sqlx::Result<Vec<PostView>> {
     // Post numbers are 32-bit, so a page whose numbers don't fit is empty.
     let seq_range = page_offset(page, POSTS_PER_PAGE)
         .and_then(|offset| Some((offset.checked_add(1)?, offset.checked_add(POSTS_PER_PAGE)?)))
@@ -627,7 +672,7 @@ pub async fn thread_page(
         WHERE p.thread_id = $1 AND p.seq BETWEEN $2 AND $3
         ORDER BY p.seq
         "#,
-        thread.id,
+        thread_id,
         first,
         last,
     )
@@ -641,6 +686,7 @@ pub async fn thread_page(
         ids
     };
     let authors = author_infos(db, viewer, &author_ids, deps).await?;
+    let blocked = blocked_authors(db, viewer).await?;
     let post_ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
     let mut forks = forks_of(db, viewer, &post_ids, deps).await?;
     let live_ids: Vec<i64> = rows
@@ -650,7 +696,7 @@ pub async fn thread_page(
         .collect();
     let mut reactions = reactions_for(db, viewer, &live_ids).await?;
 
-    let posts = rows
+    Ok(rows
         .into_iter()
         .map(|row| {
             let body = if row.deleted {
@@ -687,39 +733,29 @@ pub async fn thread_page(
                     Vec::new()
                 },
                 reactions: reactions.remove(&row.id).unwrap_or_default(),
+                from_blocked: row.author_id.is_some_and(|id| blocked.contains(&id)),
                 body,
                 reply_to,
             }
         })
-        .collect();
+        .collect())
+}
 
-    Ok(Some(ThreadPage {
-        thread: ThreadRef {
-            id: thread.id,
-            title: thread.title,
-            slug: thread.slug,
-        },
-        category: CategoryRef {
-            id: thread.category_id,
-            slug: thread.category_slug,
-            name: thread.category_name,
-        },
-        section_name: thread.section_name,
-        author: UserRef {
-            id: thread.author_id,
-            username: thread.author_username.to_string(),
-            display_name: thread.author_display_name,
-        },
-        created_at: thread.created_at,
-        last_seq: i64::from(thread.last_seq),
-        pinned: thread.pinned,
-        locked: thread.locked,
-        read_level: thread.read_level,
-        write_level: thread.write_level,
-        embed,
-        posts,
-        read_marker: thread.read_marker.map(i64::from),
-    }))
+/// The members whose posts the viewer has asked not to see: those they
+/// blocked, unless they are staff now (staff can't be blocked).
+pub(super) async fn blocked_authors(db: &Db, viewer: &Viewer) -> sqlx::Result<BTreeSet<i64>> {
+    let Some(user_id) = viewer.user_id() else {
+        return Ok(BTreeSet::new());
+    };
+    Ok(sqlx::query_scalar!(
+        r#"SELECT b.blocked_user_id FROM blocks b JOIN users u ON u.id = b.blocked_user_id
+           WHERE b.user_id = $1 AND u.role = 'user'"#,
+        user_id
+    )
+    .fetch_all(db.pool())
+    .await?
+    .into_iter()
+    .collect())
 }
 
 async fn author_infos(
@@ -949,10 +985,29 @@ pub struct PostLocation {
     pub thread_id: i64,
     pub thread_slug: String,
     pub seq: i64,
+    /// Whether the thread is a conversation (a DM), at `/messages/{id}`.
+    pub private: bool,
 }
 
-/// Where a post is, if the viewer can see its thread. Deleted and hidden
-/// posts still have a location: their tombstone.
+impl PostLocation {
+    /// The page of the thread or conversation the post is on.
+    pub fn page_href(&self) -> String {
+        let base = if self.private {
+            format!("/messages/{}", self.thread_id)
+        } else {
+            crate::format::thread_href(&self.thread_id, &self.thread_slug)
+        };
+        crate::pagination::page_href(&base, page_of_seq(self.seq))
+    }
+
+    /// The post itself, on its page.
+    pub fn href(&self, post_id: i64) -> String {
+        format!("{}#p{post_id}", self.page_href())
+    }
+}
+
+/// Where a post is, if the viewer can see its thread or conversation.
+/// Deleted and hidden posts still have a location: their tombstone.
 pub async fn post_location(
     db: &Db,
     viewer: &Viewer,
@@ -961,13 +1016,15 @@ pub async fn post_location(
     let filter = viewer.filter();
     let row = sqlx::query!(
         r#"
-        SELECT t.id, t.slug, p.seq
+        SELECT t.id, t.slug, p.seq, t.visibility = 'private' AS "private!"
         FROM posts p JOIN threads t ON t.id = p.thread_id
-        WHERE p.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $2, $3)
+        WHERE p.id = $1 AND t.deleted_at IS NULL
+          AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
         "#,
         post_id,
         &filter.visibilities,
         &filter.group_category_ids,
+        viewer.user_id(),
     )
     .fetch_optional(db.pool())
     .await?;
@@ -975,6 +1032,7 @@ pub async fn post_location(
         thread_id: row.id,
         thread_slug: row.slug,
         seq: i64::from(row.seq),
+        private: row.private,
     }))
 }
 
@@ -1151,13 +1209,55 @@ pub async fn category_target(
         .find(|c| c.category.slug == slug))
 }
 
-/// A thread the viewer can read, as somewhere to reply.
+/// A thread or conversation the viewer can read, as somewhere to reply.
 #[derive(Clone, Debug)]
 pub struct ThreadTarget {
     pub thread: ThreadRef,
-    pub category: CategoryTarget,
+    /// What to call it: a conversation without a title is named after the
+    /// people in it, other than the viewer.
+    pub name: String,
+    pub place: Place,
     pub locked: bool,
     pub last_seq: i64,
+}
+
+/// Where a thread is: in a category, or a conversation between members.
+#[derive(Clone, Debug)]
+pub enum Place {
+    Category(CategoryTarget),
+    Conversation(messages::ConversationTarget),
+}
+
+impl ThreadTarget {
+    pub fn category(&self) -> Option<&CategoryTarget> {
+        match &self.place {
+            Place::Category(category) => Some(category),
+            Place::Conversation(_) => None,
+        }
+    }
+
+    pub fn conversation(&self) -> Option<&messages::ConversationTarget> {
+        match &self.place {
+            Place::Category(_) => None,
+            Place::Conversation(conversation) => Some(conversation),
+        }
+    }
+
+    /// Who can read it.
+    pub fn audience(&self) -> Audience {
+        match &self.place {
+            Place::Category(category) => category.audience(),
+            Place::Conversation(_) => Audience::Private,
+        }
+    }
+
+    /// Its page: the thread, or the conversation.
+    pub fn href(&self) -> String {
+        match &self.place {
+            Place::Category(_) => crate::format::thread_href(&self.thread.id, &self.thread.slug),
+            Place::Conversation(_) => format!("/messages/{}", self.thread.id),
+        }
+    }
 }
 
 pub async fn thread_target(
@@ -1168,26 +1268,37 @@ pub async fn thread_target(
     let filter = viewer.filter();
     let Some(row) = sqlx::query!(
         r#"
-        SELECT t.id, t.title, t.slug, t.locked, t.last_seq, t.category_id AS "category_id!"
+        SELECT t.id, t.title, t.slug, t.locked, t.last_seq, t.category_id
         FROM threads t
-        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.category_id IS NOT NULL
-          AND thread_readable(t.visibility, t.category_id, $2, $3)
+        WHERE t.id = $1 AND t.deleted_at IS NULL
+          AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
         "#,
         thread_id,
         &filter.visibilities,
         &filter.group_category_ids,
+        viewer.user_id(),
     )
     .fetch_optional(db.pool())
     .await?
     else {
         return Ok(None);
     };
-    let Some(category) = readable_categories(db, viewer)
-        .await?
-        .into_iter()
-        .find(|c| c.category.id == row.category_id)
-    else {
-        return Ok(None);
+    let place = match row.category_id {
+        Some(category_id) => {
+            let Some(category) = readable_categories(db, viewer)
+                .await?
+                .into_iter()
+                .find(|c| c.category.id == category_id)
+            else {
+                return Ok(None);
+            };
+            Place::Category(category)
+        }
+        None => Place::Conversation(messages::conversation_target(db, row.id).await?),
+    };
+    let name = match &place {
+        Place::Category(_) => row.title.clone(),
+        Place::Conversation(c) => c.name(&row.title, viewer.user_id()),
     };
     Ok(Some(ThreadTarget {
         thread: ThreadRef {
@@ -1195,7 +1306,8 @@ pub async fn thread_target(
             title: row.title,
             slug: row.slug,
         },
-        category,
+        name,
+        place,
         locked: row.locked,
         last_seq: i64::from(row.last_seq),
     }))
@@ -1242,11 +1354,13 @@ pub async fn post_target(
         FROM posts p
         JOIN threads t ON t.id = p.thread_id
         JOIN users u ON u.id = p.author_id
-        WHERE p.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $2, $3)
+        WHERE p.id = $1 AND t.deleted_at IS NULL
+          AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
         "#,
         post_id,
         &filter.visibilities,
         &filter.group_category_ids,
+        viewer.user_id(),
     )
     .fetch_optional(db.pool())
     .await?
@@ -1293,7 +1407,8 @@ pub async fn visible_thread_ids(
     .await
 }
 
-/// The first post a logged-in viewer hasn't read in a thread they can see:
+/// The first post a logged-in viewer hasn't read in a thread or
+/// conversation they can see:
 /// the one after their read marker, or the last post if they've read them
 /// all. For anyone else, and for threads never opened, the first post.
 pub async fn first_unread(
@@ -1304,13 +1419,14 @@ pub async fn first_unread(
     let filter = viewer.filter();
     let row = sqlx::query!(
         r#"
-        SELECT p.id, p.seq, t.slug
+        SELECT p.id, p.seq, t.slug, t.visibility = 'private' AS "private!"
         FROM threads t
         JOIN posts p ON p.thread_id = t.id
           AND p.seq = least(t.last_seq,
                             coalesce((SELECT tr.last_read_seq FROM thread_reads tr
                                       WHERE tr.thread_id = t.id AND tr.user_id = $4), 0) + 1)
-        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $2, $3)
+        WHERE t.id = $1 AND t.deleted_at IS NULL
+          AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
         "#,
         thread_id,
         &filter.visibilities,
@@ -1326,6 +1442,7 @@ pub async fn first_unread(
                 thread_id,
                 thread_slug: row.slug,
                 seq: i64::from(row.seq),
+                private: row.private,
             },
         )
     }))

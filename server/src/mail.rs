@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use lettre::message::Mailbox;
-use lettre::message::header::ContentType;
+use lettre::message::header::{ContentType, HeaderName, HeaderValue};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use serde::{Deserialize, Serialize};
@@ -122,6 +122,10 @@ pub struct Email {
     /// kept only while it might still be sent (see [`scrub`]).
     #[serde(default)]
     pub secret: bool,
+    /// For notification email: the one-click unsubscribe link, sent in the
+    /// `List-Unsubscribe` and `List-Unsubscribe-Post` headers (RFC 8058).
+    #[serde(default)]
+    pub unsubscribe: Option<String>,
 }
 
 /// Where email goes: an SMTP server, or (in tests) a list in memory.
@@ -211,13 +215,7 @@ pub async fn send_now(state: &AppState, email: &Email) -> anyhow::Result<()> {
 /// Sends an email over SMTP with the given settings (also used to test
 /// settings before saving them).
 pub async fn send_with(settings: &SmtpSettings, email: &Email) -> anyhow::Result<()> {
-    let message = Message::builder()
-        .from(settings.from.parse().context("invalid From address")?)
-        .to(email.to.parse().context("invalid recipient address")?)
-        .subject(&email.subject)
-        .header(ContentType::TEXT_PLAIN)
-        .body(email.body.clone())
-        .context("could not build the message")?;
+    let message = build(&settings.from, email)?;
     let builder = match settings.security {
         SmtpSecurity::None => {
             AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&settings.host)
@@ -243,6 +241,29 @@ pub async fn send_with(settings: &SmtpSettings, email: &Email) -> anyhow::Result
         )
     })?;
     Ok(())
+}
+
+/// The message to send.
+pub fn build(from: &str, email: &Email) -> anyhow::Result<Message> {
+    let mut builder = Message::builder()
+        .from(from.parse().context("invalid From address")?)
+        .to(email.to.parse().context("invalid recipient address")?)
+        .subject(&email.subject)
+        .header(ContentType::TEXT_PLAIN);
+    if let Some(url) = &email.unsubscribe {
+        builder = builder
+            .raw_header(HeaderValue::new(
+                HeaderName::new_from_ascii_str("List-Unsubscribe"),
+                format!("<{url}>"),
+            ))
+            .raw_header(HeaderValue::new(
+                HeaderName::new_from_ascii_str("List-Unsubscribe-Post"),
+                "List-Unsubscribe=One-Click".to_owned(),
+            ));
+    }
+    builder
+        .body(email.body.clone())
+        .context("could not build the message")
 }
 
 /// Whether `address` looks like an email address we can send to.
@@ -287,6 +308,44 @@ mod tests {
             }
             .validate()
             .is_err()
+        );
+    }
+
+    #[test]
+    fn notification_email_has_one_click_unsubscribe_headers() {
+        let email = Email {
+            to: "ruth@example.com".into(),
+            subject: "Hello".into(),
+            body: "Body".into(),
+            secret: false,
+            unsubscribe: Some("https://forum.example.com/unsubscribe/1.all.abc".into()),
+        };
+        let text = String::from_utf8(
+            build("Forum <forum@example.com>", &email)
+                .unwrap()
+                .formatted(),
+        )
+        .unwrap();
+        assert!(
+            text.contains("List-Unsubscribe: <https://forum.example.com/unsubscribe/1.all.abc>"),
+            "{text}"
+        );
+        assert!(
+            text.contains("List-Unsubscribe-Post: List-Unsubscribe=One-Click"),
+            "{text}"
+        );
+        let plain = build(
+            "forum@example.com",
+            &Email {
+                unsubscribe: None,
+                ..email
+            },
+        )
+        .unwrap();
+        assert!(
+            !String::from_utf8(plain.formatted())
+                .unwrap()
+                .contains("List-Unsubscribe")
         );
     }
 

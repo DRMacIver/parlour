@@ -42,7 +42,7 @@ pub fn slugify(title: &str) -> String {
     slug
 }
 
-const RESERVED_SLUGS: &[&str] = &["unread", "reply"];
+const RESERVED_SLUGS: &[&str] = &["unread", "reply", "watch"];
 
 #[derive(Clone, Debug, Default)]
 pub struct NewUser {
@@ -552,6 +552,109 @@ pub async fn render_post<'c>(
     .await
     .expect("rendering a post panicked");
     Ok(rendered)
+}
+
+// ---------------------------------------------------------------------------
+// Conversations (DESIGN.md §3.7)
+
+#[derive(Clone, Debug)]
+pub struct NewConversation {
+    pub author_id: i64,
+    /// May be empty: the conversation is then named after its people.
+    pub title: String,
+    /// Everyone else in it.
+    pub recipient_ids: Vec<i64>,
+    pub body_md: String,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+/// Starts a conversation: a private thread, its participants (the author
+/// and the recipients) and its first message.
+pub async fn create_conversation<'c>(
+    db: impl Handle<'c>,
+    conversation: &NewConversation,
+) -> sqlx::Result<CreatedThread> {
+    let mut tx = db.open(KEY).begin().await?;
+    let created_at = conversation.created_at.unwrap_or_else(Utc::now);
+    let thread_id = sqlx::query_scalar!(
+        r#"INSERT INTO threads (category_id, visibility, title, slug, author_id, created_at, last_post_at)
+           VALUES (NULL, 'private', $1, 'message', $2, $3, $3)
+           RETURNING id"#,
+        conversation.title,
+        conversation.author_id,
+        created_at,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query!(
+        r#"INSERT INTO private_thread_participants (thread_id, user_id, joined_at, added_by)
+           SELECT $1, u, $3, CASE WHEN u = $2 THEN NULL ELSE $2 END
+           FROM unnest(array_append($4::bigint[], $2)) AS u
+           ON CONFLICT DO NOTHING"#,
+        thread_id,
+        conversation.author_id,
+        created_at,
+        &conversation.recipient_ids,
+    )
+    .execute(&mut *tx)
+    .await?;
+    let first_post_id = insert_post(
+        &mut tx,
+        &NewPost {
+            thread_id,
+            author_id: conversation.author_id,
+            body_md: conversation.body_md.clone(),
+            reply_to_post_id: None,
+            created_at: Some(created_at),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(CreatedThread {
+        thread_id,
+        first_post_id,
+    })
+}
+
+/// Adds someone to a conversation, or back to one they left. Returns
+/// whether they weren't in it already.
+pub async fn add_participant<'c>(
+    db: impl Handle<'c>,
+    thread_id: i64,
+    user_id: i64,
+    added_by: i64,
+) -> sqlx::Result<bool> {
+    let mut conn = db.open(KEY).acquire().await?;
+    let done = sqlx::query!(
+        r#"INSERT INTO private_thread_participants (thread_id, user_id, added_by) VALUES ($1, $2, $3)
+           ON CONFLICT (thread_id, user_id)
+           DO UPDATE SET left_at = NULL, joined_at = now(), added_by = excluded.added_by
+           WHERE private_thread_participants.left_at IS NOT NULL"#,
+        thread_id,
+        user_id,
+        added_by,
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Takes someone out of a conversation. Returns whether they were in it.
+pub async fn leave_conversation<'c>(
+    db: impl Handle<'c>,
+    thread_id: i64,
+    user_id: i64,
+) -> sqlx::Result<bool> {
+    let mut conn = db.open(KEY).acquire().await?;
+    let done = sqlx::query!(
+        "UPDATE private_thread_participants SET left_at = now()
+         WHERE thread_id = $1 AND user_id = $2 AND left_at IS NULL",
+        thread_id,
+        user_id,
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(done.rows_affected() == 1)
 }
 
 /// Edits made this soon after posting replace the original rather than

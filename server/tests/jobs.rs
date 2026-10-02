@@ -272,6 +272,7 @@ async fn queued_email_is_sent_over_smtp(db: PgPool) {
         subject: "Hello there".into(),
         body: "A message for Ruth.".into(),
         secret: false,
+        unsubscribe: None,
     };
     let mut conn = db.acquire().await.unwrap();
     mail::queue(&mut *conn, &email).await.unwrap();
@@ -315,6 +316,7 @@ async fn saved_smtp_settings_take_precedence(db: PgPool) {
             subject: "Hi".into(),
             body: "Hi".into(),
             secret: false,
+            unsubscribe: None,
         },
     )
     .await
@@ -343,6 +345,7 @@ async fn email_is_retried_when_the_server_is_unreachable(db: PgPool) {
             subject: "Hi".into(),
             body: "Hi".into(),
             secret: false,
+            unsubscribe: None,
         },
     )
     .await
@@ -365,6 +368,7 @@ async fn without_an_smtp_server_email_waits(db: PgPool) {
             subject: "Hi".into(),
             body: "Hi".into(),
             secret: false,
+            unsubscribe: None,
         },
     )
     .await

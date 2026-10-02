@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{%- import "_forms.html" as f -%}
+{% block title %}{% if let Some(shown) = shown %}{{ shown.page.conversation.name(shown.page.thread.title, viewer_id.clone()) }} · {% endif %}Messages · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Messages</h1>
+  <span class="spacer"></span>
+  {% if ctx.start_refusal.is_none() %}<a class="button" href="/messages/new">New message</a>{% endif %}
+</div>
+{% if ctx.turned_off %}
+<div class="notice" role="status"><p>Direct messages are turned off on this forum for now. You can still read your conversations.</p></div>
+{% else if let Some(why) = ctx.start_refusal %}
+<div class="notice" role="status"><p>{{ why }}</p></div>
+{% endif %}
+<div class="messages-layout">
+<section class="panel conversation-list" aria-labelledby="list-heading">
+  <h2 class="panel-bar" id="list-heading">Conversations</h2>
+  {% if ctx.list.rows.is_empty() %}
+  <p class="empty">No conversations yet.</p>
+  {% else %}
+  <ul class="conversations">
+    {% for row in ctx.list.rows %}
+    <li class="conversation-row{% if self.is_current(row.id) %} conversation-current{% endif %}{% if row.unread > 0 %} conversation-unread{% endif %}">
+      <a class="conversation-link" href="{{ row.href() }}"{% if self.is_current(row.id) %} aria-current="page"{% endif %}>
+        {% call m::avatar(row.face(viewer_id), "avatar-small") %}{% endcall %}
+        <span class="conversation-text">
+          <span class="conversation-top"><span class="conversation-name">{{ row.name(viewer_id) }}</span><span class="row-meta">{% call m::time(row.last_post_at) %}{% endcall %}</span></span>
+          <span class="conversation-people">{{ row.people(viewer_id) }}{% if row.conversation.staff_message %} · <span class="flag">Staff message</span>{% endif %}</span>
+          <span class="conversation-bottom">{% if let Some(snippet) = row.snippet %}<span class="conversation-snippet">{{ snippet }}</span>{% endif %}{% if row.unread > 0 %}<span class="unread-count">{{ row.unread }} new</span>{% endif %}</span>
+        </span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% call m::pagination(ctx.pagination, "Pages of conversations") %}{% endcall %}
+  {% endif %}
+  <p class="panel-foot">Who can start a conversation with you: <strong>{{ ctx.policy.label() }}</strong> · <a href="/settings#messages">Change</a></p>
+</section>
+
+{% if let Some(shown) = shown %}
+<section class="panel conversation" aria-labelledby="conversation-heading">
+  <header class="conversation-head">
+    <div class="conversation-title">
+      <h2 id="conversation-heading">{{ shown.page.conversation.name(shown.page.thread.title, viewer_id.clone()) }}{% if shown.page.conversation.staff_message %} <span class="flag flag-staff">Staff message</span>{% endif %}</h2>
+      <p class="row-meta">{{ shown.page.conversation.people(viewer_id.clone()) }}</p>
+    </div>
+    <div class="conversation-actions">
+      {% if shown.page.conversation.is_group() && shown.refusal.is_none() %}
+      <form class="form-inline add-person" method="post" action="/messages/{{ shown.page.thread.id }}/people">
+        <label class="visually-hidden" for="add-username">Username to add</label>
+        <input id="add-username" name="username" type="text" placeholder="username" autocomplete="off" required>
+        <button class="button button-small button-quiet" type="submit">Add person</button>
+      </form>
+      {% endif %}
+      <form class="form-inline" method="post" action="/t/{{ shown.page.thread.id }}/watch">
+        {% if shown.muted %}<input type="hidden" name="level" value="normal"><button class="button button-small button-quiet" type="submit">Unmute</button>
+        {% else %}<input type="hidden" name="level" value="muted"><button class="button button-small button-quiet" type="submit">Mute</button>{% endif %}
+      </form>
+      <form class="form-inline" method="post" action="/messages/{{ shown.page.thread.id }}/leave"><button class="button button-small button-quiet" type="submit">Leave</button></form>
+      {% if let Some(other) = shown.blockable %}<a class="button button-small button-quiet" href="/u/{{ other.username }}/block">Block…</a>{% endif %}
+    </div>
+  </header>
+  {% call f::errors(self.errors()) %}{% endcall %}
+  {% call m::pagination(shown.pagination, "Pages of this conversation") %}{% endcall %}
+  <div class="messages">
+  {% for post in shown.page.posts %}
+  {% if self.divider_is(post.id) %}<div class="unread-divider" role="separator" id="unread">New</div>{% endif %}
+  {% match post.body %}
+  {% when PostBody::Live { author, body_html, edited_at } %}
+  <article class="message" id="p{{ post.id }}">
+    {% call m::avatar(author.user, "avatar-small") %}{% endcall %}
+    <div class="message-main">
+      <header class="message-info">
+        <a class="message-author" href="/u/{{ author.user.username }}">{{ author.user.display_name }}</a>
+        <a class="post-number" href="#p{{ post.id }}" title="Link to this message">№ {{ post.seq }}</a>
+        {% call m::time(post.created_at) %}{% endcall %}
+        {% if let Some(reply) = post.reply_to %}<span class="reply-to">in reply to <a href="{{ self.reply_href(reply.post_id, reply.seq) }}">{% if let Some(who) = reply.author %}@{{ who.username }}{% else %}№ {{ reply.seq }}{% endif %} ↑</a></span>{% endif %}
+        {% if let Some(edited) = edited_at %}<a class="edited" href="/p/{{ post.id }}/revisions">edited {% call m::time(edited) %}{% endcall %}</a>{% endif %}
+        <span class="spacer"></span>
+        <span class="post-actions">
+          {%- if shown.refusal.is_none() %}<a href="/t/{{ shown.page.thread.id }}/reply?to={{ post.id }}">reply</a> · <a href="/t/{{ shown.page.thread.id }}/reply?quote={{ post.id }}">quote</a>{% endif -%}
+          {%- if self.is_mine(author.user.id) %}{% if shown.refusal.is_none() %} · {% endif %}<a href="/p/{{ post.id }}/edit">edit</a> · <a href="/p/{{ post.id }}/delete">delete</a>{% endif -%}
+        </span>
+      </header>
+      {% if post.from_blocked %}
+      <details class="blocked-post">
+        <summary>A message from someone you’ve blocked</summary>
+        <div class="post-body">{{ body_html|safe }}</div>
+      </details>
+      {% else %}
+      <div class="post-body">{{ body_html|safe }}</div>
+      {% endif %}
+      {% if !post.reactions.is_empty() || !shown.reaction_types.is_empty() %}
+      <div class="reactions">
+        {% for r in post.reactions %}
+        <form class="reaction-form" method="post" action="/p/{{ post.id }}/reactions">
+          <input type="hidden" name="emoji" value="{{ r.emoji }}">
+          <button class="reaction{% if r.mine %} reaction-mine{% endif %}" type="submit" name="action" value="{% if r.mine %}remove{% else %}add{% endif %}" aria-pressed="{{ r.mine }}" title="{{ crate::format::names(r.names) }}"><span aria-hidden="true">{{ r.emoji }}</span> <span class="reaction-count">{{ r.count }}</span><span class="visually-hidden"> reactions; {% if r.mine %}take yours back{% else %}add yours{% endif %}</span></button>
+        </form>
+        {% endfor %}
+        {% if !shown.reaction_types.is_empty() %}
+        <details class="react-menu">
+          <summary>react</summary>
+          <form class="react-choices" method="post" action="/p/{{ post.id }}/reactions">
+            <input type="hidden" name="action" value="add">
+            {% for t in shown.reaction_types %}<button class="reaction" type="submit" name="emoji" value="{{ t.emoji }}" aria-label="React with {{ t.emoji }}">{{ t.emoji }}</button>{% endfor %}
+          </form>
+        </details>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </article>
+  {% when PostBody::Deleted %}
+  <article class="message message-tombstone" id="p{{ post.id }}"><a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a> <span>Message deleted by its author</span> {% call m::time(post.created_at) %}{% endcall %}</article>
+  {% when PostBody::Hidden %}
+  <article class="message message-tombstone" id="p{{ post.id }}"><a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a> <span>Message hidden by a moderator</span> {% call m::time(post.created_at) %}{% endcall %}</article>
+  {% endmatch %}
+  {% endfor %}
+  </div>
+  {% call m::pagination(shown.pagination, "Pages of this conversation, again") %}{% endcall %}
+  {% if let Some(why) = shown.refusal %}
+  <p class="notice quick-reply">{{ why }}</p>
+  {% else %}
+  <form class="message-reply" id="reply" method="post" action="/messages/{{ shown.page.thread.id }}">
+    <label for="reply-body">Reply to {{ shown.page.conversation.name(shown.page.thread.title, viewer_id.clone()) }}</label>
+    <textarea id="reply-body" name="body" rows="4" required>{{ shown.draft }}</textarea>
+    <div class="form-actions">
+      <span class="field-hint">Only the people in this conversation can see it. Markdown supported.</span>
+      <span class="spacer"></span>
+      <button class="button button-quiet" type="submit" name="preview" value="1">Preview</button>
+      <button class="button" type="submit">Send</button>
+    </div>
+  </form>
+  {% endif %}
+</section>
+{% else %}
+<section class="panel conversation conversation-none">
+  <p class="empty">Choose a conversation{% if ctx.start_refusal.is_none() %}, or <a href="/messages/new">start a new one</a>{% endif %}.</p>
+</section>
+{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO private_thread_participants (thread_id, user_id, added_by) VALUES ($1, $2, $3)\n           ON CONFLICT (thread_id, user_id)\n           DO UPDATE SET left_at = NULL, joined_at = now(), added_by = excluded.added_by\n           WHERE private_thread_participants.left_at IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1edbe8569365f7a7aeb63a1cd7dad0842c0bf071d065f7cd50225ea07402b142"
+}

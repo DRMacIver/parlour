@@ -22,9 +22,11 @@ pub mod invites;
 pub mod jobs;
 pub mod login_tokens;
 pub mod members;
+pub mod notifications;
 pub mod seed;
 pub mod sessions;
 pub mod settings;
+pub mod social;
 pub mod store;
 pub mod users;
 

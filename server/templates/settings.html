@@ -64,6 +64,51 @@
   </form>
 </section>
 
+<section class="panel" id="messages" aria-labelledby="messages-heading">
+  <h2 class="panel-bar" id="messages-heading">Messages</h2>
+  <form class="form" method="post" action="/settings/messages">
+    <fieldset class="field">
+      <legend>Who can start a conversation with you</legend>
+      <label class="choice"><input type="radio" name="dm_policy" value="everyone"{% if dm_policy == crate::social::DmPolicy::Everyone %} checked{% endif %}> Any member</label>
+      <label class="choice"><input type="radio" name="dm_policy" value="interacted"{% if dm_policy == crate::social::DmPolicy::Interacted %} checked{% endif %}> Only people you’ve interacted with: you replied to them, reacted to their posts, wrote to them, or one of you invited the other</label>
+      <label class="choice"><input type="radio" name="dm_policy" value="nobody"{% if dm_policy == crate::social::DmPolicy::Nobody %} checked{% endif %}> Nobody</label>
+      <span class="field-hint">Moderators and admins can always write to you, and people already in a conversation with you can carry on.</span>
+    </fieldset>
+    <div class="form-actions"><button class="button button-quiet" type="submit">Save</button></div>
+  </form>
+</section>
+
+<section class="panel" id="email" aria-labelledby="email-prefs-heading">
+  <h2 class="panel-bar" id="email-prefs-heading">Email notifications</h2>
+  <form class="form" method="post" action="/settings/notifications">
+    <p class="form-note">When you have notifications you haven’t seen and you haven’t been on the forum for a while, we can email them to you. Email us about:</p>
+    <fieldset class="field">
+      <legend class="visually-hidden">Emails you get</legend>
+      <label class="choice"><input type="checkbox" name="replies" value="on"{% if email_prefs.replies %} checked{% endif %}> Replies to your posts</label>
+      <label class="choice"><input type="checkbox" name="mentions" value="on"{% if email_prefs.mentions %} checked{% endif %}> Mentions of you</label>
+      <label class="choice"><input type="checkbox" name="messages" value="on"{% if email_prefs.messages %} checked{% endif %}> New messages</label>
+      <label class="choice"><input type="checkbox" name="watching" value="on"{% if email_prefs.watching %} checked{% endif %}> Threads and categories you watch</label>
+      <label class="choice"><input type="checkbox" name="moderation" value="on"{% if email_prefs.moderation %} checked{% endif %}> Notes from the moderators</label>
+    </fieldset>
+    <div class="form-actions"><button class="button button-quiet" type="submit">Save</button></div>
+  </form>
+</section>
+
+<section class="panel" id="blocked" aria-labelledby="blocked-heading">
+  <h2 class="panel-bar" id="blocked-heading">Blocked members</h2>
+  {% if blocked.is_empty() %}
+  <p class="empty">You haven’t blocked anyone. To block someone, use the link on their profile.</p>
+  {% else %}
+  <p class="panel-text">You don’t hear from these members, their posts are folded away, and they can’t write to you.</p>
+  <ul class="member-list">
+  {% for member in blocked %}
+    <li><a href="/u/{{ member.username }}">{{ member.display_name }}</a> <span class="row-meta">@{{ member.username }}</span>
+      <form class="form-inline" method="post" action="/u/{{ member.username }}/unblock"><button class="button button-small button-quiet" type="submit">Unblock</button></form></li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
 <section class="panel" aria-labelledby="sessions-heading">
   <h2 class="panel-bar" id="sessions-heading">Other browsers</h2>
   <form class="form" method="post" action="/settings/sessions">

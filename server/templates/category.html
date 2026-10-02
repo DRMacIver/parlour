@@ -9,6 +9,7 @@
   {% if can_post %}<a class="button" href="/c/{{ category.category.slug }}/new">New thread</a>{% endif %}
   <span class="toolbar-note">{{ crate::format::plural(category.thread_count, "thread", "threads") }}</span>
   {% if logged_in %}<form class="form-inline" method="post" action="/c/{{ category.category.slug }}/read"><button class="button button-small button-quiet" type="submit">Mark all read</button></form>{% endif %}
+  {% if let Some(level) = watch %}{% call m::watch_form(self.watch_action(), level, "category") %}{% endcall %}{% endif %}
   <span class="spacer"></span>
   {% call m::pagination(pagination, "Pages") %}{% endcall %}
 </div>

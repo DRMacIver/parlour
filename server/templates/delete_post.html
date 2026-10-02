@@ -3,7 +3,7 @@
 {% block title %}Delete № {{ post.seq }} · {{ layout.site_name }}{% endblock %}
 {% block content %}
 <div class="narrow">
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/c/{{ post.thread.category.category.slug }}">{{ post.thread.category.category.name }}</a> › <a href="{{ crate::format::thread_href(post.thread.thread.id, post.thread.thread.slug) }}">{{ post.thread.thread.title }}</a></nav>
+{% call m::post_crumbs(post.thread) %}{% endcall %}
 <h1 class="page-title">Delete № {{ post.seq }}?</h1>
 <p>The post will be replaced by a note saying it was deleted, and its edit history will be hidden. This can’t be undone.</p>
 {% if let Some(text) = post.body %}

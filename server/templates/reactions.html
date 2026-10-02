@@ -3,7 +3,7 @@
 {% block title %}Reactions to № {{ reactions.post.seq }} · {{ layout.site_name }}{% endblock %}
 {% block content %}
 {%- let post = reactions.post -%}
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/c/{{ post.thread.category.category.slug }}">{{ post.thread.category.category.name }}</a> › <a href="{{ crate::format::thread_href(post.thread.thread.id, post.thread.thread.slug) }}">{{ post.thread.thread.title }}</a></nav>
+{% call m::post_crumbs(post.thread) %}{% endcall %}
 <h1 class="page-title">Reactions</h1>
 <p class="lede">To <a href="/p/{{ post.post_id }}">№ {{ post.seq }}</a> by {{ post.author.display_name }}</p>
 <section class="panel" aria-labelledby="reactions-heading">

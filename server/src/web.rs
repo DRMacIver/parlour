@@ -21,6 +21,8 @@ pub enum Nav {
     Index,
     Latest,
     Members,
+    Messages,
+    Notifications,
     Invites,
     Account,
     Admin,
@@ -32,6 +34,10 @@ pub enum Nav {
 pub struct NavUser {
     pub username: String,
     pub is_admin: bool,
+    /// Unread notifications the member may see, for the badge.
+    pub notifications: i64,
+    /// Conversations with messages they haven't read.
+    pub messages: i64,
 }
 
 /// Fields every page needs for the shared layout in `base.html`.
@@ -43,13 +49,21 @@ pub struct Layout {
 
 impl Layout {
     pub async fn load(state: &AppState, viewer: &Viewer, nav: Nav) -> sqlx::Result<Layout> {
+        let user = match viewer.user() {
+            None => None,
+            Some(user) => Some(NavUser {
+                username: user.username.clone(),
+                is_admin: viewer.is_admin(),
+                notifications: crate::content::notifications::unread_count(state.db(), viewer)
+                    .await?,
+                messages: crate::content::messages::unread_conversations(state.db(), viewer)
+                    .await?,
+            }),
+        };
         Ok(Layout {
             site_name: settings::site_name(state.db()).await?,
             nav,
-            user: viewer.user().map(|user| NavUser {
-                username: user.username.clone(),
-                is_admin: viewer.is_admin(),
-            }),
+            user,
         })
     }
 }

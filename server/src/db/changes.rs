@@ -116,6 +116,14 @@ pub async fn tags_for(db: &Db, change: Change) -> sqlx::Result<Vec<Tag>> {
     Ok(tags)
 }
 
+/// The thread a post is in and its number there, for live updates.
+pub async fn post_seq(db: &Db, post_id: i64) -> sqlx::Result<Option<(i64, i64)>> {
+    let row = sqlx::query!("SELECT thread_id, seq FROM posts WHERE id = $1", post_id)
+        .fetch_optional(db.pool())
+        .await?;
+    Ok(row.map(|row| (row.thread_id, i64::from(row.seq))))
+}
+
 struct PostContext {
     thread_id: i64,
     category_id: Option<i64>,

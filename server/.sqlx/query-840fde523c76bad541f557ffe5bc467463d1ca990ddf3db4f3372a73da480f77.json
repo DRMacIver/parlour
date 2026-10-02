@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT p.id, p.seq, t.slug\n        FROM threads t\n        JOIN posts p ON p.thread_id = t.id\n          AND p.seq = least(t.last_seq,\n                            coalesce((SELECT tr.last_read_seq FROM thread_reads tr\n                                      WHERE tr.thread_id = t.id AND tr.user_id = $4), 0) + 1)\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $2, $3)\n        ",
+  "query": "\n        SELECT p.id, p.seq, t.slug, t.visibility = 'private' AS \"private!\"\n        FROM threads t\n        JOIN posts p ON p.thread_id = t.id\n          AND p.seq = least(t.last_seq,\n                            coalesce((SELECT tr.last_read_seq FROM thread_reads tr\n                                      WHERE tr.thread_id = t.id AND tr.user_id = $4), 0) + 1)\n        WHERE t.id = $1 AND t.deleted_at IS NULL\n          AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))\n        ",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,12 @@
             "name": "slug"
           }
         }
+      },
+      {
+        "ordinal": 3,
+        "name": "private!",
+        "type_info": "Bool",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -48,8 +54,9 @@
     "nullable": [
       false,
       false,
-      false
+      false,
+      null
     ]
   },
-  "hash": "aad12f7e05606ee88936e8737d75edf8ca8a6a574857b1909aca5375d5282b17"
+  "hash": "840fde523c76bad541f557ffe5bc467463d1ca990ddf3db4f3372a73da480f77"
 }

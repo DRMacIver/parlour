@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{% block title %}New message · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/messages">Messages</a> › <span aria-current="page">New message</span></nav>
+<h1 class="page-title">New message</h1>
+{% call f::errors(errors) %}{% endcall %}
+{% if let Some(html) = preview %}
+<section class="panel preview" aria-labelledby="preview-heading">
+  <h2 class="panel-bar" id="preview-heading">Preview</h2>
+  <div class="post-body">{{ html|safe }}</div>
+</section>
+{% endif %}
+<form class="panel" method="post" action="/messages/new">
+  <h2 class="panel-bar">Start a conversation</h2>
+  <div class="form">
+    <div class="field">
+      <label for="to">To</label>
+      <input id="to" name="to" type="text" required autocomplete="off" value="{{ to }}">
+      <span class="field-hint">Usernames, separated by commas, such as <code>ruth, jonah</code>.</span>
+    </div>
+    <div class="field">
+      <label for="title">Title <span class="field-hint">(optional)</span></label>
+      <input id="title" name="title" type="text" maxlength="150" value="{{ title }}">
+    </div>
+    <div class="field">
+      <label for="body">Message</label>
+      <textarea id="body" name="body" rows="10" required>{{ body }}</textarea>
+      <span class="field-hint">Markdown supported. Only the people in the conversation can see it.</span>
+    </div>
+    <div class="form-actions">
+      <button class="button" type="submit">Send</button>
+      <button class="button button-quiet" type="submit" name="preview" value="1">Preview</button>
+      <a href="/messages">Cancel</a>
+    </div>
+  </div>
+</form>
+{% endblock %}

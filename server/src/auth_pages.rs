@@ -696,6 +696,9 @@ struct SettingsTemplate<'a> {
     notice: Option<&'static str>,
     errors: Vec<String>,
     new_email: String,
+    dm_policy: crate::social::DmPolicy,
+    email_prefs: crate::social::EmailPrefs,
+    blocked: Vec<crate::content::UserRef>,
 }
 
 #[derive(Deserialize, Default)]
@@ -715,6 +718,9 @@ fn notice_for(done: &str) -> Option<&'static str> {
         }
         "verified" => Some("Your email address is confirmed."),
         "sessions" => Some("You’ve been logged out everywhere else."),
+        "messages" => Some("Saved who can message you."),
+        "email-prefs" => Some("Saved which emails you get."),
+        "unblocked" => Some("Unblocked."),
         "welcome" => {
             Some("Welcome! You’re a member now. This page is where you manage your account.")
         }
@@ -769,6 +775,9 @@ async fn render_settings(
             notice: outcome.notice,
             errors: outcome.errors,
             new_email: outcome.new_email,
+            dm_policy: crate::social::dm_policy(state.db(), user.id).await?,
+            email_prefs: crate::social::email_prefs(state.db(), user.id).await?,
+            blocked: crate::social::blocked_members(state.db(), user.id).await?,
         },
     )
 }

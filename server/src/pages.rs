@@ -14,7 +14,9 @@ use crate::content::{
 };
 use crate::error::AppError;
 use crate::format;
+use crate::notify;
 use crate::pagination::{PageItem, Pagination, page_href, thread_list_pages};
+use crate::social::{self, WatchLevel, Watched};
 use crate::store;
 use crate::viewer::Viewer;
 use crate::web::{self, Layout, Nav, cacheable, redirect_unless_canonical};
@@ -148,6 +150,14 @@ struct CategoryTemplate {
     logged_in: bool,
     /// Whether the viewer may start a thread here.
     can_post: bool,
+    /// How closely a logged-in viewer follows the category.
+    watch: Option<WatchLevel>,
+}
+
+impl CategoryTemplate {
+    fn watch_action(&self) -> String {
+        format!("/c/{}/watch", self.category.category.slug)
+    }
 }
 
 pub async fn category(
@@ -181,6 +191,13 @@ pub async fn category(
             .await?
             .is_some_and(|target| writing::may_post_in(&viewer, &target)),
     };
+    let watch = match viewer.user() {
+        Some(user) => Some(
+            social::watch_level(&state.db, user.id, Watched::Category(category.category.id))
+                .await?,
+        ),
+        None => None,
+    };
     cacheable(
         &CategoryTemplate {
             layout: Layout::load(&state, &viewer, Nav::None).await?,
@@ -190,6 +207,7 @@ pub async fn category(
             show_category: false,
             logged_in: viewer.user().is_some(),
             can_post,
+            watch,
         },
         &deps,
     )
@@ -223,9 +241,15 @@ struct ThreadTemplate {
     reaction_types: Vec<ReactionType>,
     /// The post the "new since your last visit" divider goes before.
     divider_before: Option<i64>,
+    /// How closely a logged-in viewer follows the thread.
+    watch: Option<WatchLevel>,
 }
 
 impl ThreadTemplate {
+    fn watch_action(&self) -> String {
+        format!("/t/{}/watch", self.thread.thread.id)
+    }
+
     fn logged_in(&self) -> bool {
         self.viewer_id.is_some()
     }
@@ -272,7 +296,7 @@ pub async fn thread(
     // The slug is checked first with a cheap query, so that a wrong one
     // costs no more than any other non-canonical URL.
     let Some(canonical_slug) = content::thread_slug(&state.db, &viewer, id).await? else {
-        return web::not_found(&state, &viewer).await;
+        return conversation_or_not_found(&state, &viewer, id).await;
     };
     let canonical = page_href(&format::thread_href(&id, &canonical_slug), page);
     if let Some(redirect) = redirect_unless_canonical(&uri, &canonical) {
@@ -291,13 +315,15 @@ pub async fn thread(
         return web::not_found(&state, &viewer).await;
     }
     let base = format::thread_href(&id, &thread.thread.slug);
-    let (reply_box, can_edit, reaction_types, divider_before) = match viewer.user() {
-        None => (ReplyBox::LogIn, false, Vec::new(), None),
+    let (reply_box, can_edit, reaction_types, divider_before, watch) = match viewer.user() {
+        None => (ReplyBox::LogIn, false, Vec::new(), None, None),
         Some(user) => {
             let target = content::thread_target(&state.db, &viewer, id).await?;
-            let reply_box = match target.as_ref().map(|t| writing::reply_refusal(&viewer, t)) {
-                Some(None) => ReplyBox::Form,
-                Some(Some(reason)) => ReplyBox::Note(reason),
+            let reply_box = match &target {
+                Some(t) => match writing::reply_refusal(&state, &viewer, t).await? {
+                    None => ReplyBox::Form,
+                    Some(reason) => ReplyBox::Note(reason),
+                },
                 None => ReplyBox::Note("You can’t post in this category."),
             };
             let divider_before = thread.read_marker.and_then(|marker| {
@@ -309,12 +335,14 @@ pub async fn thread(
             });
             if let Some(last) = thread.posts.last() {
                 store::mark_read(&state.db, user.id, id, last.seq).await?;
+                notify::seen_thread(&state, user.id, id, last.seq).await?;
             }
             (
                 reply_box,
                 !thread.locked || viewer.is_staff(),
                 content::reaction_types(&state.db, true).await?,
                 divider_before,
+                Some(social::watch_level(&state.db, user.id, Watched::Thread(id)).await?),
             )
         }
     };
@@ -328,6 +356,7 @@ pub async fn thread(
             can_edit,
             reaction_types,
             divider_before,
+            watch,
         },
         &deps,
     )
@@ -356,11 +385,7 @@ pub async fn thread_unread(
     };
     match content::first_unread(&state.db, &viewer, id).await? {
         Some((post_id, location)) => {
-            let href = page_href(
-                &format::thread_href(&location.thread_id, &location.thread_slug),
-                page_of_seq(location.seq),
-            );
-            Ok(Redirect::temporary(&format!("{href}#p{post_id}")).into_response())
+            Ok(Redirect::temporary(&location.href(post_id)).into_response())
         }
         None => web::not_found(&state, &viewer).await,
     }
@@ -377,7 +402,22 @@ async fn redirect_to_thread(
     };
     match content::thread_slug(&state.db, viewer, id).await? {
         Some(slug) => Ok(redirect(&format::thread_href(&id, &slug)).into_response()),
-        None => web::not_found(state, viewer).await,
+        None => conversation_or_not_found(state, viewer, id).await,
+    }
+}
+
+/// For a thread id that is one of the viewer's conversations, a redirect
+/// there; for anything else, not found.
+async fn conversation_or_not_found(
+    state: &AppState,
+    viewer: &Viewer,
+    id: i64,
+) -> Result<Response, AppError> {
+    match content::thread_target(&state.db, viewer, id).await? {
+        Some(target) if target.conversation().is_some() => {
+            Ok(Redirect::temporary(&target.href()).into_response())
+        }
+        _ => web::not_found(state, viewer).await,
     }
 }
 
@@ -390,13 +430,7 @@ pub async fn permalink(
         return web::not_found(&state, &viewer).await;
     };
     match content::post_location(&state.db, &viewer, id).await? {
-        Some(location) => {
-            let href = page_href(
-                &format::thread_href(&location.thread_id, &location.thread_slug),
-                page_of_seq(location.seq),
-            );
-            Ok(Redirect::temporary(&format!("{href}#p{id}")).into_response())
-        }
+        Some(location) => Ok(Redirect::temporary(&location.href(id)).into_response()),
         None => web::not_found(&state, &viewer).await,
     }
 }

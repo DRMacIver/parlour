@@ -9,11 +9,13 @@
 
 use crate::AppState;
 use crate::changes::Change;
-use crate::content::{self, CategoryTarget, PostTarget, ThreadTarget};
+use crate::content::{self, CategoryTarget, Place, PostTarget, ThreadTarget};
 use crate::error::AppError;
 use crate::markdown;
+use crate::notify;
 use crate::permissions::{at_most_as_visible, may_post, may_reply};
 use crate::ratelimit::{Action, Scope};
+use crate::social::{self, WatchLevel, Watched};
 use crate::store::{self, Edited, NewPost, NewThread};
 use crate::viewer::Viewer;
 
@@ -31,6 +33,8 @@ pub enum Refused {
     LogIn,
     /// The viewer can see it but may not do this.
     NotAllowed(&'static str),
+    /// The same, with a reason worked out at the time.
+    NotAllowedBecause(String),
     /// What was sent has problems, described for the form.
     Invalid(Vec<String>),
     /// Too many writes recently.
@@ -104,27 +108,33 @@ pub fn may_post_in(viewer: &Viewer, category: &CategoryTarget) -> bool {
     may_post(viewer, &category.audience(), &category.write())
 }
 
-/// Whether the viewer may reply in a thread they can read.
-pub fn may_reply_in(viewer: &Viewer, thread: &ThreadTarget) -> bool {
-    may_reply(
-        viewer,
-        &thread.category.audience(),
-        &thread.category.write(),
-        thread.locked,
-    )
+/// Whether the viewer may reply in a category thread they can read.
+pub fn may_reply_in(viewer: &Viewer, category: &CategoryTarget, locked: bool) -> bool {
+    may_reply(viewer, &category.audience(), &category.write(), locked)
 }
 
-/// Why the viewer may not reply in a thread they can read, if they may not.
-pub fn reply_refusal(viewer: &Viewer, thread: &ThreadTarget) -> Option<&'static str> {
+/// Why the viewer may not reply in a thread or conversation they can
+/// read, if they may not.
+pub async fn reply_refusal(
+    state: &AppState,
+    viewer: &Viewer,
+    thread: &ThreadTarget,
+) -> Result<Option<&'static str>, AppError> {
     if viewer.user().is_none() {
-        Some("Log in to reply.")
-    } else if !may_post_in(viewer, &thread.category) {
-        Some("You can’t post in this category.")
-    } else if !may_reply_in(viewer, thread) {
-        Some("This thread is locked.")
-    } else {
-        None
+        return Ok(Some("Log in to reply."));
     }
+    Ok(match &thread.place {
+        Place::Conversation(_) => crate::messages::send_refusal(state, viewer, thread).await?,
+        Place::Category(category) => {
+            if !may_post_in(viewer, category) {
+                Some("You can’t post in this category.")
+            } else if !may_reply_in(viewer, category, thread.locked) {
+                Some("This thread is locked.")
+            } else {
+                None
+            }
+        }
+    })
 }
 
 /// Whether the viewer may edit or delete a post: it is theirs and live,
@@ -167,8 +177,8 @@ pub async fn new_thread(
     if !allowed(state, viewer, Action::Post) {
         return Ok(Err(Refused::RateLimited));
     }
-    let created = store::create_thread(
-        state.db(),
+    let created = create_thread(
+        state,
         &NewThread {
             category_id: category.category.id,
             title,
@@ -181,11 +191,6 @@ pub async fn new_thread(
         },
     )
     .await?;
-    state
-        .changed(Change::PostCreated {
-            post_id: created.first_post_id,
-        })
-        .await?;
     Ok(Ok(Posted {
         thread_id: created.thread_id,
         post_id: created.first_post_id,
@@ -205,7 +210,7 @@ pub async fn reply(
     let Some(thread) = content::thread_target(state.db(), viewer, thread_id).await? else {
         return Ok(Err(Refused::NotFound));
     };
-    if let Some(reason) = reply_refusal(viewer, &thread) {
+    if let Some(reason) = reply_refusal(state, viewer, &thread).await? {
         return Ok(Err(Refused::NotAllowed(reason)));
     }
     let body = clean_body(body);
@@ -220,11 +225,16 @@ pub async fn reply(
     if !problems.is_empty() {
         return Ok(Err(Refused::Invalid(problems)));
     }
-    if !allowed(state, viewer, Action::Post) {
+    let action = match thread.place {
+        Place::Category(_) => Action::Post,
+        Place::Conversation(_) => Action::Message,
+    };
+    if !allowed(state, viewer, action) {
         return Ok(Err(Refused::RateLimited));
     }
+    let mut tx = state.db().begin().await?;
     let post_id = store::create_post(
-        state.db(),
+        &mut tx,
         &NewPost {
             thread_id,
             author_id: user.id,
@@ -234,6 +244,9 @@ pub async fn reply(
         },
     )
     .await?;
+    notify::queue_post(&mut tx, post_id).await?;
+    tx.commit().await?;
+    state.jobs().wake();
     state.changed(Change::PostCreated { post_id }).await?;
     Ok(Ok(Posted { thread_id, post_id }))
 }
@@ -345,7 +358,7 @@ pub async fn fork_destinations(
     viewer: &Viewer,
     source: &PostTarget,
 ) -> Result<Vec<CategoryTarget>, AppError> {
-    let source_audience = source.thread.category.audience();
+    let source_audience = source.thread.audience();
     Ok(content::readable_categories(state.db(), viewer)
         .await?
         .into_iter()
@@ -391,8 +404,8 @@ pub async fn fork(
     if !allowed(state, viewer, Action::Post) {
         return Ok(Err(Refused::RateLimited));
     }
-    let created = store::create_thread(
-        state.db(),
+    let created = create_thread(
+        state,
         &NewThread {
             category_id: destination.category.id,
             title,
@@ -405,15 +418,36 @@ pub async fn fork(
         },
     )
     .await?;
+    Ok(Ok(Posted {
+        thread_id: created.thread_id,
+        post_id: created.first_post_id,
+    }))
+}
+
+/// Creates a category thread with its first post, has its author watch it,
+/// and queues the notifications about it.
+async fn create_thread(
+    state: &AppState,
+    thread: &NewThread,
+) -> Result<store::CreatedThread, AppError> {
+    let mut tx = state.db().begin().await?;
+    let created = store::create_thread(&mut tx, thread).await?;
+    social::set_watch(
+        &mut tx,
+        thread.author_id,
+        Watched::Thread(created.thread_id),
+        WatchLevel::Watching,
+    )
+    .await?;
+    notify::queue_post(&mut tx, created.first_post_id).await?;
+    tx.commit().await?;
+    state.jobs().wake();
     state
         .changed(Change::PostCreated {
             post_id: created.first_post_id,
         })
         .await?;
-    Ok(Ok(Posted {
-        thread_id: created.thread_id,
-        post_id: created.first_post_id,
-    }))
+    Ok(created)
 }
 
 /// Marks every thread the viewer can see in a category as read.

@@ -3,7 +3,7 @@
 {% block title %}Edit history of № {{ history.post.seq }} · {{ layout.site_name }}{% endblock %}
 {% block content %}
 {%- let post = history.post -%}
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/c/{{ post.thread.category.category.slug }}">{{ post.thread.category.category.name }}</a> › <a href="{{ crate::format::thread_href(post.thread.thread.id, post.thread.thread.slug) }}">{{ post.thread.thread.title }}</a></nav>
+{% call m::post_crumbs(post.thread) %}{% endcall %}
 <h1 class="page-title">Edit history</h1>
 <p class="lede"><a href="/p/{{ post.post_id }}">№ {{ post.seq }}</a> by <a href="/u/{{ post.author.username }}">{{ post.author.display_name }}</a> · {{ crate::format::plural(history.versions.len() as i64, "version", "versions") }} · Edits made within 5 minutes of posting count as part of the original.</p>
 <div class="with-sidebar revisions">

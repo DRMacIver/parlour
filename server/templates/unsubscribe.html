@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Email settings · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+{% if done %}
+<h1 class="page-title">Unsubscribed</h1>
+<section class="panel">
+  <p class="panel-text">You won’t get emails about {{ what }} any more. You can turn them back on, and choose others, in <a href="/settings#email">your settings</a>.</p>
+</section>
+{% else %}
+<h1 class="page-title">Stop these emails?</h1>
+<section class="panel">
+  <form class="form" method="post" action="/unsubscribe/{{ token }}">
+    <p class="form-note">You’ll stop getting emails about {{ what }}. You’ll still see notifications here on the forum.</p>
+    <div class="form-actions"><button class="button" type="submit">Unsubscribe</button></div>
+  </form>
+</section>
+{% endif %}
+</div>
+{% endblock %}

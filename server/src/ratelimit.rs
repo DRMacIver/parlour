@@ -41,6 +41,10 @@ pub enum Action {
     React,
     /// Previewing a post.
     Preview,
+    /// Sending a message in a conversation.
+    Message,
+    /// Starting a conversation, or adding someone to one.
+    NewConversation,
 }
 
 /// Whose allowance a request uses up.
@@ -100,6 +104,9 @@ pub fn rule(action: Action, scope: Scope) -> Rule {
         // Previews are checked like posts and rendered off the async
         // workers, but each still takes some time.
         (Action::Preview, _) => Rule::new(20, 3),
+        (Action::Message, _) => Rule::new(20, 10),
+        // A few conversations at once, then one every ten minutes.
+        (Action::NewConversation, _) => Rule::new(5, 600),
     }
 }
 

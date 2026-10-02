@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM posts mine JOIN posts theirs ON theirs.id = mine.reply_to_post_id\n               WHERE mine.author_id = $1 AND theirs.author_id = $2\n           ) OR EXISTS (\n               SELECT 1 FROM reactions r JOIN posts theirs ON theirs.id = r.post_id\n               WHERE r.user_id = $1 AND theirs.author_id = $2\n           ) OR EXISTS (\n               SELECT 1 FROM posts mine\n               JOIN private_thread_participants them ON them.thread_id = mine.thread_id AND them.user_id = $2\n               WHERE mine.author_id = $1\n           ) OR EXISTS (\n               SELECT 1 FROM users u\n               WHERE (u.id = $1 AND u.invited_by_user_id = $2) OR (u.id = $2 AND u.invited_by_user_id = $1)\n           ) AS \"interacted!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "interacted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2c64187afe165eae42a747c67ab75e2053b3f6f0f6931fc859a70c13f7136f38"
+}

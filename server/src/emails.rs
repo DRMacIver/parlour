@@ -4,6 +4,7 @@
 use askama::Template;
 
 use crate::mail::Email;
+use crate::notify::EmailItem;
 
 #[derive(Template)]
 #[template(path = "email/invite.txt")]
@@ -27,6 +28,7 @@ pub fn invite(to: &str, site_name: &str, inviter: &str, url: &str, expires: &str
         .render()
         .expect("email templates render"),
         secret: true,
+        unsubscribe: None,
     }
 }
 
@@ -50,6 +52,7 @@ pub fn verify(to: &str, site_name: &str, name: &str, url: &str) -> Email {
         .render()
         .expect("email templates render"),
         secret: true,
+        unsubscribe: None,
     }
 }
 
@@ -75,6 +78,7 @@ pub fn magic_link(to: &str, site_name: &str, name: &str, url: &str, code: &str) 
         .render()
         .expect("email templates render"),
         secret: true,
+        unsubscribe: None,
     }
 }
 
@@ -98,6 +102,7 @@ pub fn reset(to: &str, site_name: &str, name: &str, url: &str) -> Email {
         .render()
         .expect("email templates render"),
         secret: true,
+        unsubscribe: None,
     }
 }
 
@@ -122,6 +127,7 @@ pub fn join(to: &str, site_name: &str, name: &str, url: &str) -> Email {
         .render()
         .expect("email templates render"),
         secret: true,
+        unsubscribe: None,
     }
 }
 
@@ -176,6 +182,7 @@ pub fn already_member(
         .render()
         .expect("email templates render"),
         secret: false,
+        unsubscribe: None,
     }
 }
 
@@ -193,6 +200,51 @@ pub fn test(to: &str, site_name: &str) -> Email {
             .render()
             .expect("email templates render"),
         secret: false,
+        unsubscribe: None,
+    }
+}
+
+#[derive(Template)]
+#[template(path = "email/notifications.txt")]
+struct NotificationsText<'a> {
+    site_name: &'a str,
+    name: &'a str,
+    items: &'a [EmailItem],
+    settings_url: &'a str,
+    unsubscribe_url: &'a str,
+    unsubscribe_what: &'a str,
+}
+
+/// Notifications a member hasn't seen, with one-click unsubscribe headers
+/// (RFC 8058) for `unsubscribe_what`.
+pub fn notifications(
+    to: &str,
+    site_name: &str,
+    name: &str,
+    items: &[EmailItem],
+    settings_url: &str,
+    unsubscribe_url: &str,
+    unsubscribe_what: &str,
+) -> Email {
+    let subject = match items {
+        [one] => format!("{} · {site_name}", one.headline),
+        _ => format!("{} new notifications on {site_name}", items.len()),
+    };
+    Email {
+        to: to.to_owned(),
+        subject,
+        body: NotificationsText {
+            site_name,
+            name,
+            items,
+            settings_url,
+            unsubscribe_url,
+            unsubscribe_what,
+        }
+        .render()
+        .expect("email templates render"),
+        secret: false,
+        unsubscribe: Some(unsubscribe_url.to_owned()),
     }
 }
 

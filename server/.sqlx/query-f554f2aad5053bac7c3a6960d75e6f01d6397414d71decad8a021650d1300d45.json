@@ -1,0 +1,109 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT t.id, t.title, t.last_post_at, t.last_seq,\n               t.last_seq - coalesce(tr.last_read_seq, 0) AS \"unread!\",\n               lp.body_md AS \"last_body?\", lu.id AS \"last_user_id?\", lu.display_name AS \"last_name?\"\n        FROM private_thread_participants me\n        JOIN threads t ON t.id = me.thread_id\n        LEFT JOIN thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $1\n        LEFT JOIN LATERAL (\n            SELECT p.body_md, p.author_id FROM posts p\n            WHERE p.thread_id = t.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL\n            ORDER BY p.seq DESC LIMIT 1\n        ) lp ON true\n        LEFT JOIN users lu ON lu.id = lp.author_id\n        WHERE me.user_id = $1 AND me.left_at IS NULL AND t.deleted_at IS NULL\n          AND dm_readable(t.id, t.visibility, $1)\n        ORDER BY t.last_post_at DESC, t.id DESC\n        LIMIT $2 OFFSET $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "last_post_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "last_post_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "last_seq",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "last_seq"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "unread!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "last_body?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "body_md"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "last_user_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "last_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f554f2aad5053bac7c3a6960d75e6f01d6397414d71decad8a021650d1300d45"
+}

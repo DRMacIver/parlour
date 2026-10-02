@@ -93,3 +93,74 @@ pub enum InvitePolicy {
 pub async fn invite_policy(db: &Db) -> sqlx::Result<InvitePolicy> {
     Ok(get(db, "invite_policy").await?.unwrap_or_default())
 }
+
+/// The site's rules for direct messages (DESIGN.md §3.7, §7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MessageSettings {
+    /// Whether members may send direct messages at all. Staff always may.
+    pub enabled: bool,
+    /// The most people a member may write to in one conversation, not
+    /// counting themselves.
+    pub max_recipients: u32,
+    /// A member is new, and can't start conversations, until their account
+    /// is this many days old and they have written this many posts.
+    pub new_user_days: u32,
+    pub new_user_posts: u32,
+}
+
+impl Default for MessageSettings {
+    fn default() -> Self {
+        MessageSettings {
+            enabled: true,
+            max_recipients: 10,
+            new_user_days: 3,
+            new_user_posts: 5,
+        }
+    }
+}
+
+pub async fn message_settings(db: &Db) -> sqlx::Result<MessageSettings> {
+    Ok(get(db, "messages").await?.unwrap_or_default())
+}
+
+/// When notifications are emailed (DESIGN.md §9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotificationSettings {
+    /// A notification is emailed only if it is still unread this many
+    /// minutes after it was made, and its member hasn't been seen since.
+    pub email_delay_minutes: u32,
+}
+
+impl Default for NotificationSettings {
+    fn default() -> Self {
+        NotificationSettings {
+            email_delay_minutes: 15,
+        }
+    }
+}
+
+pub async fn notification_settings(db: &Db) -> sqlx::Result<NotificationSettings> {
+    Ok(get(db, "notifications").await?.unwrap_or_default())
+}
+
+/// The site's secret for signing links in emails (such as one-click
+/// unsubscribe links), made the first time it is needed.
+pub async fn signing_secret(db: &Db) -> sqlx::Result<Vec<u8>> {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let fresh = serde_json::Value::String(crate::tokens::random_token(32));
+    sqlx::query!(
+        "INSERT INTO settings (key, value) VALUES ('signing_secret', $1) ON CONFLICT (key) DO NOTHING",
+        fresh
+    )
+    .execute(db.pool())
+    .await?;
+    let secret: String = get(db, "signing_secret")
+        .await?
+        .expect("the signing secret was just saved");
+    Ok(URL_SAFE_NO_PAD
+        .decode(secret.as_bytes())
+        .unwrap_or_else(|_| secret.into_bytes()))
+}

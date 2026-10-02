@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{%- import "_admin_nav.html" as an -%}
+{% block title %}Messages and email · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Messages and email</h1>
+{% call an::admin_nav("messages") %}{% endcall %}
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+{% call f::errors(errors) %}{% endcall %}
+<form method="post" action="/admin/messages">
+<section class="panel" aria-labelledby="dm-heading">
+  <h2 class="panel-bar" id="dm-heading">Direct messages</h2>
+  <div class="form">
+    <label class="choice"><input type="checkbox" name="enabled" value="on"{% if messages.enabled %} checked{% endif %}> Members can send direct messages</label>
+    <span class="field-hint">Turned off, members can still read their conversations, and moderators and admins can still write to anyone.</span>
+    <div class="field">
+      <label for="max_recipients">The most people a member can write to in one conversation</label>
+      <input class="input-short" id="max_recipients" name="max_recipients" type="number" min="1" max="100" value="{{ messages.max_recipients }}">
+    </div>
+    <fieldset class="field">
+      <legend>New members can’t start conversations until</legend>
+      <label class="choice choice-wrap">their account is <input class="input-short" name="new_user_days" type="number" min="0" max="365" aria-label="Days" value="{{ messages.new_user_days }}"> days old</label>
+      <label class="choice choice-wrap">and they have written <input class="input-short" name="new_user_posts" type="number" min="0" max="1000" aria-label="Posts" value="{{ messages.new_user_posts }}"> posts</label>
+    </fieldset>
+  </div>
+</section>
+<section class="panel" aria-labelledby="email-heading">
+  <h2 class="panel-bar" id="email-heading">Notification email</h2>
+  <div class="form">
+    <div class="field">
+      <label class="choice-wrap" for="email_delay_minutes">Email a notification if it is still unread after <input class="input-short" id="email_delay_minutes" name="email_delay_minutes" type="number" min="0" max="10080" value="{{ notifications.email_delay_minutes }}"> minutes</label>
+      <span class="field-hint">Only if the member hasn’t been on the forum since. Several notifications go in one email.</span>
+    </div>
+  </div>
+</section>
+<div class="form-actions form-actions-page"><button class="button" type="submit">Save settings</button></div>
+</form>
+<section class="panel" aria-labelledby="test-heading">
+  <h2 class="panel-bar" id="test-heading">Test notification email</h2>
+  <form class="form" method="post" action="/admin/messages/test-email">
+    <p class="form-note">Sends a sample notification email, with its unsubscribe link, to {{ admin_email }}.</p>
+    <div class="form-actions"><button class="button button-quiet" type="submit">Send a test notification</button></div>
+  </form>
+</section>
+</div>
+{% endblock %}

@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u AS \"user_id!\",\n                  (SELECT level FROM watches w WHERE w.user_id = u AND w.thread_id = $1) AS thread_level,\n                  (SELECT level FROM watches w WHERE w.user_id = u AND w.category_id = $2) AS category_level\n           FROM (SELECT user_id FROM watches WHERE thread_id = $1\n                 UNION SELECT user_id FROM watches WHERE category_id = $2) AS w(u)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "thread_level",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "category_level",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "e5952b94f832b7e15f4b2a9a3600cf0c1891e82fee7aae8f3fe9262839dda093"
+}

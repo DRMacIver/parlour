@@ -580,6 +580,14 @@ struct ProfileTemplate {
     layout: Layout,
     profile: Profile,
     own: bool,
+    /// What a logged-in member looking at someone else's profile can do.
+    actions: Option<ProfileActions>,
+}
+
+struct ProfileActions {
+    can_message: bool,
+    blocked: bool,
+    can_block: bool,
 }
 
 pub async fn profile(
@@ -599,11 +607,33 @@ pub async fn profile(
     if uri.path_and_query().map_or(uri.path(), |pq| pq.as_str()) != canonical {
         return Ok(Redirect::permanent(&canonical).into_response());
     }
+    let actions = match viewer.user() {
+        Some(user) if user.id != profile.user.id => {
+            match crate::social::members_named(
+                state.db(),
+                std::slice::from_ref(&profile.user.username),
+            )
+            .await?
+            .into_iter()
+            .next()
+            {
+                Some(member) => Some(ProfileActions {
+                    can_message: crate::messages::may_message(&state, &viewer, &member).await?,
+                    blocked: crate::social::has_blocked(state.db(), user.id, member.user.id)
+                        .await?,
+                    can_block: !member.role.is_staff(),
+                }),
+                None => None,
+            }
+        }
+        _ => None,
+    };
     cacheable(
         &ProfileTemplate {
             layout: Layout::load(&state, &viewer, Nav::Members).await?,
             own: viewer.user_id() == Some(profile.user.id),
             profile,
+            actions,
         },
         &deps,
     )

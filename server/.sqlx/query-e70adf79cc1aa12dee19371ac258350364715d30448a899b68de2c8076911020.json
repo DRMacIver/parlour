@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT t.id, t.title, t.slug, t.locked, t.last_seq, t.category_id AS \"category_id!\"\n        FROM threads t\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.category_id IS NOT NULL\n          AND thread_readable(t.visibility, t.category_id, $2, $3)\n        ",
+  "query": "\n        SELECT t.id, t.title, t.slug, t.locked, t.last_seq, t.category_id\n        FROM threads t\n        WHERE t.id = $1 AND t.deleted_at IS NULL\n          AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))\n        ",
   "describe": {
     "columns": [
       {
@@ -60,7 +60,7 @@
       },
       {
         "ordinal": 5,
-        "name": "category_id!",
+        "name": "category_id",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -74,7 +74,8 @@
       "Left": [
         "Int8",
         "TextArray",
-        "Int8Array"
+        "Int8Array",
+        "Int8"
       ]
     },
     "nullable": [
@@ -86,5 +87,5 @@
       true
     ]
   },
-  "hash": "f3519b3167203ee0bdedffb0f3d9c168872d8c5c757f622f4ac1e1285d4cf634"
+  "hash": "e70adf79cc1aa12dee19371ac258350364715d30448a899b68de2c8076911020"
 }

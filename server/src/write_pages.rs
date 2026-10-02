@@ -16,13 +16,11 @@ use crate::AppState;
 use crate::changes::Change;
 use crate::content::{
     self, CategoryTarget, Deps, PostHistory, PostReactions, PostTarget, ReactionType, ThreadTarget,
-    page_of_seq,
 };
 use crate::diff::{self, Segment};
 use crate::error::AppError;
 use crate::format;
 use crate::pages::parse_id;
-use crate::pagination::page_href;
 use crate::store;
 use crate::viewer::Viewer;
 use crate::web::{self, Layout, Nav, cacheable, render, see_other};
@@ -41,19 +39,13 @@ fn field<'a>(fields: &'a Fields, name: &str) -> Option<&'a str> {
 async fn post_href(state: &AppState, viewer: &Viewer, post_id: i64) -> Result<String, AppError> {
     Ok(
         match content::post_location(state.db(), viewer, post_id).await? {
-            Some(location) => format!(
-                "{}#p{post_id}",
-                page_href(
-                    &format::thread_href(&location.thread_id, &location.thread_slug),
-                    page_of_seq(location.seq)
-                )
-            ),
+            Some(location) => location.href(post_id),
             None => "/".to_owned(),
         },
     )
 }
 
-async fn not_allowed(
+pub(crate) async fn not_allowed(
     state: &AppState,
     viewer: &Viewer,
     reason: &str,
@@ -151,10 +143,16 @@ fn category_crumbs(category: &CategoryTarget) -> Vec<Crumb> {
 }
 
 fn thread_crumbs(thread: &ThreadTarget) -> Vec<Crumb> {
-    let mut crumbs = category_crumbs(&thread.category);
+    let mut crumbs = match thread.category() {
+        Some(category) => category_crumbs(category),
+        None => vec![Crumb {
+            href: "/messages".to_owned(),
+            label: "Messages".to_owned(),
+        }],
+    };
     crumbs.push(Crumb {
-        href: format::thread_href(&thread.thread.id, &thread.thread.slug),
-        label: thread.thread.title.clone(),
+        href: thread.href(),
+        label: thread.name.clone(),
     });
     crumbs
 }
@@ -234,7 +232,7 @@ async fn render_compose(
                 None => None,
             };
             ComposeTemplate {
-                heading: format!("Reply to {}", thread.thread.title),
+                heading: format!("Reply to {}", thread.name.clone()),
                 form_label: "Reply",
                 action: format!("/t/{}/reply", thread.thread.id),
                 title: None,
@@ -243,7 +241,7 @@ async fn render_compose(
                 body: draft.body,
                 body_label: "Your reply",
                 submit: "Post reply",
-                cancel: format::thread_href(&thread.thread.id, &thread.thread.slug),
+                cancel: thread.href(),
                 source: None,
                 crumbs: thread_crumbs(&thread),
                 layout: Layout::load(state, viewer, Nav::None).await?,
@@ -270,7 +268,11 @@ async fn render_compose(
         },
         Compose::Fork(source, destinations) => {
             let wanted = if draft.category.is_empty() {
-                source.thread.category.category.slug.clone()
+                source
+                    .thread
+                    .category()
+                    .map(|c| c.category.slug.clone())
+                    .unwrap_or_default()
             } else {
                 draft.category.clone()
             };
@@ -352,6 +354,9 @@ async fn refused(
                 Refused::NotAllowed(reason) => {
                     (StatusCode::FORBIDDEN, "Not allowed", vec![reason.to_owned()])
                 }
+                Refused::NotAllowedBecause(reason) => {
+                    (StatusCode::FORBIDDEN, "Not allowed", vec![reason])
+                }
                 Refused::Invalid(problems) => {
                     (StatusCode::BAD_REQUEST, "That didn’t work", problems)
                 }
@@ -380,6 +385,7 @@ async fn refused(
         (Refused::LogIn, _) => Ok(web::login_first(back_to)),
         (Refused::NotFound, _) => web::not_found(state, viewer).await,
         (Refused::NotAllowed(reason), _) => not_allowed(state, viewer, reason).await,
+        (Refused::NotAllowedBecause(reason), _) => not_allowed(state, viewer, &reason).await,
         (Refused::Invalid(problems), Some((compose, draft))) => {
             render_compose(
                 state,
@@ -516,7 +522,7 @@ async fn reply_target(
     let Some(thread) = content::thread_target(state.db(), viewer, thread_id).await? else {
         return Ok(Err(Refused::NotFound));
     };
-    if let Some(reason) = writing::reply_refusal(viewer, &thread) {
+    if let Some(reason) = writing::reply_refusal(state, viewer, &thread).await? {
         return Ok(Err(Refused::NotAllowed(reason)));
     }
     Ok(Ok(thread))

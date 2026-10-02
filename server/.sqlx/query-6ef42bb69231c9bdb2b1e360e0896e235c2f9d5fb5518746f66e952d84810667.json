@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT p.id, p.seq, p.thread_id, p.created_at, p.edited_at,\n               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.body_md END AS body_md,\n               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.body_html END AS body_html,\n               u.id AS author_id, u.username, u.display_name\n        FROM posts p\n        JOIN threads t ON t.id = p.thread_id\n        JOIN users u ON u.id = p.author_id\n        WHERE p.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $2, $3)\n        ",
+  "query": "\n        SELECT p.id, p.seq, p.thread_id, p.created_at, p.edited_at,\n               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.body_md END AS body_md,\n               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.body_html END AS body_html,\n               u.id AS author_id, u.username, u.display_name\n        FROM posts p\n        JOIN threads t ON t.id = p.thread_id\n        JOIN users u ON u.id = p.author_id\n        WHERE p.id = $1 AND t.deleted_at IS NULL\n          AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))\n        ",
   "describe": {
     "columns": [
       {
@@ -113,7 +113,8 @@
       "Left": [
         "Int8",
         "TextArray",
-        "Int8Array"
+        "Int8Array",
+        "Int8"
       ]
     },
     "nullable": [
@@ -129,5 +130,5 @@
       false
     ]
   },
-  "hash": "f18f8831d99b0a55b8f0d30a154f81f0f9903dd1b8632758d85b600ada1c17c7"
+  "hash": "6ef42bb69231c9bdb2b1e360e0896e235c2f9d5fb5518746f66e952d84810667"
 }

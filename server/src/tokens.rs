@@ -47,6 +47,16 @@ pub fn random_code(digits: u32) -> String {
     }
 }
 
+/// An HMAC-SHA256 of `message` under `secret`, for links that must not be
+/// forgeable but needn't be stored, such as unsubscribe links.
+pub fn sign(secret: &[u8], message: &str) -> Vec<u8> {
+    use hmac::{KeyInit, Mac};
+    let mut mac =
+        hmac::Hmac::<Sha256>::new_from_slice(secret).expect("HMAC takes keys of any length");
+    mac.update(message.as_bytes());
+    mac.finalize().into_bytes().to_vec()
+}
+
 /// Compares two secrets (or hashes) in constant time.
 pub fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && bool::from(a.ct_eq(b))

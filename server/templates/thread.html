@@ -15,6 +15,7 @@
 <div class="toolbar">
   {% if self.can_reply() %}<a class="button" href="#reply">Post reply</a>{% endif %}
   {% if self.logged_in() %}<a href="/t/{{ thread.thread.id }}/unread">First unread</a>{% endif %}
+  {% if let Some(level) = watch %}{% call m::watch_form(self.watch_action(), level, "thread") %}{% endcall %}{% endif %}
   <span class="spacer"></span>
   {% call m::pagination(pagination, "Pages") %}{% endcall %}
 </div>
@@ -82,7 +83,14 @@
         </span>
         {% endif %}
       </header>
+      {% if post.from_blocked %}
+      <details class="blocked-post">
+        <summary>A post by someone you’ve blocked</summary>
+        <div class="post-body">{{ body_html|safe }}</div>
+      </details>
+      {% else %}
       <div class="post-body">{{ body_html|safe }}</div>
+      {% endif %}
       {% for fork in post.forks %}
       <p class="fork-link">Continued in <a href="{{ crate::format::thread_href(fork.thread.id, fork.thread.slug) }}">{{ fork.thread.title }}</a> ({{ crate::format::plural(fork.post_count, "post", "posts") }}, by {{ fork.author.display_name }})</p>
       {% endfor %}

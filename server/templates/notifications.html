@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{% block title %}Notifications · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Notifications</h1>
+  <span class="spacer"></span>
+  {% if unread > 0 %}<form class="form-inline" method="post" action="/notifications/read"><button class="button button-small button-quiet" type="submit">Mark all read</button></form>{% endif %}
+</div>
+<section class="panel" aria-labelledby="notifications-heading">
+  <h2 class="panel-bar" id="notifications-heading">{% if unread > 0 %}{{ crate::format::count(unread) }} unread{% else %}All read{% endif %}</h2>
+  {% if list.rows.is_empty() %}
+  <p class="empty">Nothing yet. You’ll hear here when someone replies to you, mentions you or sends you a message, and about threads and categories you watch.</p>
+  {% else %}
+  <ul class="notification-list">
+    {% for n in list.rows %}
+    <li class="notification{% if !n.read %} notification-unread{% endif %}">
+      {% if let Some(actor) = n.actor %}{% call m::avatar(actor, "avatar-tiny") %}{% endcall %}{% endif %}
+      <span class="notification-text">
+        {% if !n.read %}<span class="visually-hidden">Unread: </span>{% endif %}
+        {% match n.about %}
+        {% when Some(about) %}
+        {% if let Some(actor) = n.actor %}<strong>{{ actor.display_name }}</strong> {% endif %}{{ n.kind.phrase() }} <a href="/notifications/{{ n.id }}">{{ about.title }}</a>
+        {% when None %}
+        <strong>From the moderators:</strong> {% if let Some(message) = n.message %}{{ message }}{% endif %}{% if !n.read %} <a href="/notifications/{{ n.id }}">Mark read</a>{% endif %}
+        {% endmatch %}
+        <span class="row-meta">{% call m::time(n.created_at) %}{% endcall %}</span>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% call m::pagination(pagination, "Pages of notifications") %}{% endcall %}
+<p class="panel-foot">Choose which notifications are emailed to you in <a href="/settings#email">your settings</a>. Watch or mute a thread or category from its page.</p>
+{% endblock %}

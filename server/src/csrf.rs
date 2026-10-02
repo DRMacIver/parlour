@@ -18,7 +18,10 @@ use axum::response::{IntoResponse, Response};
 use crate::AppState;
 
 pub async fn middleware(State(state): State<AppState>, request: Request, next: Next) -> Response {
-    if safe_method(request.method()) || same_origin(request.headers(), &state.config().base_url) {
+    if safe_method(request.method())
+        || one_click_unsubscribe(request.uri().path())
+        || same_origin(request.headers(), &state.config().base_url)
+    {
         next.run(request).await
     } else {
         (
@@ -28,6 +31,14 @@ pub async fn middleware(State(state): State<AppState>, request: Request, next: N
         )
             .into_response()
     }
+}
+
+/// One-click unsubscribe links (RFC 8058) are POSTed to by mail
+/// providers, with no `Origin` or `Referer`. The signed token in the path
+/// is what authorises them, and all they can do is turn emails off.
+fn one_click_unsubscribe(path: &str) -> bool {
+    path.strip_prefix("/unsubscribe/")
+        .is_some_and(|token| !token.is_empty() && !token.contains('/'))
 }
 
 fn safe_method(method: &Method) -> bool {

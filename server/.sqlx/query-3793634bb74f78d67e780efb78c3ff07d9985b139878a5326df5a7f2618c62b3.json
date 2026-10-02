@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT b.blocked_user_id FROM blocks b JOIN users u ON u.id = b.blocked_user_id\n           WHERE b.user_id = $1 AND u.role = 'user'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "blocked_user_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "blocks",
+            "name": "blocked_user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3793634bb74f78d67e780efb78c3ff07d9985b139878a5326df5a7f2618c62b3"
+}

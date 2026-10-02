@@ -13,6 +13,17 @@
     {% endif %}
     {% if let Some(status) = profile.status_line %}<p class="profile-status">“{{ status }}”</p>{% endif %}
     {% if own %}<p><a href="/settings">Your account settings</a> · <a href="/invites">your invites</a></p>{% endif %}
+    {% if let Some(actions) = actions %}
+    <div class="profile-actions">
+      {% if actions.can_message %}<a class="button button-small" href="/messages/new?to={{ profile.user.username }}">Send a message</a>{% endif %}
+      {% if actions.blocked %}
+      <span class="flag">Blocked</span>
+      <form class="form-inline" method="post" action="/u/{{ profile.user.username }}/unblock"><button class="button button-small button-quiet" type="submit">Unblock</button></form>
+      {% else if actions.can_block %}
+      <a class="button button-small button-quiet" href="/u/{{ profile.user.username }}/block">Block…</a>
+      {% endif %}
+    </div>
+    {% endif %}
   </div>
 </div>
 <section class="panel" aria-labelledby="about-heading">

@@ -1,0 +1,14 @@
+Hello {{ name }},
+
+{% if items.len() == 1 %}Here is something you haven’t seen on {{ site_name }}.{% else %}Here are {{ items.len() }} things you haven’t seen on {{ site_name }}.{% endif %}
+{% for item in items %}
+{{ item.headline }}:
+
+{{ item.text }}
+
+{{ item.url }}
+{% endfor %}
+-- 
+You get these emails when you have notifications you haven’t seen.
+To stop emails about {{ unsubscribe_what }}: {{ unsubscribe_url }}
+To choose which emails you get: {{ settings_url }}

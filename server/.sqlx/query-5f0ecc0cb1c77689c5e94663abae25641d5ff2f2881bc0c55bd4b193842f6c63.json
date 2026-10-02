@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO private_thread_participants (thread_id, user_id, joined_at, added_by)\n           SELECT $1, u, $3, CASE WHEN u = $2 THEN NULL ELSE $2 END\n           FROM unnest(array_append($4::bigint[], $2)) AS u\n           ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Timestamptz",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5f0ecc0cb1c77689c5e94663abae25641d5ff2f2881bc0c55bd4b193842f6c63"
+}

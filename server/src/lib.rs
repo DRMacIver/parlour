@@ -14,8 +14,13 @@ mod error;
 pub mod format;
 pub mod http_cache;
 mod invite_pages;
+pub mod live;
 pub mod mail;
 pub mod markdown;
+mod message_pages;
+pub mod messages;
+mod notification_pages;
+pub mod notify;
 mod pages;
 pub mod pagination;
 pub mod permissions;
@@ -28,8 +33,8 @@ mod write_pages;
 pub mod writing;
 
 pub use db::{
-    changes, content, groups, invites, jobs, login_tokens, members, seed, sessions, settings,
-    store, users,
+    changes, content, groups, invites, jobs, login_tokens, members, notifications, seed, sessions,
+    settings, social, store, users,
 };
 
 use std::sync::{Arc, Mutex};
@@ -48,6 +53,7 @@ use crate::cache::PageCache;
 use crate::changes::Change;
 use crate::config::Config;
 use crate::jobs::Jobs;
+use crate::live::{Event, Live};
 use crate::mail::Mailer;
 use crate::ratelimit::RateLimiter;
 
@@ -64,6 +70,7 @@ pub struct AppState {
     mailer: Mailer,
     limiter: Arc<RateLimiter>,
     jobs: Arc<Jobs>,
+    live: Live,
     /// The hash of the one-time `/setup` token, while there is no admin.
     setup_token: Arc<Mutex<Option<Vec<u8>>>>,
 }
@@ -79,6 +86,8 @@ impl AppState {
         let jobs = Jobs::default();
         jobs.register(mail::JOB_KIND, mail::run_job);
         jobs.scrub_on_failure(mail::JOB_KIND, mail::scrub);
+        jobs.register(notify::POST_JOB, notify::run_post_job);
+        jobs.register(notify::EMAIL_JOB, notify::run_email_job);
         AppState {
             db: Db::new(db),
             cache: Arc::new(cache),
@@ -86,6 +95,7 @@ impl AppState {
             mailer: Mailer::default(),
             limiter: Arc::new(RateLimiter::default()),
             jobs: Arc::new(jobs),
+            live: Live::default(),
             setup_token: Arc::default(),
         }
     }
@@ -129,6 +139,10 @@ impl AppState {
         &self.jobs
     }
 
+    pub fn live(&self) -> &Live {
+        &self.live
+    }
+
     pub(crate) fn setup_token(&self) -> &Mutex<Option<Vec<u8>>> {
         &self.setup_token
     }
@@ -137,6 +151,15 @@ impl AppState {
     pub async fn changed(&self, change: Change) -> sqlx::Result<()> {
         let tags = changes::tags_for(&self.db, change).await?;
         self.cache.invalidate(&tags);
+        if let Change::PostCreated { post_id } = change
+            && let Some((thread_id, seq)) = changes::post_seq(&self.db, post_id).await?
+        {
+            self.live.publish(Event::Post {
+                thread_id,
+                post_id,
+                seq,
+            });
+        }
         Ok(())
     }
 }
@@ -156,6 +179,8 @@ pub fn app(state: AppState) -> Router {
             get(write_pages::new_thread_page).post(write_pages::new_thread),
         )
         .route("/c/{slug}/read", post(write_pages::mark_category_read))
+        .route("/c/{slug}/watch", post(notification_pages::watch_category))
+        .route("/t/{id}/watch", post(notification_pages::watch_thread))
         .route(
             "/t/{id}/reply",
             get(write_pages::reply_page).post(write_pages::reply),
@@ -177,6 +202,52 @@ pub fn app(state: AppState) -> Router {
             "/p/{id}/fork",
             get(write_pages::fork_page).post(write_pages::fork),
         )
+        // Messages and notifications
+        .route("/messages", get(message_pages::list))
+        .route(
+            "/messages/new",
+            get(message_pages::new_page).post(message_pages::start),
+        )
+        .route(
+            "/messages/{id}",
+            get(message_pages::conversation).post(write_pages::reply),
+        )
+        .route("/messages/{id}/unread", get(message_pages::unread))
+        .route("/messages/{id}/leave", post(message_pages::leave))
+        .route("/messages/{id}/people", post(message_pages::add_person))
+        .route(
+            "/u/{username}/block",
+            get(message_pages::block_page).post(message_pages::block),
+        )
+        .route("/u/{username}/unblock", post(message_pages::unblock))
+        .route("/notifications", get(notification_pages::list))
+        .route(
+            "/notifications/read",
+            post(notification_pages::mark_all_read),
+        )
+        .route("/notifications/{id}", get(notification_pages::open))
+        .route(
+            "/settings/messages",
+            post(notification_pages::save_dm_policy),
+        )
+        .route(
+            "/settings/notifications",
+            post(notification_pages::save_email_prefs),
+        )
+        .route(
+            "/unsubscribe/{token}",
+            get(notification_pages::unsubscribe_page).post(notification_pages::unsubscribe),
+        )
+        .route(
+            "/admin/messages",
+            get(notification_pages::admin_page).post(notification_pages::save_admin),
+        )
+        .route(
+            "/admin/messages/test-email",
+            post(notification_pages::test_email),
+        )
+        .route("/events/t/{id}", get(live::thread_events))
+        .route("/events/notifications", get(live::notification_events))
         // Accounts
         .route(
             "/login",

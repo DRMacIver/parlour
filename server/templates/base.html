@@ -20,6 +20,8 @@
     <a href="/users/tree"{% if layout.nav == Nav::Members %} aria-current="page"{% endif %}>Members</a>
     <span class="spacer"></span>
     {% if let Some(user) = layout.user %}
+    <a class="nav-count" href="/notifications"{% if layout.nav == Nav::Notifications %} aria-current="page"{% endif %}>Notifications{% if user.notifications > 0 %} <span class="count-badge" data-count="notifications">{{ user.notifications }}</span><span class="visually-hidden"> unread</span>{% endif %}</a>
+    <a class="nav-count" href="/messages"{% if layout.nav == Nav::Messages %} aria-current="page"{% endif %}>Messages{% if user.messages > 0 %} <span class="count-badge" data-count="messages">{{ user.messages }}</span><span class="visually-hidden"> with new messages</span>{% endif %}</a>
     <a href="/invites"{% if layout.nav == Nav::Invites %} aria-current="page"{% endif %}>Invites</a>
     {% if user.is_admin %}<a href="/admin/settings"{% if layout.nav == Nav::Admin %} aria-current="page"{% endif %}>Admin</a>{% endif %}
     <a class="nav-user" href="/settings"{% if layout.nav == Nav::Account %} aria-current="page"{% endif %} title="Your account settings">{{ user.username }}</a>
