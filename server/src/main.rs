@@ -44,10 +44,22 @@ fn parse_args(args: &[String]) -> Option<Command> {
     }
 }
 
+/// Whether log lines get colour codes: only when they go to a terminal,
+/// not to `docker logs` or journald, and not if `NO_COLOR` is set.
+fn log_colours(stdout_is_terminal: bool, no_color: Option<&str>) -> bool {
+    stdout_is_terminal && no_color.is_none_or(str::is_empty)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    use std::io::IsTerminal;
+    let no_color = std::env::var("NO_COLOR").ok();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with_ansi(log_colours(
+            std::io::stdout().is_terminal(),
+            no_color.as_deref(),
+        ))
         .init();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -154,5 +166,14 @@ mod tests {
         assert!(parse(&["seed", "--force"]).is_none());
         assert!(parse(&["serve", "extra"]).is_none());
         assert!(parse(&["nonsense"]).is_none());
+    }
+
+    #[test]
+    fn logs_are_coloured_only_on_a_terminal() {
+        assert!(log_colours(true, None));
+        assert!(!log_colours(false, None));
+        // https://no-color.org: any non-empty value turns colour off.
+        assert!(!log_colours(true, Some("1")));
+        assert!(log_colours(true, Some("")));
     }
 }
