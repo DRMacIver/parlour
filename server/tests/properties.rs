@@ -31,6 +31,10 @@
 //!   anonymous cache, the category lists, the notifications page or any
 //!   page about a post. Every new post is put through the notification
 //!   fan-out, so the notifications page is checked too.
+//! - Notification email is sent as members are away, and every email holds
+//!   only text its recipient may read now; the notification badge, both
+//!   counted directly and as the live badge stream sends it, counts exactly
+//!   the unread notifications about posts the viewer may read.
 
 mod common;
 
@@ -149,6 +153,10 @@ struct World {
     staff_id: i64,
     conversations: Vec<ConversationModel>,
     messages: Vec<MessageModel>,
+    /// Who each email address belongs to.
+    addresses: HashMap<String, i64>,
+    /// How many of the mailer's sent emails have been checked.
+    emails_checked: usize,
 }
 
 impl World {
@@ -163,7 +171,7 @@ impl World {
         });
         let mut world = World {
             cached: Forum {
-                state: AppState::new(db.clone()),
+                state: AppState::new(db.clone()).with_mailer(parlour::mail::Mailer::capture()),
                 db: db.clone(),
             },
             fresh: Forum {
@@ -186,6 +194,8 @@ impl World {
             staff_id: 0,
             conversations: Vec::new(),
             messages: Vec::new(),
+            addresses: HashMap::new(),
+            emails_checked: 0,
         };
         for name in ["ruth", "jonah", "maya"] {
             let id = world
@@ -200,6 +210,7 @@ impl World {
                 ))
                 .unwrap();
             world.users.push(id);
+            world.addresses.insert(format!("{name}@example.com"), id);
         }
         // Viewers who log in. The member writes too, so that the pages for
         // editing and deleting their own posts are checked as well; the
@@ -217,6 +228,7 @@ impl World {
                     },
                 ))
                 .unwrap();
+            world.addresses.insert(format!("{name}@example.com"), id);
             let cookie = world.block(world.cached.session(id));
             if role == "user" {
                 world.member_cookie = cookie;
@@ -234,6 +246,17 @@ impl World {
         for level in ["public", "public", "members", "groups"] {
             world.add_category(level);
         }
+        // Everyone can be emailed, as soon as a notification is made.
+        world.exec("UPDATE users SET email_verified_at = now()".to_owned());
+        world
+            .block(parlour::settings::set(
+                world.db(),
+                "notifications",
+                &parlour::settings::NotificationSettings {
+                    email_delay_minutes: 0,
+                },
+            ))
+            .unwrap();
         world
     }
 
@@ -398,6 +421,156 @@ impl World {
     fn post_readable(&self, post: usize, who: Who) -> bool {
         let p = &self.posts[post];
         !p.deleted && !p.hidden && self.thread_readable(p.thread, who)
+    }
+
+    /// The viewer a member is, for the reference permission function:
+    /// the logged-in viewers as themselves, and the other members (who
+    /// are in no groups) as a member viewer in no groups would be.
+    fn category_readable_by(&self, category: usize, user: i64) -> bool {
+        if user == self.staff_id {
+            return true;
+        }
+        let c = &self.categories[category];
+        match c.read_level {
+            "public" | "members" => true,
+            _ => user == self.member_id && !self.member_groups.is_disjoint(&c.read_groups),
+        }
+    }
+
+    /// Tokens the member `user` may read now.
+    fn tokens_for_user(&self, user: i64) -> BTreeSet<&str> {
+        let mut tokens = BTreeSet::new();
+        for t in &self.threads {
+            if !t.deleted && self.category_readable_by(t.category, user) {
+                tokens.insert(t.title_token.as_str());
+            }
+        }
+        for p in &self.posts {
+            let t = &self.threads[p.thread];
+            if !p.deleted && !p.hidden && !t.deleted && self.category_readable_by(t.category, user)
+            {
+                tokens.insert(p.body_token.as_str());
+            }
+        }
+        for c in &self.conversations {
+            if c.participants.contains(&user) {
+                tokens.insert(c.title_token.as_str());
+            }
+        }
+        for m in &self.messages {
+            if !m.deleted
+                && self.conversations[m.conversation]
+                    .participants
+                    .contains(&user)
+            {
+                tokens.insert(m.body_token.as_str());
+            }
+        }
+        tokens
+    }
+
+    /// How many unread notifications the viewer should see on the badge:
+    /// those about posts they may read now, by the reference function.
+    fn expected_unread(&self, who: Who) -> i64 {
+        let user = self.viewer_id(who).unwrap();
+        let unread: Vec<Option<i64>> = self
+            .block(
+                sqlx::query_scalar(
+                    "SELECT post_id FROM notifications WHERE user_id = $1 AND read_at IS NULL",
+                )
+                .bind(user)
+                .fetch_all(self.db()),
+            )
+            .unwrap();
+        unread
+            .into_iter()
+            .filter(|post_id| {
+                let Some(post_id) = post_id else { return true };
+                if let Some(i) = self.posts.iter().position(|p| p.id == *post_id) {
+                    return self.post_readable(i, who);
+                }
+                let m = self
+                    .messages
+                    .iter()
+                    .find(|m| m.id == *post_id)
+                    .expect("a notification about a post the test made");
+                !m.deleted && self.conversation_readable(m.conversation, who)
+            })
+            .count() as i64
+    }
+
+    /// The first counts the live badge stream sends the viewer.
+    fn streamed_counts(&self, who: Who) -> String {
+        use axum::body::Body;
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+        let request = axum::http::Request::get("/events/notifications")
+            .header(axum::http::header::COOKIE, self.cookie(who).unwrap())
+            .body(Body::empty())
+            .unwrap();
+        self.block(async {
+            let response = parlour::app(self.fresh.state.clone())
+                .oneshot(request)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let mut body = response.into_body();
+            let mut text = String::new();
+            loop {
+                if let Some(data) = text
+                    .split("\n\n")
+                    .next()
+                    .filter(|_| text.contains("\n\n"))
+                    .and_then(|event| event.lines().find_map(|l| l.strip_prefix("data: ")))
+                {
+                    return data.to_owned();
+                }
+                let frame = body.frame().await.expect("a counts event").unwrap();
+                if let Ok(data) = frame.into_data() {
+                    text.push_str(std::str::from_utf8(&data).unwrap());
+                }
+            }
+        })
+    }
+
+    /// Runs the notification email jobs that are due, and checks that each
+    /// email sent holds only what its recipient may read now. Every unread
+    /// notification is emailed again, not only new ones, so that each is
+    /// checked against how things are now: after posts were deleted or
+    /// moved, categories closed, groups or conversations left.
+    fn send_emails(&mut self) {
+        self.exec("UPDATE notifications SET emailed_at = NULL WHERE read_at IS NULL".to_owned());
+        let unread: Vec<i64> = self
+            .block(
+                sqlx::query_scalar(
+                    "SELECT id FROM notifications WHERE read_at IS NULL ORDER BY id",
+                )
+                .fetch_all(self.db()),
+            )
+            .unwrap();
+        for id in unread {
+            self.block(parlour::notify::email_if_away(&self.cached.state, id))
+                .unwrap();
+        }
+        self.block(parlour::jobs::run_due(&self.cached.state))
+            .unwrap();
+        let sent = self.cached.state.mailer().sent();
+        for email in &sent[self.emails_checked..] {
+            let user = self.addresses[&email.to];
+            let allowed = self.tokens_for_user(user);
+            for token in &self.all_tokens {
+                if allowed.contains(token.as_str()) {
+                    continue;
+                }
+                assert!(
+                    !email.body.contains(token.as_str()) && !email.subject.contains(token.as_str()),
+                    "an email to {} shows {token}:\n{}",
+                    email.to,
+                    email.body
+                );
+            }
+        }
+        self.emails_checked = sent.len();
     }
 
     /// Tokens this viewer may see somewhere.
@@ -690,6 +863,29 @@ impl World {
             if expected == StatusCode::OK {
                 assert!(response.body.contains(&c.title_token));
             }
+        }
+        if who != Who::Anonymous {
+            let viewer = Viewer::User(
+                self.block(sessions::user_ctx(
+                    self.fresh.state.db(),
+                    self.viewer_id(who).unwrap(),
+                ))
+                .unwrap()
+                .unwrap(),
+            );
+            let expected = self.expected_unread(who);
+            let counted = self
+                .block(content::notifications::unread_count(
+                    self.fresh.state.db(),
+                    &viewer,
+                ))
+                .unwrap();
+            assert_eq!(counted, expected, "{who:?}'s unread notifications");
+            let streamed = self.streamed_counts(who);
+            assert!(
+                streamed.starts_with(&format!("{{\"notifications\":{expected},")),
+                "{who:?} was streamed {streamed}, expecting {expected}"
+            );
         }
         for m in &self.messages {
             let permalink = self.get_as(who, &format!("/p/{}", m.id));
@@ -1133,6 +1329,13 @@ impl World {
             if deleted { "now()" } else { "NULL" }
         ));
         self.changed(Change::PostRemoved { post_id: id });
+    }
+
+    /// The notification email jobs run, as the job workers would once the
+    /// delay is over.
+    #[rule]
+    fn send_notification_emails(&mut self, _: TestCase) {
+        self.send_emails();
     }
 
     /// Requests every page through the cache, so that later changes have
