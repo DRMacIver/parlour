@@ -827,6 +827,8 @@ struct ModPostTemplate {
     deleted: bool,
     /// Earlier versions that can still be redacted.
     revisions: Vec<i32>,
+    /// The addresses of the images it shows.
+    images: Vec<String>,
 }
 
 pub async fn post_page(
@@ -852,6 +854,11 @@ pub async fn post_page(
         &ModPostTemplate {
             layout: Layout::load(&state, &viewer, Nav::Moderation).await?,
             deleted: post.body.is_none(),
+            images: if post.body.is_some() {
+                crate::upload_records::in_post(state.db(), post_id).await?
+            } else {
+                Vec::new()
+            },
             post,
             revisions,
         },
@@ -1140,6 +1147,8 @@ struct ModUserTemplate {
     branch: Vec<crate::content::UserRef>,
     durations: &'static [(u32, &'static str)],
     notice: Option<&'static str>,
+    /// The address of their picture.
+    avatar: Option<String>,
 }
 
 pub async fn user_page(
@@ -1180,6 +1189,7 @@ pub async fn user_page(
             retention_days,
             actions,
             branch: mod_records::invite_branch(state.db(), member.user.id).await?,
+            avatar: crate::upload_records::avatar_url(state.db(), member.user.id).await?,
             durations: &DURATIONS,
             member,
             notice,
@@ -1405,9 +1415,141 @@ pub async fn save_admin(
     Ok(see_other("/admin/moderation?done=1"))
 }
 
+// ---------------------------------------------------------------------------
+// Images
+
+#[derive(Template)]
+#[template(path = "mod_images.html")]
+struct ModImagesTemplate {
+    layout: Layout,
+    address: String,
+    error: Option<&'static str>,
+}
+
+/// The file name in an image's address, which may be a whole URL or just
+/// the path.
+fn image_name(address: &str) -> Option<&str> {
+    let address = address.trim();
+    let (_, rest) = address.rsplit_once("/uploads/")?;
+    let name = rest.split(['?', '#']).next()?;
+    crate::uploads::parse_name(name).map(|_| name)
+}
+
+/// `/mod/uploads`: finds an image by its address, to review or remove it.
+pub async fn images_page(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    uri: Uri,
+) -> Result<Response, AppError> {
+    if let Err(refusal) = moderation::staff(&viewer) {
+        return refused(&state, &viewer, refusal, "/mod/uploads").await;
+    }
+    let address = params_of(&uri)
+        .into_iter()
+        .find(|(k, _)| k == "image")
+        .map(|(_, v)| v)
+        .unwrap_or_default();
+    let (status, error) = if address.trim().is_empty() {
+        (StatusCode::OK, None)
+    } else if let Some(name) = image_name(&address) {
+        return Ok(see_other(&format!("/mod/uploads/{name}")));
+    } else {
+        (
+            StatusCode::BAD_REQUEST,
+            Some(
+                "That isn’t the address of an image uploaded here. Copy the image’s address and paste it in.",
+            ),
+        )
+    };
+    render(
+        status,
+        &ModImagesTemplate {
+            layout: Layout::load(&state, &viewer, Nav::Moderation).await?,
+            address: address.chars().take(500).collect(),
+            error,
+        },
+    )
+}
+
+#[derive(Template)]
+#[template(path = "mod_image.html")]
+struct ModImageTemplate {
+    layout: Layout,
+    name: String,
+    url: String,
+    /// `None` once it has been removed.
+    image: Option<crate::upload_records::ImageUse>,
+}
+
+/// `/mod/uploads/{name}`: an image, where it is used, and the form to
+/// remove it.
+pub async fn image_page(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(name): Path<String>,
+) -> Result<Response, AppError> {
+    let back = format!("/mod/uploads/{name}");
+    if let Err(refusal) = moderation::staff(&viewer) {
+        return refused(&state, &viewer, refusal, &back).await;
+    }
+    let Some((sha256, ext)) = crate::uploads::parse_name(&name) else {
+        return web::not_found(&state, &viewer).await;
+    };
+    let image = match crate::upload_records::image_use(state.db(), sha256, ext).await? {
+        crate::upload_records::ImageLookup::NotFound => {
+            return web::not_found(&state, &viewer).await;
+        }
+        crate::upload_records::ImageLookup::Removed => None,
+        crate::upload_records::ImageLookup::Found(image) => Some(image),
+    };
+    render(
+        StatusCode::OK,
+        &ModImageTemplate {
+            layout: Layout::load(&state, &viewer, Nav::Moderation).await?,
+            url: crate::uploads::url(sha256, ext),
+            name,
+            image,
+        },
+    )
+}
+
+pub async fn remove_image(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(name): Path<String>,
+    Form(fields): Form<Fields>,
+) -> Result<Response, AppError> {
+    let back = format!("/mod/uploads/{name}");
+    match moderation::remove_image(&state, &viewer, &name, field(&fields, "reason")).await? {
+        Ok(()) => Ok(see_other(&back)),
+        Err(refusal) => refused(&state, &viewer, refusal, &back).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_addresses() {
+        let hash = "ab".repeat(32);
+        let name = format!("{hash}.png");
+        for address in [
+            format!("/uploads/{name}"),
+            format!("https://forum.example/uploads/{name}"),
+            format!("  https://forum.example/uploads/{name}?x=1#y "),
+        ] {
+            assert_eq!(image_name(&address), Some(name.as_str()), "{address}");
+        }
+        for address in [
+            "",
+            "/uploads/",
+            "/uploads/nothing.png",
+            &format!("/uploads/{hash}.svg"),
+        ] {
+            assert_eq!(image_name(address), None, "{address}");
+        }
+    }
 
     #[test]
     fn excerpts_are_short_and_flat() {

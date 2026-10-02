@@ -450,6 +450,10 @@ fn describe(row: Row, staff: bool) -> LogEntry {
             None => vec![text("dismissed a message to the moderators")],
         },
         "add_note" => vec![text("added a staff note about "), who()],
+        "remove_image" => match user {
+            Some(_) => vec![text("removed an image uploaded by "), who()],
+            None => vec![text("removed an image")],
+        },
         "uphold_appeal" => vec![text("kept a decision "), who(), text(" contested")],
         "overturn_appeal" => vec![text("reversed a decision "), who(), text(" contested")],
         other => vec![text(other.replace('_', " "))],

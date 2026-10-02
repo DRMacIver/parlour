@@ -7,8 +7,10 @@
 //! - `/settings/avatar` sets or removes the member's avatar.
 //! - `/uploads/{hash}.{ext}` serves an image to whoever may see it (see
 //!   [`crate::content::uploads`]). The address never changes what it
-//!   holds, so it may be cached for a long time: by anyone when every
-//!   visitor may see the image, and otherwise only by the browser.
+//!   holds, but who may fetch it does, and staff may take an image down,
+//!   so it is cached only briefly and then checked again (see
+//!   [`PUBLIC_IMAGE`]): by shared caches too when every visitor may see
+//!   the image, and otherwise only by the browser.
 
 use askama::Template;
 use axum::Json;
@@ -35,8 +37,14 @@ use crate::writing;
 /// form around it.
 pub const MAX_BODY_BYTES: usize = uploads::MAX_UPLOAD_BYTES + 64 * 1024;
 
-const IMMUTABLE_PUBLIC: &str = "public, max-age=31536000, immutable";
-const IMMUTABLE_PRIVATE: &str = "private, max-age=31536000, immutable";
+/// How long an image may be kept before it is checked again with its
+/// `ETag` (which, being its hash, is cheap to check). Shared caches keep
+/// an image every visitor may see for a few minutes, and browsers keep
+/// any image for an hour: an image that is taken down, or whose post is
+/// hidden, deleted or moved somewhere more private, stops being served
+/// soon after.
+const PUBLIC_IMAGE: &str = "public, max-age=3600, s-maxage=300";
+const PRIVATE_IMAGE: &str = "private, max-age=3600";
 
 /// Why an upload didn't happen.
 enum Failed {
@@ -121,8 +129,15 @@ async fn accept(
         Ok(image) => image,
         Err(refusal) => return Ok(Err(Failed::Refused(refusal))),
     };
+    if upload_records::is_removed(state.db(), &image.sha256).await? {
+        return Ok(Err(Failed::Refused(Refusal::Removed)));
+    }
     uploads::store(&state.config().uploads_dir, &image).await?;
-    let id = upload_records::record(state.db(), user.id, &image).await?;
+    let Some(id) = upload_records::record(state.db(), user.id, &image).await? else {
+        // Removed just now: the file may be the one just stored.
+        uploads::remove(&state.config().uploads_dir, &image.sha256, image.ext).await?;
+        return Ok(Err(Failed::Refused(Refusal::Removed)));
+    };
     Ok(Ok((id, image)))
 }
 
@@ -262,8 +277,8 @@ pub async fn serve(
         return web::not_found(&state, &viewer).await;
     };
     let cache_control = match access {
-        UploadAccess::Public => IMMUTABLE_PUBLIC,
-        UploadAccess::Private => IMMUTABLE_PRIVATE,
+        UploadAccess::Public => PUBLIC_IMAGE,
+        UploadAccess::Private => PRIVATE_IMAGE,
     };
     let etag = format!("\"{sha256}\"");
     let mut response = if headers

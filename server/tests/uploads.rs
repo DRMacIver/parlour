@@ -16,6 +16,12 @@ use sqlx::PgPool;
 const BOUNDARY: &str = "----parlourtestboundary";
 const SECRET: &str = "SECRET-GPS-51.5N";
 
+/// Images are cached briefly, and then checked again with their `ETag`:
+/// shared caches drop an image within minutes of its removal, and
+/// browsers within the hour.
+const PUBLIC_IMAGE: &str = "public, max-age=3600, s-maxage=300";
+const PRIVATE_IMAGE: &str = "private, max-age=3600";
+
 fn multipart(file_field: &str, filename: &str, content_type: &str, data: &[u8]) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(
@@ -296,10 +302,7 @@ async fn images_are_served_to_those_who_can_read_a_post_they_are_in(pool: PgPool
             .await;
     let (status, headers, _) = get_bytes(&s.f, &url, Some(&s.jonah_cookie)).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        headers[header::CACHE_CONTROL],
-        "private, max-age=31536000, immutable"
-    );
+    assert_eq!(headers[header::CACHE_CONTROL], PRIVATE_IMAGE);
     let (status, headers, _) = get_bytes(&s.f, &url, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(headers.get(header::SET_COOKIE).is_none());
@@ -310,10 +313,7 @@ async fn images_are_served_to_those_who_can_read_a_post_they_are_in(pool: PgPool
             .await;
     let (status, headers, _) = get_bytes(&s.f, &url, None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        headers[header::CACHE_CONTROL],
-        "public, max-age=31536000, immutable"
-    );
+    assert_eq!(headers[header::CACHE_CONTROL], PUBLIC_IMAGE);
     assert!(headers.get(header::SET_COOKIE).is_none());
     let etag = headers[header::ETAG].to_str().unwrap().to_owned();
     let response =
@@ -389,10 +389,7 @@ async fn images_in_conversations_are_for_the_people_in_them(pool: PgPool) {
     .unwrap();
     let (status, headers, _) = get_bytes(&s.f, &url, Some(&s.jonah_cookie)).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        headers[header::CACHE_CONTROL],
-        "private, max-age=31536000, immutable"
-    );
+    assert_eq!(headers[header::CACHE_CONTROL], PRIVATE_IMAGE);
     assert_eq!(
         get_bytes(&s.f, &url, Some(&kit_cookie)).await.0,
         StatusCode::NOT_FOUND
@@ -494,10 +491,7 @@ async fn members_choose_an_avatar(pool: PgPool) {
     // Avatars are square and small, and anyone may fetch them.
     let (status, headers, bytes) = get_bytes(&s.f, &url, None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        headers[header::CACHE_CONTROL],
-        "public, max-age=31536000, immutable"
-    );
+    assert_eq!(headers[header::CACHE_CONTROL], PUBLIC_IMAGE);
     let decoded = image::load_from_memory(&bytes).unwrap();
     assert_eq!((decoded.width(), decoded.height()), (256, 256));
     assert!(!contains(&bytes, SECRET.as_bytes()));
@@ -614,4 +608,166 @@ async fn images_in_earlier_versions_follow_the_history(pool: PgPool) {
         StatusCode::NOT_FOUND
     );
     assert_eq!(get_bytes(&s.f, &url, None).await.0, StatusCode::NOT_FOUND);
+}
+
+/// Staff can take an image down everywhere: from every post that shows it,
+/// as anyone's picture, and from the disk, and it can't be uploaded again.
+#[sqlx::test]
+async fn staff_remove_an_image_everywhere(pool: PgPool) {
+    let s = setup(pool).await;
+    let sam = s.f.member("sam", "moderator", None).await;
+    let sam_cookie = s.f.session(sam).await;
+    let data = png_with_text(12, 12);
+    let url = upload_url(
+        &upload(&s.f, "/uploads/new", &data, Some(&s.ruth_cookie))
+            .await
+            .body,
+    );
+    let name = url.trim_start_matches("/uploads/").to_owned();
+    let path = s.f.state.config().uploads_dir.join(&name[..2]).join(&name);
+    assert!(path.exists());
+    let thread =
+        s.f.thread(s.public, s.ruth, "Photos", &format!("Look: ![]({url})"))
+            .await;
+    let quote =
+        s.f.post(thread.thread_id, s.jonah, &format!("Again: ![]({url})"))
+            .await;
+    // Jonah has it as his picture too. (Pictures uploaded as such are
+    // cropped and scaled, so this one is set by hand.)
+    let response = upload(&s.f, "/uploads/new", &data, Some(&s.jonah_cookie)).await;
+    assert_eq!(response.status, StatusCode::OK);
+    s.f.exec(&format!(
+        "UPDATE users SET avatar_upload_id = (SELECT id FROM uploads WHERE user_id = {0} AND sha256 = '{1}')
+         WHERE id = {0}",
+        s.jonah,
+        &name[..64]
+    ))
+    .await;
+    assert!(s.f.page("/u/jonah").await.contains(&url));
+
+    // The moderation page for the post leads to the image's page.
+    let page =
+        s.f.page_as(&format!("/mod/p/{}", thread.first_post_id), &sam_cookie)
+            .await;
+    let review = format!("/mod/uploads/{name}");
+    assert!(page.contains(&format!("href=\"{review}\"")), "{page}");
+    // So does the lookup form, given the image's address.
+    let response =
+        s.f.get_as(
+            &format!("/mod/uploads?image={}{url}", common::ORIGIN),
+            Some(&sam_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(response.location(), review);
+    let page = s.f.page_as(&review, &sam_cookie).await;
+    assert!(page.contains(&format!("src=\"{url}\"")));
+    assert!(page.contains(&format!("/mod/p/{}", thread.first_post_id)));
+    assert!(page.contains(&format!("/mod/p/{quote}")));
+    assert!(page.contains("/mod/users/jonah"));
+    // Only staff see it.
+    assert_eq!(
+        s.f.get_as(&review, Some(&s.ruth_cookie)).await.status,
+        StatusCode::NOT_FOUND
+    );
+    let response =
+        s.f.submit(
+            &format!("{review}/remove"),
+            &[("reason", "Doxxing")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert!(path.exists());
+    // A reason is needed.
+    let response =
+        s.f.submit(
+            &format!("{review}/remove"),
+            &[("reason", "")],
+            Some(&sam_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(path.exists());
+
+    let response =
+        s.f.submit(
+            &format!("{review}/remove"),
+            &[("reason", "Doxxing")],
+            Some(&sam_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    // Nobody can fetch it, not even its uploader, and the file is gone.
+    for cookie in [
+        None,
+        Some(&s.ruth_cookie),
+        Some(&s.jonah_cookie),
+        Some(&sam_cookie),
+    ] {
+        assert_eq!(
+            get_bytes(&s.f, &url, cookie.map(String::as_str)).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert!(!path.exists());
+    // Jonah has no picture now.
+    assert!(!s.f.page("/u/jonah").await.contains(&url));
+    // It is in the staff log, but not the public one.
+    let log = s.f.page_as("/mod/log", &sam_cookie).await;
+    assert!(log.contains("removed an image"), "{log}");
+    assert!(log.contains("Doxxing"));
+    assert!(!s.f.page("/moderation").await.contains("Doxxing"));
+    // The same image can't be uploaded again.
+    let response = upload(&s.f, "/uploads/new", &data, Some(&s.jonah_cookie)).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(
+        response.body.contains("removed by the moderators"),
+        "{}",
+        response.body
+    );
+    assert!(!path.exists());
+    // Its page says it was removed.
+    let page = s.f.page_as(&review, &sam_cookie).await;
+    assert!(page.contains("This image has been removed"), "{page}");
+}
+
+/// Deleting an account deletes the member's picture, unless it is also
+/// shown somewhere else.
+#[sqlx::test]
+async fn deleting_an_account_deletes_its_picture(pool: PgPool) {
+    let s = setup(pool).await;
+    s.f.exec(&format!(
+        "UPDATE users SET password_hash = NULL WHERE id IN ({}, {})",
+        s.ruth, s.jonah
+    ))
+    .await;
+    let picture = |cookie: String, data: Vec<u8>| {
+        let f = &s.f;
+        async move {
+            let response = upload(f, "/settings/avatar", &data, Some(&cookie)).await;
+            assert_eq!(response.status, StatusCode::SEE_OTHER);
+        }
+    };
+    picture(s.ruth_cookie.clone(), png_with_text(20, 20)).await;
+    picture(s.jonah_cookie.clone(), png_with_text(21, 21)).await;
+    let ruths = upload_url(&s.f.page("/u/ruth").await);
+    let jonahs = upload_url(&s.f.page("/u/jonah").await);
+    // Jonah's is in a post too.
+    s.f.thread(s.public, s.jonah, "Me", &format!("![]({jonahs})"))
+        .await;
+    let file = |url: &str| {
+        let name = url.trim_start_matches("/uploads/").to_owned();
+        s.f.state.config().uploads_dir.join(&name[..2]).join(&name)
+    };
+    for (cookie, username) in [(&s.ruth_cookie, "ruth"), (&s.jonah_cookie, "jonah")] {
+        let response =
+            s.f.submit("/settings/delete", &[("confirm", username)], Some(cookie))
+                .await;
+        assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+    }
+    assert!(!file(&ruths).exists());
+    assert_eq!(get_bytes(&s.f, &ruths, None).await.0, StatusCode::NOT_FOUND);
+    assert!(file(&jonahs).exists());
+    assert_eq!(get_bytes(&s.f, &jonahs, None).await.0, StatusCode::OK);
 }

@@ -74,6 +74,8 @@ pub enum Refusal {
     NotAnImage,
     TooManyPixels,
     Unreadable,
+    /// Staff removed this image.
+    Removed,
 }
 
 impl Refusal {
@@ -92,6 +94,10 @@ impl Refusal {
             ),
             Refusal::Unreadable => {
                 "That image seems to be damaged, so it can’t be read.".to_owned()
+            }
+            Refusal::Removed => {
+                "That image was removed by the moderators, so it can’t be uploaded again."
+                    .to_owned()
             }
         }
     }
@@ -287,6 +293,14 @@ pub async fn store(dir: &Path, image: &Processed) -> std::io::Result<()> {
     ));
     tokio::fs::write(&temporary, &image.bytes).await?;
     tokio::fs::rename(&temporary, &target).await
+}
+
+/// Deletes an image's file, if it is there.
+pub async fn remove(dir: &Path, sha256: &str, ext: &str) -> std::io::Result<()> {
+    match tokio::fs::remove_file(path(dir, sha256, ext)).await {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
 }
 
 #[cfg(test)]

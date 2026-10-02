@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM uploads up USING users u\n           WHERE u.id = $1 AND up.id = u.avatar_upload_id\n             AND NOT EXISTS (SELECT 1 FROM post_uploads x WHERE x.sha256 = up.sha256)\n             AND NOT EXISTS (SELECT 1 FROM revision_uploads x WHERE x.sha256 = up.sha256)\n             AND NOT EXISTS (SELECT 1 FROM held_post_uploads x WHERE x.sha256 = up.sha256)\n           RETURNING up.sha256, up.ext,\n                     NOT EXISTS (SELECT 1 FROM uploads o WHERE o.sha256 = up.sha256 AND o.id <> up.id)\n                         AS \"unused!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sha256",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "uploads",
+            "name": "sha256"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "ext",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "uploads",
+            "name": "ext"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "unused!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "06be8b331ab95e3884c2b305a79270950e35c70a282dd4f0ce7f98828c2d3621"
+}

@@ -100,7 +100,11 @@ pub async fn delete_account(
         return refuse("Your password isn’t right.").await;
     }
     match users::delete_account(state.db(), user.id).await? {
-        Deletion::Deleted => {}
+        Deletion::Deleted { unused_picture } => {
+            if let Some((sha256, ext)) = unused_picture {
+                crate::uploads::remove(&state.config().uploads_dir, &sha256, &ext).await?;
+            }
+        }
         Deletion::NoSuchMember => return Ok(web::login_first("/settings")),
         Deletion::LastAdmin => {
             return refuse(

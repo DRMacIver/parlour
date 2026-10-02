@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT held_post_id FROM held_post_uploads WHERE sha256 = $1 ORDER BY held_post_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "held_post_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "held_post_uploads",
+            "name": "held_post_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "be5e892818173f6e09a1e7e2b4bf8a97b4bb3e6146a64148424391625cb25c63"
+}

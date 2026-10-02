@@ -23,6 +23,7 @@
     <dt>Joined</dt><dd>{% call m::time(member.created_at) %}{% endcall %}</dd>
     <dt>Last seen</dt><dd>{% if let Some(at) = member.last_seen_at %}{% call m::time(at) %}{% endcall %}{% else %}Never{% endif %}</dd>
     <dt>Posts</dt><dd>{{ crate::format::count(member.posts) }}</dd>
+    {% if let Some(url) = avatar %}<dt>Picture</dt><dd><a href="/mod{{ url }}">See it, or remove it</a></dd>{% endif %}
     <dt>Invited by</dt><dd>{% if let Some(inviter) = member.invited_by %}<a href="/mod/users/{{ inviter.username }}">{{ inviter.display_name }}</a>{% else %}<em>A founding member</em>{% endif %}</dd>
     <dt>Invited</dt><dd>{{ crate::format::plural(member.descendants, "person", "people") }} below them in the tree</dd>
     {% if let Some(until) = member.silenced_until %}{% if member.is_silenced() %}<dt>Silenced until</dt><dd>{% call m::time(until) %}{% endcall %}</dd>{% endif %}{% endif %}

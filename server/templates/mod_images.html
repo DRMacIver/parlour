@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{%- import "_mod.html" as md -%}
+{% block title %}Images · Moderation · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Images</h1>
+{% call md::mod_nav("images") %}{% endcall %}
+{% call f::error(error) %}{% endcall %}
+<form class="panel" method="get" action="/mod/uploads">
+  <h2 class="panel-bar">Find an image</h2>
+  <div class="form">
+    <div class="field">
+      <label for="image">Image address</label>
+      <input id="image" name="image" type="text" value="{{ address }}" required>
+      <span class="field-hint">Copy the address of an image in a post, a message or someone’s picture, and paste it here to see where it is used and to remove it.</span>
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Find it</button></div>
+  </div>
+</form>
+</div>
+{% endblock %}

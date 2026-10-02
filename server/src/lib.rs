@@ -361,6 +361,9 @@ pub fn app(state: AppState) -> Router {
         .route("/mod/held/{id}/reject", post(mod_pages::reject))
         .route("/mod/reports/{id}/dismiss", post(mod_pages::dismiss))
         .route("/mod/appeals/{id}", post(mod_pages::decide_appeal))
+        .route("/mod/uploads", get(mod_pages::images_page))
+        .route("/mod/uploads/{name}", get(mod_pages::image_page))
+        .route("/mod/uploads/{name}/remove", post(mod_pages::remove_image))
         .route(
             "/admin/moderation",
             get(mod_pages::admin_page).post(mod_pages::save_admin),

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{%- import "_mod.html" as md -%}
+{% block title %}An image · Moderation · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/mod/uploads">Images</a> › <span aria-current="page">{{ name }}</span></nav>
+<h1 class="page-title">An image</h1>
+{% call md::mod_nav("images") %}{% endcall %}
+{% if let Some(image) = image %}
+<section class="panel" aria-labelledby="image-heading">
+  <h2 class="panel-bar" id="image-heading">The image</h2>
+  <div class="panel-text mod-image"><img src="{{ url }}" alt="The image" width="{{ image.width }}" height="{{ image.height }}"></div>
+  <dl class="details">
+    <dt>Size</dt><dd>{{ image.width }} × {{ image.height }} pixels, {{ crate::format::count((image.bytes as i64 + 1023) / 1024) }} KB</dd>
+    <dt>Uploaded by</dt><dd>{% for user in image.uploaders %}<a href="/mod/users/{{ user.username }}">{{ user.display_name }}</a>{% if !loop.last %}, {% endif %}{% else %}<em>Deleted members only</em>{% endfor %}</dd>
+    {% if !image.avatars.is_empty() %}<dt>Picture of</dt><dd>{% for user in image.avatars %}<a href="/mod/users/{{ user.username }}">{{ user.display_name }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</dd>{% endif %}
+  </dl>
+</section>
+<section class="panel" aria-labelledby="where-heading">
+  <h2 class="panel-bar" id="where-heading">Where it is shown</h2>
+  {% if image.posts.is_empty() && image.conversation_posts == 0 && image.held_posts.is_empty() %}
+  <p class="empty">It isn’t in any post.</p>
+  {% else %}
+  <ul class="mod-links">
+    {% for post in image.posts %}<li><a href="/mod/p/{{ post.post_id }}">№ {{ post.seq }}</a> in {{ post.thread_title }}{% if post.deleted %} <span class="flag">Deleted</span>{% endif %}</li>{% endfor %}
+    {% for id in image.held_posts %}<li><a href="/held/{{ id }}">A post held for approval</a></li>{% endfor %}
+    {% if image.conversation_posts > 0 %}<li>{{ crate::format::plural(image.conversation_posts, "message", "messages") }} in conversations, which staff can’t read unless one is reported</li>{% endif %}
+  </ul>
+  {% endif %}
+</section>
+<form class="panel panel-danger" method="post" action="/mod/uploads/{{ name }}/remove">
+  <h2 class="panel-bar">Remove it everywhere</h2>
+  <div class="form">
+    <p class="form-note">The image disappears from every post and message that shows it, and as anyone’s picture. Its file is deleted, and nobody can upload it again. This can’t be undone. The posts themselves stay: to act on them too, moderate each post.</p>
+    <div class="field">
+      <label for="reason">Reason</label>
+      <input id="reason" name="reason" type="text" maxlength="500" required>
+      <span class="field-hint">Goes in the staff moderation log, and to whoever uploaded it.</span>
+    </div>
+    <div class="form-actions"><button class="button button-danger" type="submit">Remove the image</button></div>
+  </div>
+</form>
+{% else %}
+<section class="panel">
+  <p class="empty">This image has been removed. Nobody can fetch it or upload it again.</p>
+</section>
+{% endif %}
+</div>
+{% endblock %}

@@ -369,7 +369,12 @@ pub async fn update_profile<'c>(
 /// What became of deleting an account.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Deletion {
-    Deleted,
+    /// With the file of their picture, as its hash and extension, if
+    /// nothing else shows it: the caller deletes it once this is
+    /// committed.
+    Deleted {
+        unused_picture: Option<(String, String)>,
+    },
     NoSuchMember,
     /// It would leave the site without an admin.
     LastAdmin,
@@ -381,6 +386,7 @@ pub enum Deletion {
 /// password, profile, picture) replaced or removed, and so are its posts.
 /// The old username is retired, so that nobody new can take it and pass as
 /// them in the posts that mention or quote them.
+/// Their picture is deleted too, unless a post shows the same image.
 /// Everything else that is theirs alone goes: sessions, tokens, recorded
 /// addresses, notifications, reactions, watches, blocks, read markers,
 /// group memberships and staff notes about them. They leave their
@@ -405,6 +411,21 @@ pub async fn delete_account(db: &Db, user_id: i64) -> sqlx::Result<Deletion> {
     if role == Role::Admin.as_str() && admins.len() <= 1 {
         return Ok(Deletion::LastAdmin);
     }
+    // Their picture goes, unless a post shows the same image: then it
+    // stays, as part of the post.
+    let picture = sqlx::query!(
+        r#"DELETE FROM uploads up USING users u
+           WHERE u.id = $1 AND up.id = u.avatar_upload_id
+             AND NOT EXISTS (SELECT 1 FROM post_uploads x WHERE x.sha256 = up.sha256)
+             AND NOT EXISTS (SELECT 1 FROM revision_uploads x WHERE x.sha256 = up.sha256)
+             AND NOT EXISTS (SELECT 1 FROM held_post_uploads x WHERE x.sha256 = up.sha256)
+           RETURNING up.sha256, up.ext,
+                     NOT EXISTS (SELECT 1 FROM uploads o WHERE o.sha256 = up.sha256 AND o.id <> up.id)
+                         AS "unused!""#,
+        user_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
     sqlx::query!(
         "INSERT INTO retired_usernames (username_hash)
          SELECT username_hash(username::text) FROM users WHERE id = $1
@@ -448,5 +469,7 @@ pub async fn delete_account(db: &Db, user_id: i64) -> sqlx::Result<Deletion> {
         "UPDATE held_posts SET status = 'rejected', decided_at = now() WHERE author_id = $1 AND status = 'held'"
     );
     tx.commit().await?;
-    Ok(Deletion::Deleted)
+    Ok(Deletion::Deleted {
+        unused_picture: picture.filter(|p| p.unused).map(|p| (p.sha256, p.ext)),
+    })
 }

@@ -1116,6 +1116,8 @@ p.quick-reply { font-style: italic; }
 
 .mod-links { margin: 0; padding: 10px 14px 10px 32px; }
 .mod-links li { margin: 2px 0; }
+.mod-image { padding: 12px 14px; }
+.mod-image img { display: block; max-width: 100%; height: auto; }
 .mod-search { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; }
 .note-list, .ip-list { list-style: none; margin: 0; padding: 0; }
 .note-list li, .ip-list li { padding: 8px 14px; border-top: 1px solid var(--rule); }

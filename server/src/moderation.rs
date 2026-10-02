@@ -944,6 +944,70 @@ pub async fn redact(
 }
 
 // ---------------------------------------------------------------------------
+// Images
+
+/// Takes an image down everywhere (DESIGN.md §8, §9): from every post
+/// that shows it, quoted or not, and as anyone's picture. Its file is
+/// deleted and it can't be uploaded again. `name` is the image's file
+/// name, as in its address.
+pub async fn remove_image(
+    state: &AppState,
+    viewer: &Viewer,
+    name: &str,
+    reason: &str,
+) -> Outcome<()> {
+    let user = staff_or_refuse!(viewer);
+    let Some((sha256, ext)) = crate::uploads::parse_name(name) else {
+        return Ok(Err(Refused::NotFound));
+    };
+    let reason = clean_line(reason);
+    if let Some(refusal) = reason_problems(&reason) {
+        return Ok(Err(refusal));
+    }
+    let mut tx = state.db().begin().await?;
+    let Some(removed) = crate::upload_records::remove(&mut tx, sha256, ext, user.id).await? else {
+        return Ok(Err(Refused::NotFound));
+    };
+    // Images may be in conversations and groups' categories, so the entry
+    // is for staff only.
+    let action_id = mod_records::record(
+        &mut tx,
+        &NewAction {
+            actor_id: user.id,
+            action: "remove_image",
+            target_kind: "upload",
+            target_id: removed.upload_id,
+            user_id: removed.uploader_id,
+            thread_id: None,
+            post_id: None,
+            reason: &reason,
+            public: false,
+            details: json!({ "sha256": sha256, "ext": ext }),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    crate::uploads::remove(&state.config().uploads_dir, sha256, ext).await?;
+    if let Some(uploader) = removed.uploader_id
+        && uploader != user.id
+    {
+        tell(
+            state,
+            uploader,
+            user,
+            format!("A moderator removed an image you uploaded. Reason: {reason}"),
+            Some(action_id),
+        )
+        .await?;
+    }
+    for user_id in removed.avatar_user_ids {
+        state.changed(Change::UserChanged { user_id }).await?;
+    }
+    state.changed(Change::ModLogged).await?;
+    Ok(Ok(()))
+}
+
+// ---------------------------------------------------------------------------
 // Threads
 
 #[derive(Clone, Debug, PartialEq, Eq)]
