@@ -83,6 +83,7 @@ const HIGH_WATER_MARK: &str = "jsonb_build_object(
     'users', (SELECT coalesce(max(id), 0) FROM users),
     'sections', (SELECT coalesce(max(id), 0) FROM sections),
     'categories', (SELECT coalesce(max(id), 0) FROM categories),
+    'groups', (SELECT coalesce(max(id), 0) FROM groups),
     'threads', (SELECT coalesce(max(id), 0) FROM threads),
     'posts', (SELECT coalesce(max(id), 0) FROM posts))";
 
@@ -91,9 +92,11 @@ const HIGH_WATER_MARK: &str = "jsonb_build_object(
 /// Settings other than the seed's own record are kept.
 pub async fn reset(db: &PgPool) -> Result<(), SeedError> {
     let mut tx = db.begin().await?;
-    sqlx::raw_sql("LOCK TABLE users, sections, categories, threads, posts IN EXCLUSIVE MODE")
-        .execute(&mut *tx)
-        .await?;
+    sqlx::raw_sql(
+        "LOCK TABLE users, sections, categories, groups, threads, posts IN EXCLUSIVE MODE",
+    )
+    .execute(&mut *tx)
+    .await?;
     let (empty, matches): (bool, Option<bool>) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT NOT EXISTS (SELECT 1 FROM users) AND NOT EXISTS (SELECT 1 FROM sections)
                 AND NOT EXISTS (SELECT 1 FROM categories),
@@ -107,7 +110,7 @@ pub async fn reset(db: &PgPool) -> Result<(), SeedError> {
         (false, Some(false)) => return Err(SeedError::ChangedSinceSeed),
     }
     sqlx::raw_sql(
-        "TRUNCATE posts, threads, categories, sections, users RESTART IDENTITY CASCADE;
+        "TRUNCATE posts, threads, categories, sections, groups, users RESTART IDENTITY CASCADE;
          DELETE FROM settings WHERE key = 'dev_seed';",
     )
     .execute(&mut *tx)
@@ -120,7 +123,8 @@ pub async fn reset(db: &PgPool) -> Result<(), SeedError> {
 pub async fn seed(db: &PgPool) -> Result<SeedSummary, SeedError> {
     let mut tx = db.begin().await?;
     let existing: i64 = sqlx::query_scalar!(
-        r#"SELECT (SELECT count(*) FROM users) + (SELECT count(*) FROM categories) AS "n!""#
+        r#"SELECT (SELECT count(*) FROM users) + (SELECT count(*) FROM categories)
+                  + (SELECT count(*) FROM groups) AS "n!""#
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -135,6 +139,7 @@ pub async fn seed(db: &PgPool) -> Result<SeedSummary, SeedError> {
             .expect("minutes divide time"),
         users: Vec::new(),
         summary: SeedSummary::default(),
+        organisers_category: None,
     };
     seeder.run().await?;
     let summary = seeder.summary;
@@ -180,6 +185,18 @@ struct Seeder<'a> {
     /// (username, id)
     users: Vec<(&'static str, i64)>,
     summary: SeedSummary,
+    /// The category only the Organisers group reads, whose threads only
+    /// organisers post in.
+    organisers_category: Option<i64>,
+}
+
+/// The members of the Organisers group. Sam and Ruth are staff, who read
+/// everything anyway; Priya and Dev are ordinary members.
+const ORGANISERS: &[&str] = &["sam", "ruth", "priya", "dev"];
+
+/// Whether a seeded member can read the organisers' category.
+fn reads_organisers(spec: &UserSpec) -> bool {
+    spec.role != "user" || ORGANISERS.contains(&spec.username)
 }
 
 struct UserSpec {
@@ -677,6 +694,7 @@ impl Seeder<'_> {
                 "groups",
             )
             .await?;
+        self.organisers_group(organisers).await?;
 
         // Announcements
         self.thread(
@@ -930,7 +948,9 @@ impl Seeder<'_> {
                 let spec = self.rng.pick(USERS);
                 let user = self.user(spec.username);
                 // Only those who can read the post react to it.
-                if user == post.author_id || (post.visibility == "groups" && spec.role == "user") {
+                if user == post.author_id
+                    || (post.visibility == "groups" && !reads_organisers(spec))
+                {
                     continue;
                 }
                 let emoji = *self.rng.pick(EMOJI);
@@ -962,7 +982,7 @@ impl Seeder<'_> {
         for spec in USERS {
             let user = self.user(spec.username);
             for thread in &threads {
-                if thread.visibility == "groups" && spec.role == "user" {
+                if thread.visibility == "groups" && !reads_organisers(spec) {
                     continue;
                 }
                 let seq = if spec.username == "priya" && thread.id == september {
@@ -1013,6 +1033,38 @@ impl Seeder<'_> {
             },
         )
         .await
+    }
+
+    /// The Organisers group, which alone reads and posts in `category`.
+    async fn organisers_group(&mut self, category: i64) -> sqlx::Result<()> {
+        let group = sqlx::query_scalar!(
+            "INSERT INTO groups (slug, name, description)
+             VALUES ('organisers', 'Organisers', 'The people who run the club.') RETURNING id"
+        )
+        .fetch_one(&mut *self.db)
+        .await?;
+        let sam = self.user("sam");
+        for username in ORGANISERS {
+            let user = self.user(username);
+            sqlx::query!(
+                "INSERT INTO group_members (group_id, user_id, added_by) VALUES ($1, $2, $3)",
+                group,
+                user,
+                sam
+            )
+            .execute(&mut *self.db)
+            .await?;
+        }
+        sqlx::query!(
+            "INSERT INTO category_groups (category_id, group_id, access)
+             VALUES ($1, $2, 'read'), ($1, $2, 'write')",
+            category,
+            group
+        )
+        .execute(&mut *self.db)
+        .await?;
+        self.organisers_category = Some(category);
+        Ok(())
     }
 
     fn paragraph(&mut self, topic: Topic) -> String {
@@ -1093,7 +1145,11 @@ impl Seeder<'_> {
             forkable: None,
         };
         for at in &times[1..] {
-            let author = self.rng.pick(USERS).username;
+            let author = if Some(category_id) == self.organisers_category {
+                *self.rng.pick(ORGANISERS)
+            } else {
+                self.rng.pick(USERS).username
+            };
             self.reply(&mut thread, topic, author, *at).await?;
         }
         Ok(thread)

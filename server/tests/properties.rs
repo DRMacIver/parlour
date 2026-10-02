@@ -3,7 +3,8 @@
 //! A state machine creates categories, threads, posts and quote-forks, then
 //! edits (inside and after the grace period, so that some edits keep
 //! history), reacts to, deletes, hides, moves and renames them, changes
-//! category levels, and reports each change as a write handler would.
+//! category levels and read groups, moves the logged-in member in and out
+//! of groups, and reports each change as a write handler would.
 //! Throughout:
 //!
 //! - every page served through the anonymous cache is identical to the same
@@ -13,8 +14,10 @@
 //!   every post the viewer may read can be found on the page its number
 //!   says, with its earlier versions on its history page. A deleted or
 //!   hidden post's history is shown to nobody, and text replaced within the
-//!   grace period is gone for good. This is checked for anonymous visitors, a logged-in member and a
-//!   moderator; while the logged-in viewers browse, anonymous pages must
+//!   grace period is gone for good. Quote-fork embeds and backlinks are
+//!   covered too: a source post's text, or a fork's title, on a page its
+//!   viewer may not see it on is a leak. This is checked for anonymous
+//!   visitors, a logged-in member and a moderator; while the logged-in viewers browse, anonymous pages must
 //!   still show only public content, so nothing leaks through the cache.
 
 mod common;
@@ -65,6 +68,8 @@ struct CategoryModel {
     id: i64,
     slug: String,
     read_level: &'static str,
+    /// The groups that may read it, as indexes into `World::groups`.
+    read_groups: BTreeSet<usize>,
     /// The token in the category's current name.
     token: String,
 }
@@ -107,13 +112,18 @@ struct World {
     /// Session cookies for the logged-in viewers.
     member_cookie: String,
     staff_cookie: String,
+    /// Group ids, and the member viewer's id and groups (indexes into
+    /// `groups`).
+    groups: Vec<i64>,
+    member_id: i64,
+    member_groups: BTreeSet<usize>,
 }
 
 impl World {
     fn new(rt: Handle, db: PgPool, mode: Mode) -> World {
         rt.block_on(async {
             sqlx::raw_sql(
-                "TRUNCATE settings, posts, threads, categories, sections, users RESTART IDENTITY CASCADE",
+                "TRUNCATE settings, posts, threads, categories, sections, groups, users RESTART IDENTITY CASCADE",
             )
             .execute(&db)
             .await
@@ -138,6 +148,9 @@ impl World {
             mode,
             member_cookie: String::new(),
             staff_cookie: String::new(),
+            groups: Vec::new(),
+            member_id: 0,
+            member_groups: BTreeSet::new(),
         };
         for name in ["ruth", "jonah", "maya"] {
             let id = world
@@ -171,9 +184,14 @@ impl World {
             let cookie = world.block(world.cached.session(id));
             if role == "user" {
                 world.member_cookie = cookie;
+                world.member_id = id;
             } else {
                 world.staff_cookie = cookie;
             }
+        }
+        for n in 0..2 {
+            let id = world.block(world.cached.group(&format!("g{n}"), &format!("Group {n}")));
+            world.groups.push(id);
         }
         for level in ["public", "public", "members", "groups"] {
             world.add_category(level);
@@ -226,6 +244,7 @@ impl World {
             id,
             slug,
             read_level: level,
+            read_groups: BTreeSet::new(),
             token,
         });
     }
@@ -262,13 +281,15 @@ impl World {
     // -- The reference permission function, independent of the app's SQL.
 
     /// DESIGN.md §3.1: anyone reads public categories, members also read
-    /// members-only ones, and staff read everything. (Group membership
-    /// arrives in M5; until then only staff read group categories.)
+    /// members-only ones, members of a category's read groups read it, and
+    /// staff read everything.
     fn category_readable(&self, category: usize, who: Who) -> bool {
-        matches!(
-            (self.categories[category].read_level, who),
-            ("public", _) | ("members", Who::Member | Who::Staff) | (_, Who::Staff)
-        )
+        let c = &self.categories[category];
+        match (c.read_level, who) {
+            ("public", _) | ("members", Who::Member | Who::Staff) | (_, Who::Staff) => true,
+            ("groups", Who::Member) => !self.member_groups.is_disjoint(&c.read_groups),
+            _ => false,
+        }
     }
 
     fn thread_readable(&self, thread: usize, who: Who) -> bool {
@@ -718,6 +739,60 @@ impl World {
             ));
             self.categories[category].token = token;
         }
+        self.changed(Change::CategoryChanged { category_id: id });
+    }
+
+    /// The member viewer joins or leaves a group.
+    #[rule]
+    fn toggle_membership(&mut self, tc: TestCase) {
+        let g = tc.draw(gs::integers::<usize>().max_value(self.groups.len() - 1));
+        let db = self.cached.state.db();
+        if self.member_groups.remove(&g) {
+            assert!(
+                self.block(groups::remove_member(db, self.groups[g], self.member_id))
+                    .unwrap()
+            );
+        } else {
+            self.block(self.cached.join_group(self.groups[g], self.member_id));
+            self.member_groups.insert(g);
+        }
+    }
+
+    /// An admin changes which groups may read a category, as the category
+    /// form does.
+    #[rule]
+    fn set_read_groups(&mut self, tc: TestCase) {
+        let c = tc.draw(gs::integers::<usize>().max_value(self.categories.len() - 1));
+        let read_groups: BTreeSet<usize> = (0..self.groups.len())
+            .filter(|_| tc.draw(gs::booleans()))
+            .collect();
+        let category = &self.categories[c];
+        let settings = CategorySettings {
+            section_id: None,
+            slug: category.slug.clone(),
+            name: format!("Category {}", category.token),
+            description: String::new(),
+            position: c as i32,
+            read_level: category.read_level.into(),
+            write_level: "members".into(),
+            read_groups: read_groups.iter().map(|&g| self.groups[g]).collect(),
+            write_groups: Vec::new(),
+        }
+        .clean()
+        .unwrap();
+        self.block(store::update_category(
+            self.cached.state.db(),
+            category.id,
+            &settings,
+        ))
+        .unwrap()
+        .unwrap();
+        let id = category.id;
+        self.categories[c].read_groups = if settings.read_level == "groups" {
+            read_groups
+        } else {
+            BTreeSet::new()
+        };
         self.changed(Change::CategoryChanged { category_id: id });
     }
 

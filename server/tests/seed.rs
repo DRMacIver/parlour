@@ -65,8 +65,9 @@ async fn seed_fills_an_empty_forum_with_browsable_content(pool: PgPool) {
 #[sqlx::test]
 async fn seed_includes_the_interesting_cases(pool: PgPool) {
     seed::seed(&pool).await.unwrap();
-    let count = |sql: &'static str| {
+    let count = |sql: &str| {
         let pool = pool.clone();
+        let sql = sqlx::AssertSqlSafe(sql.to_owned());
         async move {
             sqlx::query_scalar::<_, i64>(sql)
                 .fetch_one(&pool)
@@ -150,18 +151,41 @@ async fn seed_includes_the_interesting_cases(pool: PgPool) {
         count("SELECT count(*) FROM thread_reads").await >= 100,
         "read markers"
     );
-    // Read markers never run past the end of a thread, and members only
-    // have them for threads they can read.
+    // Read markers never run past the end of a thread.
     assert_eq!(
         count(
             "SELECT count(*) FROM thread_reads r JOIN threads t ON t.id = r.thread_id
-             JOIN users u ON u.id = r.user_id
-             WHERE r.last_read_seq > t.last_seq
-                OR (t.visibility = 'groups' AND u.role = 'user')"
+             WHERE r.last_read_seq > t.last_seq"
         )
         .await,
         0
     );
+    // The organisers' category is read by its group, which has ordinary
+    // members in it as well as staff.
+    assert_eq!(
+        count(
+            "SELECT count(*) FROM group_members m JOIN groups g ON g.id = m.group_id
+             JOIN users u ON u.id = m.user_id
+             WHERE g.slug = 'organisers' AND u.role = 'user'"
+        )
+        .await,
+        2
+    );
+    // Members only post in, react in and have read markers for threads
+    // they can read.
+    const CANT_READ: &str = "t.visibility = 'groups' AND u.role = 'user' AND NOT EXISTS (
+        SELECT 1 FROM group_members m JOIN category_groups cg ON cg.group_id = m.group_id
+        WHERE m.user_id = u.id AND cg.category_id = t.category_id AND cg.access = 'read')";
+    for sql in [
+        "SELECT count(*) FROM thread_reads r JOIN threads t ON t.id = r.thread_id
+         JOIN users u ON u.id = r.user_id",
+        "SELECT count(*) FROM reactions r JOIN posts p ON p.id = r.post_id
+         JOIN threads t ON t.id = p.thread_id JOIN users u ON u.id = r.user_id",
+        "SELECT count(*) FROM posts p JOIN threads t ON t.id = p.thread_id
+         JOIN users u ON u.id = p.author_id",
+    ] {
+        assert_eq!(count(&format!("{sql} WHERE {CANT_READ}")).await, 0, "{sql}");
+    }
 }
 
 #[sqlx::test]
@@ -189,7 +213,14 @@ async fn seed_refuses_to_touch_a_forum_with_content(pool: PgPool) {
 async fn reset_empties_the_content_tables(pool: PgPool) {
     seed::seed(&pool).await.unwrap();
     seed::reset(&pool).await.unwrap();
-    for table in ["users", "sections", "categories", "threads", "posts"] {
+    for table in [
+        "users",
+        "sections",
+        "categories",
+        "groups",
+        "threads",
+        "posts",
+    ] {
         let n: i64 =
             sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
                 .fetch_one(&pool)
