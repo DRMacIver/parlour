@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{%- import "_admin_nav.html" as an -%}
+{% block title %}Groups · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Groups</h1>
+{% call an::admin_nav("groups") %}{% endcall %}
+<p class="lede">Groups decide who can read and post in group-restricted categories. Staff invite links can add the people who join to groups.</p>
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+{% call f::errors(errors) %}{% endcall %}
+<section class="panel" aria-labelledby="groups-heading">
+  <h2 class="panel-bar" id="groups-heading">Groups</h2>
+  {% if groups.is_empty() %}
+  <p class="empty">No groups yet.</p>
+  {% else %}
+  <ul class="member-list">
+  {% for group in groups %}
+    <li>
+      <span class="admin-category-name">
+        <a href="/admin/groups/{{ group.id }}">{{ group.name }}</a>
+        {% if !group.description.is_empty() %}<span class="row-meta">{{ group.description }}</span>{% endif %}
+      </span>
+      <span class="row-meta">{{ crate::format::plural(group.member_count, "member", "members") }}</span>
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+<form class="panel" method="post" action="/admin/groups">
+  <h2 class="panel-bar">New group</h2>
+  <div class="form">
+    <div class="field-row">
+      <div class="field">
+        <label for="name">Name</label>
+        <input id="name" name="name" type="text" maxlength="60" value="{{ form.name }}" required>
+      </div>
+      <div class="field">
+        <label for="slug">Short name <span class="field-hint">(lower case, for links)</span></label>
+        <input id="slug" name="slug" type="text" maxlength="40" value="{{ form.slug }}" required pattern="[a-z0-9]+(-[a-z0-9]+)*">
+      </div>
+    </div>
+    <div class="field">
+      <label for="description">Description <span class="field-hint">(optional; only staff see it)</span></label>
+      <input id="description" name="description" type="text" maxlength="300" value="{{ form.description }}">
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Create group</button></div>
+  </div>
+</form>
+{% endblock %}

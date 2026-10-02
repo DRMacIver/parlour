@@ -1,4 +1,5 @@
 pub mod accounts;
+mod admin_forum;
 mod admin_pages;
 mod assets;
 mod auth_pages;
@@ -236,6 +237,39 @@ pub fn app(state: AppState) -> Router {
             get(write_pages::admin_reactions_page).post(write_pages::admin_reactions),
         )
         .route("/admin/users/{id}/role", post(admin_pages::change_role))
+        .route("/admin/categories", get(admin_forum::categories_page))
+        .route(
+            "/admin/categories/new",
+            get(admin_forum::new_category_page).post(admin_forum::create_category),
+        )
+        .route(
+            "/admin/categories/{id}",
+            get(admin_forum::category_page).post(admin_forum::update_category),
+        )
+        .route(
+            "/admin/categories/{id}/delete",
+            post(admin_forum::delete_category),
+        )
+        .route("/admin/sections", post(admin_forum::create_section))
+        .route("/admin/sections/{id}", post(admin_forum::update_section))
+        .route(
+            "/admin/sections/{id}/delete",
+            post(admin_forum::delete_section),
+        )
+        .route(
+            "/admin/groups",
+            get(admin_forum::groups_page).post(admin_forum::create_group),
+        )
+        .route(
+            "/admin/groups/{id}",
+            get(admin_forum::group_page).post(admin_forum::update_group),
+        )
+        .route("/admin/groups/{id}/delete", post(admin_forum::delete_group))
+        .route("/admin/groups/{id}/members", post(admin_forum::add_member))
+        .route(
+            "/admin/groups/{id}/members/{user_id}/remove",
+            post(admin_forum::remove_member),
+        )
         .route("/setup", get(setup::setup_page).post(setup::create_admin))
         .route(
             "/setup/email",

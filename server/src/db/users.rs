@@ -43,6 +43,19 @@ pub async fn find_login_account(db: &Db, identifier: &str) -> sqlx::Result<Optio
     }))
 }
 
+/// The id of the member with this username (any capitalisation).
+pub async fn id_by_username(db: &Db, username: &str) -> sqlx::Result<Option<i64>> {
+    if username.is_empty() || username.len() > 64 {
+        return Ok(None);
+    }
+    sqlx::query_scalar!(
+        "SELECT id FROM users WHERE username = $1::citext AND deleted_at IS NULL",
+        username as _
+    )
+    .fetch_optional(db.pool())
+    .await
+}
+
 /// Records that the member can read their email (a magic link or reset
 /// link reached them).
 pub async fn mark_verified(db: &Db, user_id: i64) -> sqlx::Result<()> {

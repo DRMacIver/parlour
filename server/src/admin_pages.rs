@@ -186,10 +186,10 @@ struct AdminSettingsTemplate {
 #[derive(Deserialize, Default)]
 #[serde(default)]
 pub struct DoneQuery {
-    done: String,
+    pub(crate) done: String,
 }
 
-fn admin(viewer: &Viewer) -> Option<&UserCtx> {
+pub(crate) fn admin(viewer: &Viewer) -> Option<&UserCtx> {
     viewer.user().filter(|_| viewer.is_admin())
 }
 
@@ -408,7 +408,11 @@ pub struct UsersQuery {
 }
 
 /// Sends a visitor who isn't an admin away: to log in, if that might help.
-async fn not_admin(state: &AppState, viewer: &Viewer, path: &str) -> Result<Response, AppError> {
+pub(crate) async fn not_admin(
+    state: &AppState,
+    viewer: &Viewer,
+    path: &str,
+) -> Result<Response, AppError> {
     match viewer.user() {
         None => Ok(web::login_first(path)),
         Some(_) => web::forbidden(state, viewer).await,

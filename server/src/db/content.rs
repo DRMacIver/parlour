@@ -1055,6 +1055,21 @@ pub async fn category_by_id(
         .find(|c| c.category.id == id))
 }
 
+/// How many threads a category the viewer can read has ever had,
+/// including deleted ones: only a category with none can be deleted.
+pub async fn category_thread_count(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result<i64> {
+    let filter = viewer.filter();
+    sqlx::query_scalar!(
+        r#"SELECT count(t.id) AS "n!" FROM categories c LEFT JOIN threads t ON t.category_id = c.id
+           WHERE c.id = $1 AND category_readable(c.read_level, c.id, $2, $3)"#,
+        id,
+        &filter.visibilities,
+        &filter.group_category_ids,
+    )
+    .fetch_one(db.pool())
+    .await
+}
+
 /// A display-only heading on the index.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Section {

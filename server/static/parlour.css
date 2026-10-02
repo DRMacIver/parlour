@@ -570,6 +570,39 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
 .role-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .role-form select { min-height: 28px; }
 
+/* Who can read a category, beside its name: a ruled label, not a pill. */
+.flag-access {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--rule);
+  color: var(--ink-muted);
+  line-height: 1.4;
+  white-space: nowrap;
+  vertical-align: 0.15em;
+}
+.page-title .flag-access { font-size: 15px; vertical-align: middle; }
+
+/* The admin pages for categories and groups. */
+.admin-section-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.admin-section-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.admin-section-bar input {
+  min-height: 28px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--on-ink);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-variant: normal;
+  letter-spacing: 0;
+}
+.admin-section-bar input[type="number"] { width: 5em; }
+.admin-section-bar .button-quiet { color: var(--on-ink); border-color: var(--on-ink); }
+.admin-category-name { display: grid; flex: 1 1 220px; min-width: 0; }
+.choice-group { display: grid; gap: 2px; margin: 2px 0 0 24px; }
+.with-sidebar > div > .panel { margin-bottom: 16px; }
+
 /* Links between pages of one area, such as the admin pages. */
 .subnav {
   display: flex;

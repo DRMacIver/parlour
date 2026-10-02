@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{%- import "_macros.html" as m -%}
+{%- import "_admin_nav.html" as an -%}
+{% block title %}{{ detail.group.name }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/admin/groups">Groups</a> › <span aria-current="page">{{ detail.group.name }}</span></nav>
+<h1 class="page-title">{{ detail.group.name }}</h1>
+{% call an::admin_nav("groups") %}{% endcall %}
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+{% call f::errors(errors) %}{% endcall %}
+<div class="with-sidebar">
+  <section class="panel" aria-labelledby="members-heading">
+    <h2 class="panel-bar" id="members-heading">Members</h2>
+    {% if detail.members.is_empty() %}
+    <p class="empty">Nobody is in this group yet.</p>
+    {% else %}
+    <ul class="member-list admin-members">
+    {% for member in detail.members %}
+      <li>
+        {% call m::avatar(member.user, "avatar-tiny") %}{% endcall %}
+        <span class="tree-names">
+          <a href="/u/{{ member.user.username }}">{{ member.user.display_name }}</a>
+          <span class="tree-username">@{{ member.user.username }}</span>
+          <span class="row-meta">added {{ crate::format::date(member.added_at) }}{% if let Some(by) = member.added_by %} by @{{ by.username }}{% endif %}</span>
+        </span>
+        <form class="form-inline" method="post" action="/admin/groups/{{ detail.group.id }}/members/{{ member.user.id }}/remove">
+          <button class="button button-small button-quiet" type="submit" aria-label="Take {{ member.user.username }} out of the group">Remove</button>
+        </form>
+      </li>
+    {% endfor %}
+    </ul>
+    {% endif %}
+    <form class="form" method="post" action="/admin/groups/{{ detail.group.id }}/members">
+      <div class="field">
+        <label for="username">Add a member</label>
+        <input id="username" name="username" type="text" maxlength="64" autocomplete="off" placeholder="username" value="{{ username }}" required>
+      </div>
+      <div class="form-actions"><button class="button" type="submit">Add</button></div>
+    </form>
+  </section>
+
+  <div>
+    <form class="panel" method="post" action="/admin/groups/{{ detail.group.id }}">
+      <h2 class="panel-bar">The group</h2>
+      <div class="form">
+        <div class="field">
+          <label for="name">Name</label>
+          <input id="name" name="name" type="text" maxlength="60" value="{{ form.name }}" required>
+        </div>
+        <div class="field">
+          <label for="slug">Short name</label>
+          <input id="slug" name="slug" type="text" maxlength="40" value="{{ form.slug }}" required pattern="[a-z0-9]+(-[a-z0-9]+)*">
+        </div>
+        <div class="field">
+          <label for="description">Description</label>
+          <input id="description" name="description" type="text" maxlength="300" value="{{ form.description }}">
+        </div>
+        <div class="form-actions"><button class="button" type="submit">Save</button></div>
+      </div>
+    </form>
+    <section class="panel" aria-labelledby="categories-heading">
+      <h2 class="panel-bar" id="categories-heading">Categories</h2>
+      {% if detail.categories.is_empty() %}
+      <p class="empty">No category names this group.</p>
+      {% else %}
+      <ul class="member-list">
+      {% for category in detail.categories %}
+        <li><a href="/c/{{ category.slug }}">{{ category.name }}</a> <span class="row-meta">{% if category.read %}reads{% endif %}{% if category.read && category.write %} and {% endif %}{% if category.write %}posts{% endif %}</span></li>
+      {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+    <section class="panel" aria-labelledby="delete-heading">
+      <h2 class="panel-bar" id="delete-heading">Delete</h2>
+      <div class="form">
+        <p class="form-note">Deleting the group takes its members out of it and takes it off every category and invite.</p>
+        <form class="form-inline" method="post" action="/admin/groups/{{ detail.group.id }}/delete">
+          <button class="button button-quiet" type="submit">Delete this group</button>
+        </form>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}
