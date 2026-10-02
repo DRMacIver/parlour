@@ -14,7 +14,7 @@
 <section class="panel" aria-labelledby="smtp-heading">
   <h2 class="panel-bar" id="smtp-heading">SMTP server</h2>
   <div class="form">
-    {% if smtp_from_env %}<p class="form-note">These settings come from the environment. Saving them here makes them editable in the admin settings.</p>{% endif %}
+    {% if smtp_from_env %}<p class="form-note">These settings come from the environment. Saving them unchanged keeps using the environment’s settings; change any of them to save your own in their place, which you can then edit in the admin settings.</p>{% endif %}
     {% call s::smtp_fields(smtp, smtp_has_password) %}{% endcall %}
   </div>
 </section>

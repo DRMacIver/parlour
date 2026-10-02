@@ -486,6 +486,9 @@ async fn setup_doesnt_copy_the_environments_smtp_password(db: PgPool) {
     let page = forum.page_as("/setup/email", &cookie).await;
     assert!(page.contains("value=\"smtp.env.example\""));
     assert!(!page.contains("env-secret"));
+    // The page says what saving does: unchanged, nothing is saved.
+    assert!(!page.contains("makes them editable"), "{page}");
+    assert!(page.contains("Saving them unchanged keeps using the environment"));
     let fields = |from: &'static str| {
         vec![
             ("action", "save"),
