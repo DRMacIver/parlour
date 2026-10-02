@@ -164,7 +164,7 @@ fn thread_crumbs(thread: &ThreadTarget) -> Vec<Crumb> {
 
 /// A category's name with who can read it, as in "Lounge (members only)"
 /// or "Planning (Organisers group)".
-fn category_label(category: &CategoryTarget) -> String {
+pub(crate) fn category_label(category: &CategoryTarget) -> String {
     match format::access_label(&category.read_level, &category.group_names) {
         None => category.category.name.clone(),
         // Group names keep their capitals.
@@ -551,7 +551,7 @@ async fn reply_target(
 }
 
 /// The text a quote starts a reply with.
-fn quote_text(username: &str, markdown: &str) -> String {
+pub(crate) fn quote_text(username: &str, markdown: &str) -> String {
     let mut text = format!("> @{username} wrote:\n");
     for line in markdown.lines() {
         if line.is_empty() {

@@ -58,6 +58,9 @@ pub struct Layout {
     pub nav: Nav,
     pub user: Option<NavUser>,
     pub restriction: Option<RestrictionNotice>,
+    /// The islands' files, for logged-in members only (DESIGN.md §5:
+    /// anonymous pages load no island JavaScript).
+    pub islands: Option<crate::islands::IslandAssets>,
 }
 
 impl Layout {
@@ -94,7 +97,12 @@ impl Layout {
             }
             _ => None,
         };
+        let islands = match user {
+            Some(_) => Some(state.islands()).filter(|islands| islands.entry.is_some()),
+            None => None,
+        };
         Ok(Layout {
+            islands,
             site_name: settings::site_name(state.db()).await?,
             nav,
             user,

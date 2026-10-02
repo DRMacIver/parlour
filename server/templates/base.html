@@ -6,7 +6,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{{ layout.site_name }}{% endblock %}</title>
 <link rel="stylesheet" href="/static/parlour.css">
-</head>
+{% if let Some(islands) = layout.islands %}{% for href in islands.css %}<link rel="stylesheet" href="{{ href }}">
+{% endfor %}{% for href in islands.preload %}<link rel="modulepreload" href="{{ href }}">
+{% endfor %}{% if let Some(src) = islands.entry %}<script type="module" src="{{ src }}"></script>
+{% endif %}{% endif %}</head>
 <body>
 <a class="skip-link" href="#content">Skip to content</a>
 <header class="masthead">
@@ -24,8 +27,10 @@
     <a href="/users/tree"{% if layout.nav == Nav::Members %} aria-current="page"{% endif %}>Members</a>
     <span class="spacer"></span>
     {% if let Some(user) = layout.user %}
+    <span class="nav-island"{% if layout.islands.is_some() %} data-island="notifications"{% endif %}>
     <a class="nav-count" href="/notifications"{% if layout.nav == Nav::Notifications %} aria-current="page"{% endif %}>Notifications{% if user.notifications > 0 %} <span class="count-badge" data-count="notifications">{{ user.notifications }}</span><span class="visually-hidden"> unread</span>{% endif %}</a>
     <a class="nav-count" href="/messages"{% if layout.nav == Nav::Messages %} aria-current="page"{% endif %}>Messages{% if user.messages > 0 %} <span class="count-badge" data-count="messages">{{ user.messages }}</span><span class="visually-hidden"> with new messages</span>{% endif %}</a>
+    </span>{% if layout.islands.is_some() %}<script type="application/json" data-island-props>{{ crate::islands::notifications_props(user.notifications, user.messages)|safe }}</script>{% endif %}
     <a href="/invites"{% if layout.nav == Nav::Invites %} aria-current="page"{% endif %}>Invites</a>
     {% if let Some(queue) = user.queue %}<a class="nav-count" href="/mod/queue"{% if layout.nav == Nav::Moderation %} aria-current="page"{% endif %}>Moderation{% if *queue > 0 %} <span class="count-badge">{{ queue }}</span><span class="visually-hidden"> waiting</span>{% endif %}</a>{% endif %}
     {% if user.is_admin %}<a href="/admin/settings"{% if layout.nav == Nav::Admin %} aria-current="page"{% endif %}>Admin</a>{% endif %}

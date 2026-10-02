@@ -23,11 +23,11 @@
       <label for="title">Title <span class="field-hint">(optional)</span></label>
       <input id="title" name="title" type="text" maxlength="150" value="{{ title }}">
     </div>
-    <div class="field">
+    <div class="field composer-field"{% if layout.islands.is_some() %} data-island="composer"{% endif %}>
       <label for="body">Message</label>
       <textarea id="body" name="body" rows="10" required>{{ body }}</textarea>
       <span class="field-hint">Markdown supported. Only the people in the conversation can see it. <a href="/uploads/new" target="_blank" rel="noopener">Upload an image</a></span>
-    </div>
+    </div>{% if layout.islands.is_some() %}<script type="application/json" data-island-props>{{ crate::islands::composer_props("body", false)|safe }}</script>{% endif %}
     <div class="form-actions">
       <button class="button" type="submit">Send</button>
       <button class="button button-quiet" type="submit" name="preview" value="1">Preview</button>

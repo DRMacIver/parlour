@@ -527,7 +527,7 @@ pub struct PostView {
     pub from_blocked: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct ReactionCount {
     pub emoji: String,
     pub count: i64,
@@ -1633,6 +1633,27 @@ pub async fn reaction_types(db: &Db, enabled_only: bool) -> sqlx::Result<Vec<Rea
     )
     .fetch_all(db.pool())
     .await
+}
+
+/// The reaction counts on a live post the viewer can see, as its thread
+/// page shows them.
+pub async fn post_reaction_counts(
+    db: &Db,
+    viewer: &Viewer,
+    post_id: i64,
+) -> sqlx::Result<Option<Vec<ReactionCount>>> {
+    let Some(post) = post_target(db, viewer, post_id).await? else {
+        return Ok(None);
+    };
+    if !post.is_live() {
+        return Ok(None);
+    }
+    Ok(Some(
+        reactions_for(db, viewer, &[post_id])
+            .await?
+            .remove(&post_id)
+            .unwrap_or_default(),
+    ))
 }
 
 /// Who reacted to a post with one emoji.

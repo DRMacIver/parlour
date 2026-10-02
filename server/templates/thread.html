@@ -79,8 +79,8 @@
         {% if self.logged_in() %}
         <span class="post-actions">
           {%- if *hidden %}<span class="flag flag-hidden">Hidden from members</span> · {% endif -%}
-          {%- if self.can_reply() && !*hidden %}<a href="/t/{{ thread.thread.id }}/reply?to={{ post.id }}">reply</a> · <a href="/t/{{ thread.thread.id }}/reply?quote={{ post.id }}">quote</a> · {% endif -%}
-          {%- if !*hidden %}<a href="/p/{{ post.id }}/fork">Quote in new thread</a>{% endif -%}
+          {%- if self.can_reply() && !*hidden %}<a href="/t/{{ thread.thread.id }}/reply?to={{ post.id }}" data-reply-to="{{ post.id }}">reply</a> · <a href="/t/{{ thread.thread.id }}/reply?quote={{ post.id }}" data-quote="{{ post.id }}">quote</a> · {% endif -%}
+          {%- if !*hidden %}<a href="/p/{{ post.id }}/fork" data-fork="{{ post.id }}">Quote in new thread</a>{% endif -%}
           {%- if self.is_mine(author.user.id) %}{% if can_edit && !*hidden %} · <a href="/p/{{ post.id }}/edit">edit</a>{% endif %} · <a href="/p/{{ post.id }}/delete">delete</a>{% else %} · <a href="/p/{{ post.id }}/report">report</a>{% endif -%}
           {%- if staff %} · <a href="/mod/p/{{ post.id }}">moderate</a>{% endif -%}
         </span>
@@ -100,7 +100,7 @@
       <p class="fork-link">Continued in <a href="{{ crate::format::thread_href(fork.thread.id, fork.thread.slug) }}">{{ fork.thread.title }}</a> ({{ crate::format::plural(fork.post_count, "post", "posts") }}, by {{ fork.author.display_name }})</p>
       {% endfor %}
       {% if !post.reactions.is_empty() || self.logged_in() %}
-      <div class="reactions">
+      <div class="reactions"{% if layout.islands.is_some() %} data-island="reactions"{% endif %}>
         {% for r in post.reactions %}
         {% if self.logged_in() %}
         <form class="reaction-form" method="post" action="/p/{{ post.id }}/reactions">
@@ -121,7 +121,7 @@
         </details>
         {% if !post.reactions.is_empty() %}<a class="reaction-who" href="/p/{{ post.id }}/reactions">who reacted</a>{% endif %}
         {% endif %}
-      </div>
+      </div>{% if layout.islands.is_some() %}<script type="application/json" data-island-props>{{ crate::islands::reactions_props(post.id, post.reactions, reaction_types)|safe }}</script>{% endif %}
       {% endif %}
     </div>
   </article>
@@ -156,6 +156,11 @@
   {% endfor %}
 </div>
 
+{% if layout.islands.is_some() %}
+<div class="new-posts" data-island="new-posts"><a href="/t/{{ thread.thread.id }}/unread">Check for new posts</a></div><script type="application/json" data-island-props>{{ crate::islands::new_posts_props(thread.thread.id, thread.last_seq)|safe }}</script>
+<div class="fork-dialog" data-island="fork-dialog"></div><script type="application/json" data-island-props>{{ crate::islands::fork_dialog_props()|safe }}</script>
+{% endif %}
+
 {% if pagination.is_multi_page() %}
 <div class="toolbar toolbar-bottom">
   <span class="spacer"></span>
@@ -168,12 +173,14 @@
 <form class="panel quick-reply" id="reply" method="post" action="/t/{{ thread.thread.id }}/reply">
   <h2 class="panel-bar">Quick reply</h2>
   <div class="form">
-    <label class="visually-hidden" for="reply-body">Your reply</label>
-    <textarea id="reply-body" name="body" rows="5" required></textarea>
+    <div class="composer-field"{% if layout.islands.is_some() %} data-island="composer"{% endif %}>
+      <label class="visually-hidden" for="reply-body">Your reply</label>
+      <textarea id="reply-body" name="body" rows="5" required></textarea>
+      <span class="field-hint">Markdown supported · <a href="/uploads/new" target="_blank" rel="noopener">upload an image</a></span>
+    </div>{% if layout.islands.is_some() %}<script type="application/json" data-island-props>{{ crate::islands::composer_props("reply-body", true)|safe }}</script>{% endif %}
     <div class="form-actions">
       <button class="button" type="submit">Post reply</button>
       <button class="button button-quiet" type="submit" name="preview" value="1">Preview</button>
-      <span class="field-hint">Markdown supported · <a href="/uploads/new" target="_blank" rel="noopener">upload an image</a></span>
     </div>
   </div>
 </form>

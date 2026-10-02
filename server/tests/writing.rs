@@ -1024,8 +1024,8 @@ async fn quote_forks_start_a_thread_that_embeds_the_post(pool: PgPool) {
     let page = s.f.page_as("/t/1/weekly", &s.jonah_cookie).await;
     assert!(
         post_html(&page, t.first_post_id).contains(&format!(
-            "<a href=\"/p/{}/fork\">Quote in new thread</a>",
-            t.first_post_id
+            "<a href=\"/p/{}/fork\" data-fork=\"{}\">Quote in new thread</a>",
+            t.first_post_id, t.first_post_id
         )),
         "{page}"
     );

@@ -50,11 +50,11 @@
     {% if let Some(r) = reply_to %}
     <label class="choice"><input type="checkbox" name="reply_to" value="{{ r.post_id }}" checked> In reply to № {{ r.seq }} by @{{ r.username }}</label>
     {% endif %}
-    <div class="field">
+    <div class="field composer-field"{% if layout.islands.is_some() %} data-island="composer"{% endif %}>
       <label for="body">{{ body_label }}</label>
       <textarea id="body" name="body" rows="12" required>{{ body }}</textarea>
       <span class="field-hint">Markdown: *italic*, **bold**, &gt; quote, `code`, [link](https://…), tables and ~~strikethrough~~. Mention someone with @username. <a href="/uploads/new" target="_blank" rel="noopener">Upload an image</a> to put one in.</span>
-    </div>
+    </div>{% if layout.islands.is_some() %}<script type="application/json" data-island-props>{{ crate::islands::composer_props("body", false)|safe }}</script>{% endif %}
     {% if let Some(reason) = mod_reason %}
     <div class="field">
       <label for="reason">Why you are editing this post</label>

@@ -2,6 +2,7 @@ mod account_pages;
 pub mod accounts;
 mod admin_forum;
 mod admin_pages;
+mod api;
 mod assets;
 mod auth_pages;
 pub mod cache;
@@ -15,6 +16,7 @@ mod error;
 pub mod format;
 pub mod http_cache;
 mod invite_pages;
+pub mod islands;
 pub mod live;
 pub mod mail;
 pub mod markdown;
@@ -79,6 +81,8 @@ pub struct AppState {
     limiter: Arc<RateLimiter>,
     jobs: Arc<Jobs>,
     live: Live,
+    /// Island files to use instead of the built ones, for tests.
+    islands: Option<Arc<islands::IslandAssets>>,
     /// The hash of the one-time `/setup` token, while there is no admin.
     setup_token: Arc<Mutex<Option<Vec<u8>>>>,
 }
@@ -105,6 +109,7 @@ impl AppState {
             limiter: Arc::new(RateLimiter::default()),
             jobs: Arc::new(jobs),
             live: Live::default(),
+            islands: None,
             setup_token: Arc::default(),
         }
     }
@@ -117,6 +122,19 @@ impl AppState {
     pub fn with_limiter(mut self, limiter: RateLimiter) -> Self {
         self.limiter = Arc::new(limiter);
         self
+    }
+
+    /// Uses these island files instead of those built into the binary.
+    pub fn with_islands(mut self, islands: islands::IslandAssets) -> Self {
+        self.islands = Some(Arc::new(islands));
+        self
+    }
+
+    pub fn islands(&self) -> islands::IslandAssets {
+        match &self.islands {
+            Some(islands) => (**islands).clone(),
+            None => islands::IslandAssets::current(),
+        }
     }
 
     pub fn with_mailer(mut self, mailer: Mailer) -> Self {
@@ -208,6 +226,15 @@ pub fn app(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(upload_pages::MAX_BODY_BYTES)),
         )
         .route("/settings/avatar/remove", post(upload_pages::remove_avatar))
+        .route("/api/preview", post(api::preview))
+        .route("/api/posts/{id}/source", get(api::source))
+        .route("/api/posts/{id}/reactions", post(api::react))
+        .route("/api/posts/{id}/fork", get(api::fork))
+        .route("/api/notifications", get(api::notifications))
+        .route(
+            "/api/notifications/read",
+            post(api::mark_notifications_read),
+        )
         .route("/settings/export", post(account_pages::export))
         .route("/settings/delete", post(account_pages::delete_account))
         .route("/terms", get(account_pages::terms))
@@ -464,6 +491,7 @@ pub fn app(state: AppState) -> Router {
             http_cache::middleware,
         ));
     Router::new()
+        .route("/static/islands/{*path}", get(islands::serve))
         .route("/static/{*path}", get(assets::serve))
         .merge(pages)
         .with_state(state)

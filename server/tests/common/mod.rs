@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use parlour::cache::PageCache;
 use parlour::changes::Change;
+use parlour::islands::IslandAssets;
 use parlour::mail::{Email, Mailer};
 use parlour::store::{self, CreatedThread, NewCategory, NewPost, NewThread, NewUser};
 use parlour::{AppState, app};
@@ -40,9 +41,14 @@ pub struct Forum {
 
 impl Forum {
     /// A forum with development settings whose email is kept in memory.
+    /// Its pages have no islands, whether or not `web/dist` has been
+    /// built, so that tests see the same pages either way; the tests of
+    /// the islands give it some with [`AppState::with_islands`].
     pub fn new(db: PgPool) -> Forum {
         Forum {
-            state: AppState::new(db.clone()).with_mailer(Mailer::capture()),
+            state: AppState::new(db.clone())
+                .with_mailer(Mailer::capture())
+                .with_islands(IslandAssets::default()),
             db,
         }
     }
@@ -51,7 +57,8 @@ impl Forum {
     pub fn uncached(db: PgPool) -> Forum {
         Forum {
             state: AppState::with_cache(db.clone(), PageCache::disabled())
-                .with_mailer(Mailer::capture()),
+                .with_mailer(Mailer::capture())
+                .with_islands(IslandAssets::default()),
             db,
         }
     }

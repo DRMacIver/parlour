@@ -83,7 +83,7 @@
         <span class="spacer"></span>
         <span class="post-actions">
           {%- if *hidden %}<span class="flag flag-hidden">Hidden</span> · {% endif -%}
-          {%- if shown.refusal.is_none() && !*hidden %}<a href="/t/{{ shown.page.thread.id }}/reply?to={{ post.id }}">reply</a> · <a href="/t/{{ shown.page.thread.id }}/reply?quote={{ post.id }}">quote</a> · {% endif -%}
+          {%- if shown.refusal.is_none() && !*hidden %}<a href="/t/{{ shown.page.thread.id }}/reply?to={{ post.id }}" data-reply-to="{{ post.id }}">reply</a> · <a href="/t/{{ shown.page.thread.id }}/reply?quote={{ post.id }}" data-quote="{{ post.id }}">quote</a> · {% endif -%}
           {%- if self.is_mine(author.user.id) %}{% if !*hidden %}<a href="/p/{{ post.id }}/edit">edit</a> · {% endif %}<a href="/p/{{ post.id }}/delete">delete</a>{% else if shown.participant %}<a href="/p/{{ post.id }}/report">report</a>{% endif -%}
           {%- if shown.staff %} · <a href="/mod/p/{{ post.id }}">moderate</a>{% endif -%}
         </span>
@@ -97,7 +97,7 @@
       <div class="post-body">{{ body_html|safe }}</div>
       {% endif %}
       {% if !post.reactions.is_empty() || (shown.participant && !shown.reaction_types.is_empty()) %}
-      <div class="reactions">
+      <div class="reactions"{% if shown.participant && layout.islands.is_some() %} data-island="reactions"{% endif %}>
         {% for r in post.reactions %}
         {% if shown.participant %}
         <form class="reaction-form" method="post" action="/p/{{ post.id }}/reactions">
@@ -117,7 +117,7 @@
           </form>
         </details>
         {% endif %}
-      </div>
+      </div>{% if shown.participant && layout.islands.is_some() %}<script type="application/json" data-island-props>{{ crate::islands::reactions_props(post.id, post.reactions, shown.reaction_types)|safe }}</script>{% endif %}
       {% endif %}
     </div>
   </article>
@@ -130,15 +130,18 @@
   {% endmatch %}
   {% endfor %}
   </div>
+  {% if layout.islands.is_some() %}<div class="new-posts" data-island="new-posts"><a href="/messages/{{ shown.page.thread.id }}/unread">Check for new messages</a></div><script type="application/json" data-island-props>{{ crate::islands::new_posts_props(shown.page.thread.id, shown.page.last_seq)|safe }}</script>{% endif %}
   {% call m::pagination(shown.pagination, "Pages of this conversation, again") %}{% endcall %}
   {% if let Some(why) = shown.refusal %}
   <p class="notice quick-reply">{{ why }}</p>
   {% else %}
   <form class="message-reply" id="reply" method="post" action="/messages/{{ shown.page.thread.id }}">
+    <div class="composer-field"{% if layout.islands.is_some() %} data-island="composer"{% endif %}>
     <label for="reply-body">Reply to {{ shown.page.conversation.name(shown.page.thread.title, viewer_id.clone()) }}</label>
     <textarea id="reply-body" name="body" rows="4" required>{{ shown.draft }}</textarea>
+    <span class="field-hint">Only the people in this conversation can see it. Markdown supported · <a href="/uploads/new" target="_blank" rel="noopener">upload an image</a></span>
+    </div>{% if layout.islands.is_some() %}<script type="application/json" data-island-props>{{ crate::islands::composer_props("reply-body", true)|safe }}</script>{% endif %}
     <div class="form-actions">
-      <span class="field-hint">Only the people in this conversation can see it. Markdown supported · <a href="/uploads/new" target="_blank" rel="noopener">upload an image</a></span>
       <span class="spacer"></span>
       <button class="button button-quiet" type="submit" name="preview" value="1">Preview</button>
       <button class="button" type="submit">Send</button>

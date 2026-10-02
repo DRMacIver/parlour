@@ -190,14 +190,18 @@ impl World {
             .unwrap();
         });
         let mut world = World {
+            // Without rate limits, so that searching every page is never
+            // refused.
             cached: Forum {
                 state: AppState::new(db.clone()).with_mailer(parlour::mail::Mailer::capture()),
                 db: db.clone(),
-            },
+            }
+            .without_rate_limits(),
             fresh: Forum {
                 state: AppState::with_cache(db.clone(), PageCache::disabled()),
                 db,
-            },
+            }
+            .without_rate_limits(),
             rt,
             users: Vec::new(),
             categories: Vec::new(),
@@ -727,6 +731,16 @@ impl World {
             paths.push(format!("/p/{}/reactions", m.id));
         }
         paths.push("/moderation".to_owned());
+        // Search finds every kind of text there is, a page at a time.
+        let texts = (self.posts.len() + self.messages.len()) as i64;
+        for page in 1..=page_count(texts, 20).min(25) {
+            let base = "/search?q=post+or+message+or+thread&sort=new";
+            paths.push(if page == 1 {
+                base.to_owned()
+            } else {
+                format!("{base}&page={page}")
+            });
+        }
         for h in &self.held {
             paths.push(format!("/held/{}", h.id));
         }
@@ -748,6 +762,17 @@ impl World {
             }
             for m in &self.messages {
                 paths.push(format!("/mod/p/{}", m.id));
+            }
+            // What the islands fetch.
+            paths.push("/api/notifications".to_owned());
+            for id in self
+                .posts
+                .iter()
+                .map(|p| p.id)
+                .chain(self.messages.iter().map(|m| m.id))
+            {
+                paths.push(format!("/api/posts/{id}/source"));
+                paths.push(format!("/api/posts/{id}/fork"));
             }
         }
         paths
