@@ -65,6 +65,7 @@ impl Failed {
             Failed::NotAllowed(_) => StatusCode::FORBIDDEN,
             Failed::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Failed::Refused(Refusal::TooBig) => StatusCode::PAYLOAD_TOO_LARGE,
+            Failed::Refused(Refusal::Busy) => StatusCode::SERVICE_UNAVAILABLE,
             Failed::Refused(_) | Failed::NoFile => StatusCode::BAD_REQUEST,
             Failed::Body(err) => err.status(),
         }

@@ -42,3 +42,29 @@ opt-level = 3
 
 [profile.dev.package.blake2]
 opt-level = 3
+
+# Decoding and re-encoding uploaded images is slow unoptimised, which
+# makes the image tests and local uploads crawl.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.gif]
+opt-level = 3
+
+[profile.dev.package.color_quant]
+opt-level = 3
+
+[profile.dev.package.weezl]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.dev.package.image-webp]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3

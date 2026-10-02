@@ -13,6 +13,8 @@
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
 use image::codecs::jpeg::JpegEncoder;
@@ -23,6 +25,7 @@ use image::{
     ImageReader, Limits,
 };
 use sha2::{Digest, Sha256};
+use tokio::sync::Semaphore;
 
 /// The largest file accepted.
 pub const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
@@ -30,9 +33,16 @@ pub const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
 pub const MAX_DIMENSION: u32 = 8000;
 /// The most pixels in one image (or one frame of an animation).
 pub const MAX_PIXELS: u64 = 40_000_000;
-/// The most frames in an animated GIF, and the most pixels in all of them.
+/// The most frames in an animated GIF.
 pub const MAX_FRAMES: usize = 300;
-pub const MAX_ANIMATION_PIXELS: u64 = 100_000_000;
+/// The most pixels in all the frames of an animated GIF together, counting
+/// each frame as the whole canvas, which is what it decodes to: a tiny
+/// file can have hundreds of one-pixel frames on a big canvas. Frames are
+/// re-encoded one at a time, so this bounds the time an animation takes,
+/// and the memory it takes is a few frames' worth.
+pub const MAX_ANIMATION_PIXELS: u64 = MAX_PIXELS;
+/// The biggest re-encoded animation.
+pub const MAX_ANIMATION_BYTES: usize = 2 * MAX_UPLOAD_BYTES;
 /// Avatars are this many pixels square.
 pub const AVATAR_SIZE: u32 = 256;
 const JPEG_QUALITY: u8 = 85;
@@ -73,9 +83,13 @@ pub enum Refusal {
     TooBig,
     NotAnImage,
     TooManyPixels,
+    /// Too many frames, or too many pixels in all of them.
+    AnimationTooLong,
     Unreadable,
     /// Staff removed this image.
     Removed,
+    /// Too many other images are being processed.
+    Busy,
 }
 
 impl Refusal {
@@ -92,8 +106,15 @@ impl Refusal {
                 "That image is too large: images can be up to {} pixels wide and tall.",
                 crate::format::count(i64::from(MAX_DIMENSION))
             ),
+            Refusal::AnimationTooLong => format!(
+                "That animation is too long: animations can have up to {MAX_FRAMES} frames, and {} million pixels in all their frames together.",
+                MAX_ANIMATION_PIXELS / 1_000_000
+            ),
             Refusal::Unreadable => {
                 "That image seems to be damaged, so it can’t be read.".to_owned()
+            }
+            Refusal::Busy => {
+                "The forum is busy with other images just now. Try again in a minute.".to_owned()
             }
             Refusal::Removed => {
                 "That image was removed by the moderators, so it can’t be uploaded again."
@@ -191,37 +212,69 @@ fn decode(data: &[u8], format: ImageFormat) -> Result<DynamicImage, Refusal> {
 }
 
 /// Re-encodes every frame of a GIF, keeping its animation and nothing
-/// else.
+/// else. Each frame is encoded as soon as it is decoded, so only a few
+/// frames are ever in memory.
 fn reencode_gif(data: &[u8]) -> Result<Processed, Refusal> {
     let mut decoder = GifDecoder::new(Cursor::new(data)).map_err(|_| Refusal::Unreadable)?;
     decoder
         .set_limits(limits())
         .map_err(|_| Refusal::TooManyPixels)?;
     let (width, height) = decoder.dimensions();
-    let mut frames = Vec::new();
-    let mut pixels = 0u64;
-    for frame in decoder.into_frames() {
-        let frame = frame.map_err(|_| Refusal::Unreadable)?;
-        pixels += u64::from(frame.buffer().width()) * u64::from(frame.buffer().height());
-        if frames.len() >= MAX_FRAMES || pixels > MAX_ANIMATION_PIXELS {
-            return Err(Refusal::TooManyPixels);
-        }
-        frames.push(frame);
+    let canvas = u64::from(width) * u64::from(height);
+    let mut out = Limited {
+        bytes: Vec::new(),
+        overflowed: false,
+    };
+    let mut frames = 0u64;
+    let encoded = {
+        let mut encoder = GifEncoder::new(&mut out);
+        let encode = || -> Result<(), Refusal> {
+            encoder
+                .set_repeat(Repeat::Infinite)
+                .map_err(|_| Refusal::Unreadable)?;
+            for frame in decoder.into_frames() {
+                frames += 1;
+                if frames > MAX_FRAMES as u64 || frames * canvas > MAX_ANIMATION_PIXELS {
+                    return Err(Refusal::AnimationTooLong);
+                }
+                let frame = frame.map_err(|_| Refusal::Unreadable)?;
+                encoder
+                    .encode_frame(frame)
+                    .map_err(|_| Refusal::Unreadable)?;
+            }
+            Ok(())
+        };
+        encode()
+    };
+    if out.overflowed {
+        return Err(Refusal::TooBig);
     }
-    if frames.is_empty() {
+    encoded?;
+    if frames == 0 {
         return Err(Refusal::Unreadable);
     }
-    let mut bytes = Vec::new();
-    {
-        let mut encoder = GifEncoder::new(&mut bytes);
-        encoder
-            .set_repeat(Repeat::Infinite)
-            .map_err(|_| Refusal::Unreadable)?;
-        encoder
-            .encode_frames(frames)
-            .map_err(|_| Refusal::Unreadable)?;
+    Ok(finish(out.bytes, "gif", "image/gif", width, height))
+}
+
+/// A buffer that refuses to grow past [`MAX_ANIMATION_BYTES`].
+struct Limited {
+    bytes: Vec<u8>,
+    overflowed: bool,
+}
+
+impl std::io::Write for Limited {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.bytes.len() + buf.len() > MAX_ANIMATION_BYTES {
+            self.overflowed = true;
+            return Err(std::io::Error::other("the animation is too big"));
+        }
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
     }
-    Ok(finish(bytes, "gif", "image/gif", width, height))
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn finish(
@@ -246,11 +299,40 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// [`process`], off the async workers.
+/// How many images are processed at once. Each can take a few hundred
+/// megabytes for a moment (a decoded frame of the largest image is
+/// [`MAX_PIXELS`] × 4 bytes), so on one small box they take turns.
+pub const MAX_PROCESSING_AT_ONCE: usize = 2;
+/// How long an upload waits for its turn before it is refused.
+const PROCESSING_WAIT: Duration = Duration::from_secs(30);
+
+static PROCESSING: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(MAX_PROCESSING_AT_ONCE)));
+
+/// [`process`], off the async workers, taking turns with other uploads.
 pub async fn process_blocking(data: Vec<u8>, purpose: Purpose) -> Result<Processed, Refusal> {
-    tokio::task::spawn_blocking(move || process(&data, purpose))
-        .await
-        .unwrap_or(Err(Refusal::Unreadable))
+    process_in_turn(&PROCESSING, PROCESSING_WAIT, data, purpose).await
+}
+
+/// [`process`], off the async workers, once one of `turns`' permits is
+/// free: refused as [`Refusal::Busy`] if none is within `wait`. The permit
+/// is held until processing ends, even if the caller stops waiting.
+async fn process_in_turn(
+    turns: &Arc<Semaphore>,
+    wait: Duration,
+    data: Vec<u8>,
+    purpose: Purpose,
+) -> Result<Processed, Refusal> {
+    let Ok(Ok(permit)) = tokio::time::timeout(wait, turns.clone().acquire_owned()).await else {
+        return Err(Refusal::Busy);
+    };
+    tokio::task::spawn_blocking(move || {
+        let processed = process(&data, purpose);
+        drop(permit);
+        processed
+    })
+    .await
+    .unwrap_or(Err(Refusal::Unreadable))
 }
 
 /// Whether `name` (from a URL) is a stored image's file name: a SHA-256
@@ -360,6 +442,60 @@ mod tests {
             .into_frames()
             .count();
         assert_eq!(frames, 3);
+    }
+
+    /// A GIF with many frames is refused, however small each frame is:
+    /// each one decodes to the whole canvas.
+    #[test]
+    fn long_animations_are_refused() {
+        let frame = |i: u8| {
+            image::Frame::from_parts(
+                image::RgbaImage::from_pixel(1, 1, image::Rgba([i, 0, 0, 255])),
+                i.into(),
+                0,
+                image::Delay::from_numer_denom_ms(100, 1),
+            )
+        };
+        let encode = |count: u8| {
+            let mut data = Vec::new();
+            {
+                let mut encoder = GifEncoder::new(&mut data);
+                // The first frame fills the canvas, which the rest share.
+                encoder
+                    .encode_frame(image::Frame::new(image::RgbaImage::new(1000, 1000)))
+                    .unwrap();
+                encoder.encode_frames((0..count).map(frame)).unwrap();
+            }
+            data
+        };
+        // 40 frames of a million pixels each is the most.
+        assert!(process(&encode(39), Purpose::Post).is_ok());
+        assert_eq!(
+            process(&encode(40), Purpose::Post).unwrap_err(),
+            Refusal::AnimationTooLong
+        );
+    }
+
+    /// Images are processed a few at a time: one that can't get a turn
+    /// in time is refused, and isn't processed.
+    #[tokio::test]
+    async fn images_take_turns() {
+        let turns = Arc::new(Semaphore::new(1));
+        let held = turns.clone().acquire_owned().await.unwrap();
+        let wait = Duration::from_millis(50);
+        assert_eq!(
+            process_in_turn(&turns, wait, png(2, 2), Purpose::Post)
+                .await
+                .unwrap_err(),
+            Refusal::Busy
+        );
+        drop(held);
+        assert!(
+            process_in_turn(&turns, wait, png(2, 2), Purpose::Post)
+                .await
+                .is_ok()
+        );
+        assert_eq!(turns.available_permits(), 1);
     }
 
     /// Arbitrary bytes never get through unless they are an image we can
