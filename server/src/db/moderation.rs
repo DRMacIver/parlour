@@ -633,6 +633,10 @@ pub struct MemberRecord {
     pub posts: i64,
     /// How many people are below them in the invite tree.
     pub descendants: i64,
+    /// How many of those a branch suspension would also suspend: the
+    /// members below them who aren't staff and haven't left (see
+    /// [`invite_branch`]).
+    pub branch_below: i64,
 }
 
 impl MemberRecord {
@@ -665,7 +669,9 @@ pub async fn member_record(db: &Db, username: &str) -> sqlx::Result<Option<Membe
                   i.id AS "inviter_id?", i.username AS "inviter_username?: String",
                   i.display_name AS "inviter_name?",
                   (SELECT count(*) FROM posts p WHERE p.author_id = u.id AND p.deleted_at IS NULL) AS "posts!",
-                  (SELECT count(*) FROM below) AS "descendants!"
+                  (SELECT count(*) FROM below) AS "descendants!",
+                  (SELECT count(*) FROM below b JOIN users x ON x.id = b.id
+                   WHERE x.role = 'user' AND x.deleted_at IS NULL) AS "branch_below!"
            FROM users u LEFT JOIN users i ON i.id = u.invited_by_user_id
            WHERE u.username = $1::citext"#,
         username as _
@@ -689,6 +695,7 @@ pub async fn member_record(db: &Db, username: &str) -> sqlx::Result<Option<Membe
         invited_by: user_ref(row.inviter_id, row.inviter_username, row.inviter_name),
         posts: row.posts,
         descendants: row.descendants,
+        branch_below: row.branch_below,
     }))
 }
 

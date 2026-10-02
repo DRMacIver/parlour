@@ -49,7 +49,7 @@
         {% if !author.role.is_staff() %}
         <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ author.user.username }}/silence">Silence {{ author.user.username }}</button>
         <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ author.user.username }}/suspend">Suspend</button>
-        <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ author.user.username }}/suspend-branch">Suspend invite branch</button>
+        {% if author.branch_below > 0 %}<button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ author.user.username }}/suspend-branch">Suspend invite branch ({{ author.branch_below + 1 }} accounts)</button>{% endif %}
         <button class="button button-small button-danger" type="submit" formaction="/mod/users/{{ author.user.username }}/spammer">Delete as spammer</button>
         {% endif %}
         {% if post.thread.conversation().is_none() %}<a class="button button-small button-quiet" href="/p/{{ post.post_id }}/edit">Edit…</a>{% endif %}
@@ -92,7 +92,7 @@
         {% if !member.role.is_staff() %}
         <button class="button button-small" type="submit" formaction="/mod/users/{{ member.user.username }}/silence">Silence</button>
         <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/suspend">Suspend</button>
-        <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/suspend-branch">Suspend invite branch</button>
+        {% if member.branch_below > 0 %}<button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/suspend-branch">Suspend invite branch ({{ member.branch_below + 1 }} accounts)</button>{% endif %}
         <button class="button button-small button-danger" type="submit" formaction="/mod/users/{{ member.user.username }}/spammer">Delete as spammer</button>
         {% endif %}
         <button class="button button-small button-quiet" type="submit">Dismiss</button>

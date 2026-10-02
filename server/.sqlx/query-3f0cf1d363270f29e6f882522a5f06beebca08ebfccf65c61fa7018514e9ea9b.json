@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "WITH RECURSIVE below AS (\n               SELECT id FROM users WHERE invited_by_user_id = (SELECT id FROM users WHERE username = $1::citext)\n               UNION ALL\n               SELECT u.id FROM users u JOIN below b ON u.invited_by_user_id = b.id\n           )\n           SELECT u.id AS \"id!\", u.username AS \"username!: String\", u.display_name AS \"display_name!\",\n                  u.email AS \"email!: String\",\n                  u.email_verified_at IS NOT NULL AS \"verified!\", u.role AS \"role!\", u.created_at AS \"created_at!\",\n                  u.last_seen_at AS \"last_seen_at?\",\n                  u.deleted_at IS NOT NULL AS \"deleted!\", u.silenced_until AS \"silenced_until?\",\n                  u.suspended_until AS \"suspended_until?\",\n                  i.id AS \"inviter_id?\", i.username AS \"inviter_username?: String\",\n                  i.display_name AS \"inviter_name?\",\n                  (SELECT count(*) FROM posts p WHERE p.author_id = u.id AND p.deleted_at IS NULL) AS \"posts!\",\n                  (SELECT count(*) FROM below) AS \"descendants!\"\n           FROM users u LEFT JOIN users i ON i.id = u.invited_by_user_id\n           WHERE u.username = $1::citext",
+  "query": "WITH RECURSIVE below AS (\n               SELECT id FROM users WHERE invited_by_user_id = (SELECT id FROM users WHERE username = $1::citext)\n               UNION ALL\n               SELECT u.id FROM users u JOIN below b ON u.invited_by_user_id = b.id\n           )\n           SELECT u.id AS \"id!\", u.username AS \"username!: String\", u.display_name AS \"display_name!\",\n                  u.email AS \"email!: String\",\n                  u.email_verified_at IS NOT NULL AS \"verified!\", u.role AS \"role!\", u.created_at AS \"created_at!\",\n                  u.last_seen_at AS \"last_seen_at?\",\n                  u.deleted_at IS NOT NULL AS \"deleted!\", u.silenced_until AS \"silenced_until?\",\n                  u.suspended_until AS \"suspended_until?\",\n                  i.id AS \"inviter_id?\", i.username AS \"inviter_username?: String\",\n                  i.display_name AS \"inviter_name?\",\n                  (SELECT count(*) FROM posts p WHERE p.author_id = u.id AND p.deleted_at IS NULL) AS \"posts!\",\n                  (SELECT count(*) FROM below) AS \"descendants!\",\n                  (SELECT count(*) FROM below b JOIN users x ON x.id = b.id\n                   WHERE x.role = 'user' AND x.deleted_at IS NULL) AS \"branch_below!\"\n           FROM users u LEFT JOIN users i ON i.id = u.invited_by_user_id\n           WHERE u.username = $1::citext",
   "describe": {
     "columns": [
       {
@@ -173,6 +173,12 @@
         "name": "descendants!",
         "type_info": "Int8",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 16,
+        "name": "branch_below!",
+        "type_info": "Int8",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -201,8 +207,9 @@
       false,
       false,
       null,
+      null,
       null
     ]
   },
-  "hash": "8bd8119528bebb0bd3d79be4020127a5c38ecbcfacb7ba2ac0a690e0aa5198c5"
+  "hash": "3f0cf1d363270f29e6f882522a5f06beebca08ebfccf65c61fa7018514e9ea9b"
 }

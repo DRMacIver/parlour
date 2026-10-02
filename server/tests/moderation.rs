@@ -170,6 +170,40 @@ async fn members_report_posts_and_staff_see_them_in_the_queue(pool: PgPool) {
     );
 }
 
+/// The queue offers to suspend an invite branch only when there is one,
+/// as the member's page does.
+#[sqlx::test]
+async fn the_queue_offers_a_branch_suspension_only_when_there_is_a_branch(pool: PgPool) {
+    let s = setup(pool).await;
+    let t = s.f.thread(s.games, s.jonah, "Watches", "Buy watches").await;
+    report(&s.f, &s.ruth_cookie, t.first_post_id, "spam", "").await;
+    s.f.submit(
+        "/u/maya/report",
+        &[("reason", "spam")],
+        Some(&s.ruth_cookie),
+    )
+    .await;
+    let queue = s.f.page_as("/mod/queue", &s.mo_cookie).await;
+    assert!(queue.contains("/mod/users/jonah/suspend\""), "{queue}");
+    assert!(queue.contains("/mod/users/maya/suspend\""), "{queue}");
+    assert!(!queue.contains("suspend-branch"), "{queue}");
+
+    s.f.invitee("felix", s.jonah).await;
+    let gus = s.f.invitee("gus", s.maya).await;
+    s.f.invitee("hal", gus).await;
+    let queue = s.f.page_as("/mod/queue", &s.mo_cookie).await;
+    assert!(queue.contains("/mod/users/jonah/suspend-branch"), "{queue}");
+    assert!(queue.contains("/mod/users/maya/suspend-branch"), "{queue}");
+    assert!(
+        queue.contains("Suspend invite branch (2 accounts)"),
+        "{queue}"
+    );
+    assert!(
+        queue.contains("Suspend invite branch (3 accounts)"),
+        "{queue}"
+    );
+}
+
 #[sqlx::test]
 async fn members_report_members(pool: PgPool) {
     let s = setup(pool).await;
