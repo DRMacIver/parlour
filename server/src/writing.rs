@@ -503,6 +503,9 @@ pub async fn react(
     if let Some(why) = restriction(user) {
         return Ok(Err(Refused::NotAllowed(why)));
     }
+    if post.thread.locked && !viewer.is_staff() {
+        return Ok(Err(Refused::NotAllowed("This thread is locked.")));
+    }
     let enabled = content::reaction_types(state.db(), true).await?;
     if add && !enabled.iter().any(|t| t.emoji == emoji) {
         return Ok(Err(Refused::Invalid(vec![

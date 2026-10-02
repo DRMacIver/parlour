@@ -133,6 +133,9 @@ struct Shown {
     /// Whether the viewer is in it, rather than staff reading a reported
     /// conversation.
     participant: bool,
+    /// Whether the viewer may react to its messages: they are in it, and
+    /// not silenced or suspended.
+    can_react: bool,
     /// Whether the viewer is staff, who can moderate its messages.
     staff: bool,
     /// The one other person, in a conversation between two, if they can
@@ -256,6 +259,7 @@ async fn render_conversation(
         refusal,
         muted,
         participant,
+        can_react: participant && crate::writing::restriction(user).is_none(),
         staff: viewer.is_staff(),
         blockable,
         errors,

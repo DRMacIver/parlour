@@ -96,10 +96,10 @@
       {% else %}
       <div class="post-body">{{ body_html|safe }}</div>
       {% endif %}
-      {% if !post.reactions.is_empty() || (shown.participant && !shown.reaction_types.is_empty()) %}
-      <div class="reactions"{% if shown.participant && layout.islands.is_some() %} data-island="reactions"{% endif %}>
+      {% if !post.reactions.is_empty() || (shown.can_react && !shown.reaction_types.is_empty()) %}
+      <div class="reactions"{% if shown.can_react && layout.islands.is_some() %} data-island="reactions"{% endif %}>
         {% for r in post.reactions %}
-        {% if shown.participant %}
+        {% if shown.can_react %}
         <form class="reaction-form" method="post" action="/p/{{ post.id }}/reactions">
           <input type="hidden" name="emoji" value="{{ r.emoji }}">
           <button class="reaction{% if r.mine %} reaction-mine{% endif %}" type="submit" name="action" value="{% if r.mine %}remove{% else %}add{% endif %}" aria-pressed="{{ r.mine }}" title="{{ crate::format::names(r.names) }}"><span aria-hidden="true">{{ r.emoji }}</span> <span class="reaction-count">{{ r.count }}</span><span class="visually-hidden"> reactions; {% if r.mine %}take yours back{% else %}add yours{% endif %}</span></button>
@@ -108,7 +108,7 @@
         <span class="reaction" title="{{ crate::format::names(r.names) }}"><span aria-hidden="true">{{ r.emoji }}</span> <span class="reaction-count">{{ r.count }}</span><span class="visually-hidden"> {{ r.emoji }} reactions</span></span>
         {% endif %}
         {% endfor %}
-        {% if shown.participant && !shown.reaction_types.is_empty() %}
+        {% if shown.can_react && !shown.reaction_types.is_empty() %}
         <details class="react-menu">
           <summary>react</summary>
           <form class="react-choices" method="post" action="/p/{{ post.id }}/reactions">
@@ -117,7 +117,7 @@
           </form>
         </details>
         {% endif %}
-      </div>{% if shown.participant && layout.islands.is_some() %}<script type="application/json" data-island-props>{{ crate::islands::reactions_props(post.id, post.reactions, shown.reaction_types)|safe }}</script>{% endif %}
+      </div>{% if shown.can_react && layout.islands.is_some() %}<script type="application/json" data-island-props>{{ crate::islands::reactions_props(post.id, post.reactions, shown.reaction_types)|safe }}</script>{% endif %}
       {% endif %}
     </div>
   </article>

@@ -8,6 +8,7 @@ mod common;
 use axum::http::{StatusCode, header};
 use common::{Forum, Response, post_html};
 use parlour::settings::{self, MessageSettings, ModerationSettings};
+use parlour::store::{self, NewConversation};
 use sqlx::PgPool;
 
 /// A forum with a public category `games` and a members-only `lounge`;
@@ -1078,6 +1079,103 @@ async fn silenced_members_read_but_dont_write(pool: PgPool) {
     assert!(public.contains("silenced"), "{public}");
     assert!(public.contains("for 3 days"), "{public}");
     assert!(public.contains("lifted the silence on"), "{public}");
+}
+
+/// Reaction forms are offered only to those who may react: not to a
+/// silenced member, and in a locked thread only to staff. Reacting there
+/// anyway is refused.
+#[sqlx::test]
+async fn reaction_forms_are_only_for_those_who_may_react(pool: PgPool) {
+    let s = setup(pool).await;
+    let t = s.f.thread(s.games, s.ruth, "Thread", "Opening").await;
+    let path = format!("/t/{}/thread", t.thread_id);
+    let react = format!("/p/{}/reactions", t.first_post_id);
+    ok(
+        &s.f,
+        &react,
+        &[("emoji", "👍"), ("action", "add")],
+        &s.maya_cookie,
+    )
+    .await;
+    let conversation = store::create_conversation(
+        &s.f.db,
+        &NewConversation {
+            author_id: s.ruth,
+            title: String::new(),
+            recipient_ids: vec![s.jonah],
+            body_md: "Hello".into(),
+            created_at: None,
+        },
+    )
+    .await
+    .unwrap();
+    let dm = format!("/messages/{}", conversation.thread_id);
+    let dm_react = format!("/p/{}/reactions", conversation.first_post_id);
+    ok(
+        &s.f,
+        &dm_react,
+        &[("emoji", "👍"), ("action", "add")],
+        &s.ruth_cookie,
+    )
+    .await;
+    for page in [
+        s.f.page_as(&path, &s.jonah_cookie).await,
+        s.f.page_as(&dm, &s.jonah_cookie).await,
+    ] {
+        assert!(page.contains("class=\"reaction-form\""), "{page}");
+        assert!(page.contains("class=\"react-menu\""), "{page}");
+    }
+
+    ok(
+        &s.f,
+        "/mod/users/jonah/silence",
+        &[("days", "3"), ("reason", "Cool off")],
+        &s.mo_cookie,
+    )
+    .await;
+    for page in [
+        s.f.page_as(&path, &s.jonah_cookie).await,
+        s.f.page_as(&dm, &s.jonah_cookie).await,
+    ] {
+        assert!(!page.contains("reaction-form"), "{page}");
+        assert!(!page.contains("react-menu"), "{page}");
+        assert!(!page.contains("data-island=\"reactions\""), "{page}");
+        // The reactions are still shown.
+        assert!(page.contains("class=\"reaction-count\">1<"), "{page}");
+    }
+
+    // A locked thread: members see the reactions but can't add theirs;
+    // staff still can.
+    ok(
+        &s.f,
+        &format!("/mod/t/{}", t.thread_id),
+        &[("action", "lock"), ("reason", "Heated")],
+        &s.mo_cookie,
+    )
+    .await;
+    let page = s.f.page_as(&path, &s.ruth_cookie).await;
+    assert!(!page.contains("reaction-form"), "{page}");
+    assert!(!page.contains("react-menu"), "{page}");
+    assert!(page.contains("class=\"reaction-count\">1<"), "{page}");
+    let response =
+        s.f.submit(
+            &react,
+            &[("emoji", "👍"), ("action", "add")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+    assert!(response.body.contains("locked"), "{}", response.body);
+    let page = s.f.page_as(&path, &s.mo_cookie).await;
+    assert!(page.contains("class=\"react-menu\""), "{page}");
+    ok(
+        &s.f,
+        &react,
+        &[("emoji", "👍"), ("action", "add")],
+        &s.mo_cookie,
+    )
+    .await;
+    assert_eq!(count(&s.f, "SELECT count(*) FROM reactions").await, 3);
 }
 
 #[sqlx::test]

@@ -239,6 +239,10 @@ struct ThreadTemplate {
     can_edit: bool,
     /// The reactions a member can add.
     reaction_types: Vec<ReactionType>,
+    /// Whether the viewer may react here: they are logged in and not
+    /// silenced or suspended, and the thread isn't locked unless they are
+    /// staff.
+    can_react: bool,
     /// The post the "new since your last visit" divider goes before.
     divider_before: Option<i64>,
     /// How closely a logged-in viewer follows the thread.
@@ -354,6 +358,9 @@ pub async fn thread(
             )
         }
     };
+    let can_react = viewer.user().is_some_and(|user| {
+        writing::restriction(user).is_none() && (!thread.locked || viewer.is_staff())
+    });
     cacheable(
         &ThreadTemplate {
             layout: Layout::load(&state, &viewer, Nav::None).await?,
@@ -363,6 +370,7 @@ pub async fn thread(
             reply_box,
             can_edit,
             reaction_types,
+            can_react,
             divider_before,
             watch,
             staff: viewer.is_staff(),
