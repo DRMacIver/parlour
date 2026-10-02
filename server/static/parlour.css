@@ -1025,6 +1025,99 @@ p.quick-reply { font-style: italic; }
 
 /* -------------------------------------------------------- Narrow screens */
 
+/* ----------------------------------------------------------- Moderation */
+
+/* A destructive action: the one red button. */
+.button-danger { background: var(--accent); border-color: var(--accent); color: var(--on-badge); }
+.button-danger:hover { background: var(--ink); border-color: var(--ink); color: var(--on-ink); }
+
+/* Hidden posts, as staff see them: set back, with a rule in the accent. */
+.post-hidden { background: var(--panel-alt); border-left: 3px solid var(--accent); }
+.post-hidden .post-body { color: var(--ink-muted); }
+.flag-hidden { color: var(--accent); }
+
+.restriction a { color: inherit; }
+
+/* The queue: one ruled panel per item, oldest first. */
+.queue > .panel { margin-bottom: 16px; }
+.queue-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--panel-alt);
+  font-size: var(--font-size-small);
+}
+.queue-kind {
+  color: var(--accent);
+  font-variant: small-caps;
+  letter-spacing: var(--label-spacing);
+  font-weight: 700;
+}
+.queue-kind-held { color: var(--ink); }
+.queue-where { min-width: 0; }
+.queue-body { display: grid; gap: 8px; padding: 10px 14px 14px; }
+.queue-reason, .queue-detail { margin: 0; }
+.queue-detail { font-style: italic; color: var(--ink-quote); }
+.queue-excerpt {
+  margin: 0;
+  padding: 8px 12px;
+  border-top: 1px solid var(--ink);
+  border-bottom: 1px solid var(--ink);
+  color: var(--ink-quote);
+}
+.queue-message { white-space: pre-line; }
+.queue-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-small);
+  color: var(--ink-muted);
+}
+.queue-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.queue-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.queue-actions select, .mod-reason, .input-inline, .mod-search input[type="search"] {
+  min-height: 28px;
+  padding: 2px 6px;
+  border: 1px solid var(--rule);
+  border-bottom: 1px solid var(--ink);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  max-width: 100%;
+}
+.mod-reason { flex: 1 1 14em; min-width: 0; }
+.input-inline { width: 14em; }
+
+/* The log: a numbered list of sentences, each with its reason. */
+.log-list { list-style: none; margin: 0; padding: 0; }
+.log-entry { padding: 8px 14px; border-top: 1px solid var(--rule); }
+.log-entry:first-child { border-top: none; }
+.log-reason { font-style: italic; color: var(--ink-muted); }
+.log-public, .log-staff { font-variant: small-caps; letter-spacing: 0.08em; font-weight: 700; }
+.log-public { color: var(--accent); }
+.log-staff { color: var(--ink-muted); }
+.mod-recent .log-entry { padding: 6px 12px; font-size: 15px; }
+
+.mod-links { margin: 0; padding: 10px 14px 10px 32px; }
+.mod-links li { margin: 2px 0; }
+.mod-search { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; }
+.note-list, .ip-list { list-style: none; margin: 0; padding: 0; }
+.note-list li, .ip-list li { padding: 8px 14px; border-top: 1px solid var(--rule); }
+.note-list li:first-child, .ip-list li:first-child { border-top: none; }
+.note-body { margin: 0; white-space: pre-line; }
+.note-list .row-meta { margin: 2px 0 0; }
+.ip-list code { font-family: var(--font-mono); font-size: 14px; overflow-wrap: anywhere; }
+.form-inline-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.form-inline-row label { font-variant: small-caps; letter-spacing: 0.08em; }
+
 @media (max-width: 900px) {
   .index-layout, .with-sidebar, .messages-layout { grid-template-columns: minmax(0, 1fr); }
   /* An open conversation comes before the list on narrow screens. */

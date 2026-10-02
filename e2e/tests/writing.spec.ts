@@ -146,7 +146,9 @@ test("visitors see reactions but are asked to log in to write", async ({ page })
   await page.goto("/c/board-games");
   await page.locator(".row-title a", { hasText: "What did you play this week? (September)" }).click();
   await page.locator(".pagination a", { hasText: /^3$/ }).first().click();
-  await expect(page.locator(".post-actions")).toHaveCount(0);
+  // Visitors are offered only the contact form, to report a post.
+  await expect(page.locator(".post-actions a:not([href^='/contact?post='])")).toHaveCount(0);
+  await expect(page.locator(".post-actions a[href^='/contact?post=']").first()).toBeVisible();
   await expect(page.locator("a.reaction").first()).toBeVisible();
   await expect(page.locator(".quick-reply a", { hasText: "log in" })).toBeVisible();
   await expectFits(page);

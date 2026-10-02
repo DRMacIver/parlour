@@ -144,12 +144,14 @@ fn is_public(audience: &Audience) -> bool {
     *audience == Audience::Public
 }
 
-/// How a thread is named in a notice to a member: its title, or for a
-/// conversation, "your conversation".
-fn place_name(thread: &ThreadTarget) -> String {
+/// Where a post is, as a notice to its author says: never by its title,
+/// since a notice is kept as written while the thread may later move
+/// somewhere its author can't read. The page for contesting an action
+/// names the thread, to those who may read it then.
+fn place_name(thread: &ThreadTarget) -> &'static str {
     match &thread.place {
-        Place::Category(_) => format!("“{}”", thread.thread.title),
-        Place::Conversation(_) => "a conversation".to_owned(),
+        Place::Category(_) => "a thread",
+        Place::Conversation(_) => "a conversation",
     }
 }
 
@@ -1090,10 +1092,7 @@ pub async fn moderate_thread(
             state,
             author_id,
             user,
-            format!(
-                "A moderator {verb} your thread “{}”. Reason: {reason}",
-                thread.thread.title
-            ),
+            format!("A moderator {verb} one of your threads. Reason: {reason}"),
             Some(action_id),
         )
         .await?;

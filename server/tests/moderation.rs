@@ -461,7 +461,7 @@ async fn hidden_posts_are_tombstones_for_all_but_staff(pool: PgPool) {
     // The author is told, and may contest it.
     let notes = s.f.page_as("/notifications", &s.jonah_cookie).await;
     assert!(
-        notes.contains("A moderator hid your post № 2 in “Venues”. Reason: Personal information"),
+        notes.contains("A moderator hid your post № 2 in a thread. Reason: Personal information"),
         "{notes}"
     );
     let action = last_action(&s.f).await;
@@ -746,8 +746,16 @@ async fn moderators_lock_pin_rename_move_and_delete_threads(pool: PgPool) {
         .await;
     assert_status(&response, StatusCode::NOT_FOUND);
     let notes = s.f.page_as("/notifications", &s.jonah_cookie).await;
-    assert!(notes.contains("A moderator deleted your thread"), "{notes}");
-    assert!(notes.contains("A moderator locked your thread"), "{notes}");
+    assert!(
+        notes.contains("A moderator deleted one of your threads"),
+        "{notes}"
+    );
+    assert!(
+        notes.contains("A moderator locked one of your threads"),
+        "{notes}"
+    );
+    // Notices don't name threads, which may since have moved out of reach.
+    assert!(!notes.contains("New title"), "{notes}");
     ok(
         &s.f,
         &action,
@@ -1671,4 +1679,237 @@ async fn the_public_log_shows_only_public_content(pool: PgPool) {
     assert!(staff.contains("Lounge secret title"), "{staff}");
     // Footer links to it from every page.
     assert!(s.f.page("/").await.contains("href=\"/moderation\""));
+}
+
+// ---------------------------------------------------------------------------
+// Silences and suspensions, over random members and actions
+
+/// What a member is under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Standing {
+    Good,
+    Silenced,
+    Suspended,
+    /// Silenced once, but it has run out.
+    SilenceOver,
+    /// Suspended once, but it has run out.
+    SuspensionOver,
+}
+
+/// Everything a member might try, in an order where none undoes another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Try {
+    ReadMembersThread,
+    ReadConversation,
+    NewThread,
+    Reply,
+    Edit,
+    React,
+    Fork,
+    StartConversation,
+    MessageMember,
+    MessageStaff,
+    Invite,
+    Report,
+    Delete,
+}
+
+const TRIES: [Try; 13] = [
+    Try::ReadMembersThread,
+    Try::ReadConversation,
+    Try::NewThread,
+    Try::Reply,
+    Try::Edit,
+    Try::React,
+    Try::Fork,
+    Try::StartConversation,
+    Try::MessageMember,
+    Try::MessageStaff,
+    Try::Invite,
+    Try::Report,
+    Try::Delete,
+];
+
+/// The reference rule (DESIGN.md §3.1, §8), written separately from the
+/// app's: a suspended member does nothing but read what visitors read; a
+/// silenced one reads everything, and may report, delete their own posts
+/// and answer staff, but writes nothing else; a restriction that has run
+/// out restricts nothing.
+fn may(standing: Standing, attempt: Try) -> bool {
+    let suspended = standing == Standing::Suspended;
+    let silenced = suspended || standing == Standing::Silenced;
+    match attempt {
+        Try::ReadMembersThread | Try::ReadConversation => !suspended,
+        Try::MessageStaff | Try::Report | Try::Delete => !suspended,
+        Try::NewThread
+        | Try::Reply
+        | Try::Edit
+        | Try::React
+        | Try::Fork
+        | Try::StartConversation
+        | Try::MessageMember
+        | Try::Invite => !silenced,
+    }
+}
+
+/// Everything a member's writing could change, as text to compare.
+async fn state(f: &Forum) -> String {
+    text(
+        f,
+        "SELECT concat_ws(' | ',
+            (SELECT string_agg(id || ':' || body_md || ':' || coalesce(deleted_at::text, ''), ',' ORDER BY id) FROM posts),
+            (SELECT string_agg(post_id || emoji, ',' ORDER BY post_id, emoji) FROM reactions),
+            (SELECT count(*) FROM invites),
+            (SELECT count(*) FROM reports),
+            (SELECT count(*) FROM threads))",
+    )
+    .await
+}
+
+#[hegel::standalone_function(test_cases = 60, suppress_health_check = [hegel::HealthCheck::TooSlow])]
+fn restrictions_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle, db: &PgPool) {
+    use hegel::generators::{self as gs, Generator};
+    let standing = tc.draw(
+        gs::sampled_from(vec![
+            Standing::Good,
+            Standing::Silenced,
+            Standing::Suspended,
+            Standing::SilenceOver,
+            Standing::SuspensionOver,
+        ])
+        .print_as_debug(),
+    );
+    let mut tries: Vec<Try> = TRIES
+        .iter()
+        .copied()
+        .filter(|_| tc.draw(gs::booleans()))
+        .collect();
+    tries.sort();
+    rt.block_on(async {
+        sqlx::raw_sql(
+            "TRUNCATE settings, jobs, reports, mod_actions, posts, threads, categories, sections, users
+             RESTART IDENTITY CASCADE",
+        )
+        .execute(db)
+        .await
+        .unwrap();
+        let f = Forum::new(db.clone()).without_rate_limits();
+        f.no_new_members().await;
+        let games = f.category("games", "public", None, 0).await;
+        let lounge = f.category("lounge", "members", None, 1).await;
+        let me = f.member("me", "user", None).await;
+        let ruth = f.member("ruth", "user", None).await;
+        f.member("mo", "moderator", None).await;
+        let my_cookie = f.session(me).await;
+        let ruth_cookie = f.session(ruth).await;
+        let mo_cookie = f.session(f.user_id("mo").await).await;
+        let t = f.thread(games, ruth, "Open", "Open thread").await;
+        let mine = f.post(t.thread_id, me, "My post").await;
+        let members = f.thread(lounge, ruth, "Lounge", "Members only text").await;
+        let start = |cookie: &str, to: &'static str| {
+            let f = &f;
+            let cookie = cookie.to_owned();
+            async move {
+                let response = f
+                    .submit("/messages/new", &[("to", to), ("body", "Hello")], Some(&cookie))
+                    .await;
+                assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+                response
+                    .location()
+                    .trim_start_matches("/messages/")
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect::<String>()
+            }
+        };
+        let with_ruth = start(&ruth_cookie, "me").await;
+        let with_staff = start(&mo_cookie, "me").await;
+        let restriction = match standing {
+            Standing::Good => None,
+            Standing::Silenced => Some(("silenced_until", "now() + interval '1 day'")),
+            Standing::Suspended => Some(("suspended_until", "now() + interval '1 day'")),
+            Standing::SilenceOver => Some(("silenced_until", "now() - interval '1 second'")),
+            Standing::SuspensionOver => Some(("suspended_until", "now() - interval '1 second'")),
+        };
+        if let Some((column, until)) = restriction {
+            f.exec(&format!("UPDATE users SET {column} = {until} WHERE id = {me}"))
+                .await;
+        }
+        for attempt in tries {
+            let before = state(&f).await;
+            let path_and_fields: (String, Vec<(&str, String)>) = match attempt {
+                Try::ReadMembersThread => (format!("/t/{}/lounge", members.thread_id), vec![]),
+                Try::ReadConversation => (format!("/messages/{with_ruth}"), vec![]),
+                Try::NewThread => (
+                    "/c/games/new".into(),
+                    vec![("title", "Mine".into()), ("body", "New".into())],
+                ),
+                Try::Reply => (format!("/t/{}/reply", t.thread_id), vec![("body", "Reply".into())]),
+                Try::Edit => (format!("/p/{mine}/edit"), vec![("body", "Changed".into())]),
+                Try::React => (
+                    format!("/p/{}/reactions", t.first_post_id),
+                    vec![("emoji", "👍".into()), ("action", "add".into())],
+                ),
+                Try::Fork => (
+                    format!("/p/{}/fork", t.first_post_id),
+                    vec![
+                        ("title", "Fork".into()),
+                        ("body", "Forked".into()),
+                        ("category", "games".into()),
+                    ],
+                ),
+                Try::StartConversation => (
+                    "/messages/new".into(),
+                    vec![("to", "ruth".into()), ("body", "Hi".into())],
+                ),
+                Try::MessageMember => (format!("/messages/{with_ruth}"), vec![("body", "Hi".into())]),
+                Try::MessageStaff => (format!("/messages/{with_staff}"), vec![("body", "Sorry".into())]),
+                Try::Invite => ("/invites".into(), vec![("note", "A friend".into())]),
+                Try::Report => (
+                    format!("/p/{}/report", t.first_post_id),
+                    vec![("reason", "spam".into())],
+                ),
+                Try::Delete => (format!("/p/{mine}/delete"), vec![]),
+            };
+            let (path, fields) = path_and_fields;
+            let response = if matches!(attempt, Try::ReadMembersThread | Try::ReadConversation) {
+                f.get_as(&path, Some(&my_cookie)).await
+            } else {
+                let fields: Vec<(&str, &str)> =
+                    fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                f.submit(&path, &fields, Some(&my_cookie)).await
+            };
+            let after = state(&f).await;
+            let reading = matches!(attempt, Try::ReadMembersThread | Try::ReadConversation);
+            let succeeded = if reading {
+                response.status == StatusCode::OK
+            } else {
+                (response.status == StatusCode::SEE_OTHER || response.status == StatusCode::OK)
+                    && after != before
+            };
+            assert_eq!(
+                succeeded,
+                may(standing, attempt),
+                "{standing:?} {attempt:?}: {} {}",
+                response.status,
+                response.body
+            );
+            if !succeeded && !reading {
+                assert_eq!(after, before, "{standing:?} {attempt:?} changed something");
+                assert!(response.status.is_client_error(), "{attempt:?}: {}", response.status);
+            }
+            if reading && !succeeded {
+                assert!(!response.body.contains("Members only text"));
+                assert!(!response.body.contains("Hello"));
+            }
+        }
+    });
+}
+
+#[sqlx::test]
+async fn silenced_and_suspended_members_are_kept_to_what_they_may_do(pool: PgPool) {
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || restrictions_follow_the_rule(&rt, &pool))
+        .await
+        .unwrap();
 }

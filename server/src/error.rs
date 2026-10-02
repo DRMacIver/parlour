@@ -3,6 +3,7 @@ use axum::response::{IntoResponse, Response};
 
 /// An unexpected failure while handling a request. The details are logged
 /// and the visitor sees a generic 500 page.
+#[derive(Debug)]
 pub struct AppError(anyhow::Error);
 
 impl<E: Into<anyhow::Error>> From<E> for AppError {

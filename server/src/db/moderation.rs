@@ -879,14 +879,20 @@ pub async fn notes(db: &Db, user_id: i64) -> sqlx::Result<Vec<Note>> {
         .collect())
 }
 
-pub async fn add_note(db: &Db, user_id: i64, author_id: i64, body: &str) -> sqlx::Result<i64> {
+pub async fn add_note<'c>(
+    db: impl Handle<'c>,
+    user_id: i64,
+    author_id: i64,
+    body: &str,
+) -> sqlx::Result<i64> {
+    let mut conn = db.open(KEY).acquire().await?;
     sqlx::query_scalar!(
         "INSERT INTO user_notes (user_id, author_id, body) VALUES ($1, $2, $3) RETURNING id",
         user_id,
         author_id,
         body
     )
-    .fetch_one(db.pool())
+    .fetch_one(&mut *conn)
     .await
 }
 

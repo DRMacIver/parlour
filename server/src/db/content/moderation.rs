@@ -186,7 +186,7 @@ pub async fn log(
             for thread in [row.thread_id, row.to_thread_id].into_iter().flatten() {
                 deps.add(Tag::Thread(thread));
             }
-            describe(row)
+            describe(row, viewer.is_staff())
         })
         .collect();
     Ok(LogPage { total, entries })
@@ -195,7 +195,10 @@ pub async fn log(
 /// One entry, if the viewer may see it.
 pub async fn entry(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result<Option<LogEntry>> {
     let (_, rows) = rows(db, viewer, Scope::All, Some(id), 1, 0).await?;
-    Ok(rows.into_iter().next().map(describe))
+    Ok(rows
+        .into_iter()
+        .next()
+        .map(|row| describe(row, viewer.is_staff())))
 }
 
 /// The entries about one member that they may see, for contesting.
@@ -241,7 +244,10 @@ pub async fn entry_for_member(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result
     )
     .fetch_all(db.pool())
     .await?;
-    Ok(rows.into_iter().next().map(describe))
+    Ok(rows
+        .into_iter()
+        .next()
+        .map(|row| describe(row, viewer.is_staff())))
 }
 
 fn text(s: impl Into<String>) -> Bit {
@@ -255,22 +261,21 @@ fn thread_bit(
     private: Option<bool>,
     live: Option<bool>,
     readable: Option<bool>,
+    staff: bool,
 ) -> Bit {
+    let live = live == Some(true);
     match (id, title, slug, readable) {
         (Some(id), _, _, Some(true)) if private == Some(true) => Bit::Link {
             href: format!("/messages/{id}"),
             text: "a conversation".to_owned(),
         },
-        (Some(id), Some(title), Some(slug), Some(true)) => {
-            if live == Some(true) {
-                Bit::Link {
-                    href: crate::format::thread_href(&id, &slug),
-                    text: format!("“{title}”"),
-                }
-            } else {
-                text(format!("“{title}”"))
-            }
-        }
+        (Some(id), Some(title), Some(slug), Some(true)) if live => Bit::Link {
+            href: crate::format::thread_href(&id, &slug),
+            text: format!("“{title}”"),
+        },
+        // Only staff are told what a deleted thread was called.
+        (Some(_), Some(title), _, Some(true)) if staff => text(format!("“{title}” (deleted)")),
+        (Some(_), _, _, Some(true)) => text("a thread that has since been deleted"),
         (Some(_), ..) => text("a thread you can’t see"),
         (None, ..) => text("a thread"),
     }
@@ -286,7 +291,7 @@ fn category_bit(name: Option<String>, slug: Option<String>) -> Bit {
     }
 }
 
-fn describe(row: Row) -> LogEntry {
+fn describe(row: Row, staff: bool) -> LogEntry {
     let user = match (row.user_id, row.username, row.user_name) {
         (Some(id), Some(username), Some(display_name)) => Some(UserRef {
             id,
@@ -302,7 +307,8 @@ fn describe(row: Row) -> LogEntry {
         },
         None => text("someone"),
     };
-    let readable = row.thread_readable == Some(true);
+    // Whether the viewer may know the thread's title, past or present.
+    let readable = row.thread_readable == Some(true) && (row.thread_live == Some(true) || staff);
     let thread = thread_bit(
         row.thread_id,
         row.thread_title.clone(),
@@ -310,6 +316,7 @@ fn describe(row: Row) -> LogEntry {
         row.thread_private,
         row.thread_live,
         row.thread_readable,
+        staff,
     );
     let seq = row.details["seq"].as_i64();
     let post = || match seq {
@@ -392,6 +399,7 @@ fn describe(row: Row) -> LogEntry {
                     Some(false),
                     row.to_live,
                     row.to_readable,
+                    staff,
                 ),
             ]
         }

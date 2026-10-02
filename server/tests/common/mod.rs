@@ -181,6 +181,15 @@ impl Forum {
         self
     }
 
+    /// The id of the member with this username.
+    pub async fn user_id(&self, username: &str) -> i64 {
+        sqlx::query_scalar("SELECT id FROM users WHERE username = $1")
+            .bind(username)
+            .fetch_one(&self.db)
+            .await
+            .unwrap()
+    }
+
     /// A member invited by `inviter`.
     pub async fn invitee(&self, username: &str, inviter: i64) -> i64 {
         store::create_user(

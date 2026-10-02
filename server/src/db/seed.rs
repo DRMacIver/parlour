@@ -20,6 +20,9 @@ use std::fmt;
 use chrono::{DateTime, Duration, DurationRound, Utc};
 use sqlx::{PgConnection, PgPool};
 
+use serde_json::json;
+
+use crate::db::moderation::{self as mod_records, HeldPlace, NewAction, NewReport, ReportAbout};
 use crate::markdown;
 use crate::store::{self, CreatedThread, NewCategory, NewPost, NewThread, NewUser};
 
@@ -915,6 +918,7 @@ impl Seeder<'_> {
         self.read_markers(september_id).await?;
         self.conversations().await?;
         self.notifications(september_id).await?;
+        self.moderation(general, introductions).await?;
         Ok(())
     }
 
@@ -1165,6 +1169,442 @@ impl Seeder<'_> {
             }
         }
         Ok(())
+    }
+
+    /// A member made for the moderation examples, outside [`USERS`] so that
+    /// the random choices above don't change.
+    async fn extra_member(
+        &mut self,
+        username: &'static str,
+        display_name: &str,
+        invited_by: &str,
+        joined_days_ago: i64,
+    ) -> sqlx::Result<i64> {
+        let invited_by = self.user(invited_by);
+        let id = store::create_user(
+            &mut *self.db,
+            &NewUser {
+                username: username.into(),
+                display_name: display_name.into(),
+                email: format!("{username}@tuesday.example"),
+                invited_by_user_id: Some(invited_by),
+                created_at: Some(self.now - Duration::days(joined_days_ago)),
+                ..NewUser::default()
+            },
+        )
+        .await?;
+        let password_hash = crate::accounts::hash_password(DEV_PASSWORD).await;
+        sqlx::query!(
+            "UPDATE users SET email_verified_at = created_at, password_hash = $2 WHERE id = $1",
+            id,
+            password_hash
+        )
+        .execute(&mut *self.db)
+        .await?;
+        self.users.push((username, id));
+        Ok(id)
+    }
+
+    /// Records an action in the moderation log as if taken `days_ago`.
+    async fn logged(&mut self, action: NewAction<'_>, days_ago: i64) -> sqlx::Result<i64> {
+        let id = mod_records::record(&mut *self.db, &action).await?;
+        sqlx::query!(
+            "UPDATE mod_actions SET created_at = $2 WHERE id = $1",
+            id,
+            self.now - Duration::days(days_ago)
+        )
+        .execute(&mut *self.db)
+        .await?;
+        Ok(id)
+    }
+
+    async fn thread_titled(&mut self, title: &str) -> sqlx::Result<i64> {
+        sqlx::query_scalar!("SELECT id FROM threads WHERE title = $1", title)
+            .fetch_one(&mut *self.db)
+            .await
+    }
+
+    async fn report(
+        &mut self,
+        reporter: &str,
+        about: ReportAbout,
+        reason: &str,
+        details: &str,
+        hours_ago: i64,
+    ) -> sqlx::Result<()> {
+        let reporter_id = self.user(reporter);
+        let id = mod_records::insert_report(
+            &mut *self.db,
+            &NewReport {
+                reporter_id: Some(reporter_id),
+                contact_email: None,
+                about,
+                reason,
+                details,
+            },
+        )
+        .await?
+        .expect("seeded reports are distinct");
+        sqlx::query!(
+            "UPDATE reports SET created_at = $2 WHERE id = $1",
+            id,
+            self.now - Duration::hours(hours_ago)
+        )
+        .execute(&mut *self.db)
+        .await?;
+        Ok(())
+    }
+
+    /// The moderation queue in ModQueue.dc.html, and a history of actions:
+    ///
+    /// - a spammer's thread, reported by Maya and Kit;
+    /// - Hugo pestering Bea in a conversation, which Bea reported (so staff
+    ///   can read it);
+    /// - Lin posting Ruth's address in the members' lounge, which Jonah
+    ///   reported;
+    /// - Wren, three days a member, whose first thread waits for approval;
+    /// - in the log: Tomasz's first post approved, a spammer deleted, Ollie
+    ///   silenced for a day, four posts split out of the Spirit Island
+    ///   thread, and a staff note about Hugo.
+    async fn moderation(&mut self, general: i64, introductions: i64) -> sqlx::Result<()> {
+        let (sam, ruth) = (self.user("sam"), self.user("ruth"));
+
+        // A spammer, reported twice.
+        let spammer = self
+            .extra_member("cheapdeals77", "Cheap Deals", "felix", 4)
+            .await?;
+        let spam = store::create_thread(
+            &mut *self.db,
+            &NewThread {
+                category_id: general,
+                title: "Best replica watches, cheap".into(),
+                author_id: spammer,
+                body_md: "Hi friends!! Looking for luxury watches at the lowest prices? Visit our shop for 70% off, worldwide shipping…".into(),
+                forked_from_post_id: None,
+                pinned: false,
+                locked: false,
+                created_at: Some(self.now - Duration::hours(30)),
+            },
+        )
+        .await?;
+        self.summary.threads += 1;
+        self.summary.posts += 1;
+        for (who, hours) in [("maya", 29), ("kit", 27)] {
+            let about = ReportAbout::Post {
+                post_id: spam.first_post_id,
+                thread_id: spam.thread_id,
+                author_id: spammer,
+            };
+            self.report(who, about, "spam", "", hours).await?;
+        }
+
+        // A reported conversation.
+        let (hugo, bea) = (self.user("hugo"), self.user("bea"));
+        let conversation = store::create_conversation(
+            &mut *self.db,
+            &store::NewConversation {
+                author_id: hugo,
+                title: String::new(),
+                recipient_ids: vec![bea],
+                body_md: "Still up for Root on Thursday?".into(),
+                created_at: Some(self.now - Duration::hours(50)),
+            },
+        )
+        .await?;
+        self.summary.conversations += 1;
+        let mut last = conversation.first_post_id;
+        for (who, hours, text) in [
+            (bea, 48, "Sorry, I can’t make Thursday. Maybe another time."),
+            (hugo, 30, "what about Friday then"),
+            (
+                bea,
+                29,
+                "Please stop messaging me about it, I’ll say if I’m free.",
+            ),
+            (
+                hugo,
+                20,
+                "come on, just one more game, I’ll even bring the expansion. why are you ignoring me",
+            ),
+        ] {
+            last = store::create_post(
+                &mut *self.db,
+                &NewPost {
+                    thread_id: conversation.thread_id,
+                    author_id: who,
+                    body_md: text.into(),
+                    reply_to_post_id: None,
+                    created_at: Some(self.now - Duration::hours(hours)),
+                },
+            )
+            .await?;
+            self.summary.posts += 1;
+        }
+        for who in [hugo, bea] {
+            store::mark_read(&mut *self.db, who, conversation.thread_id, 5).await?;
+        }
+        let about = ReportAbout::Post {
+            post_id: last,
+            thread_id: conversation.thread_id,
+            author_id: hugo,
+        };
+        self.report(
+            "bea",
+            about,
+            "harassment",
+            "Asked him to stop messaging me twice.",
+            19,
+        )
+        .await?;
+
+        // Personal information in the members' lounge.
+        let venue = self.thread_titled("Venue for the December social").await?;
+        let lin = self.user("lin");
+        let address = store::create_post(
+            &mut *self.db,
+            &NewPost {
+                thread_id: venue,
+                author_id: lin,
+                body_md: "If the Fox falls through we can use Ruth’s place. She’s at 14 Moor Lane, Headingley and said she doesn’t mind.".into(),
+                reply_to_post_id: None,
+                created_at: Some(self.now - Duration::hours(6)),
+            },
+        )
+        .await?;
+        self.summary.posts += 1;
+        let about = ReportAbout::Post {
+            post_id: address,
+            thread_id: venue,
+            author_id: lin,
+        };
+        self.report("jonah", about, "personal", "That’s Ruth’s home address.", 5)
+            .await?;
+
+        // A new member's first post, waiting.
+        let wren = self.extra_member("wren", "Wren", "ruth", 3).await?;
+        let held = mod_records::hold(
+            &mut *self.db,
+            wren,
+            &HeldPlace::Thread {
+                category_id: introductions,
+                title: "Hello from Otley".into(),
+                forked_from_post_id: None,
+            },
+            "Hello! Ruth dragged me along to a Tuesday session last month and I haven’t stopped thinking about Brass since. Mostly into heavier euros, slowly learning to lose gracefully.",
+        )
+        .await?;
+        sqlx::query!(
+            "UPDATE held_posts SET created_at = $2 WHERE id = $1",
+            held,
+            self.now - Duration::hours(3)
+        )
+        .execute(&mut *self.db)
+        .await?;
+
+        // The log.
+        let leeds = self.thread_titled("Hi from Leeds!").await?;
+        let tomasz = self.user("tomasz");
+        self.logged(
+            NewAction {
+                actor_id: ruth,
+                action: "approve_post",
+                target_kind: "held_post",
+                target_id: 0,
+                user_id: Some(tomasz),
+                thread_id: Some(leeds),
+                post_id: None,
+                reason: "",
+                public: true,
+                details: json!({}),
+            },
+            38,
+        )
+        .await?;
+        let old_spammer = self
+            .extra_member("designerbags", "Designer Bags", "felix", 9)
+            .await?;
+        let bags = store::create_thread(
+            &mut *self.db,
+            &NewThread {
+                category_id: general,
+                title: "Designer bags 80% off".into(),
+                author_id: old_spammer,
+                body_md: "Genuine designer bags, unbeatable prices, link in my profile".into(),
+                forked_from_post_id: None,
+                pinned: false,
+                locked: false,
+                created_at: Some(self.now - Duration::days(5)),
+            },
+        )
+        .await?;
+        mod_records::delete_spammer(&mut *self.db, old_spammer, sam).await?;
+        self.users.retain(|(name, _)| *name != "designerbags");
+        let _ = bags;
+        self.logged(
+            NewAction {
+                actor_id: sam,
+                action: "delete_spammer",
+                target_kind: "user",
+                target_id: old_spammer,
+                user_id: Some(old_spammer),
+                thread_id: None,
+                post_id: None,
+                reason: "Spam",
+                public: true,
+                details: json!({ "posts": 1, "threads": 1 }),
+            },
+            4,
+        )
+        .await?;
+        let ollie = self.user("ollie");
+        sqlx::query!(
+            "UPDATE users SET silenced_until = $2 WHERE id = $1",
+            ollie,
+            self.now - Duration::days(25)
+        )
+        .execute(&mut *self.db)
+        .await?;
+        self.logged(
+            NewAction {
+                actor_id: ruth,
+                action: "silence",
+                target_kind: "user",
+                target_id: ollie,
+                user_id: Some(ollie),
+                thread_id: None,
+                post_id: None,
+                reason: "Personal remarks in the Kickstarter thread",
+                public: true,
+                details: json!({ "days": 1 }),
+            },
+            26,
+        )
+        .await?;
+        // Split the last four posts of the Spirit Island thread off.
+        let spirit = self
+            .thread_titled("Spirit Island: is Jagged Earth worth it if you only play two-player?")
+            .await?;
+        let tail = sqlx::query!(
+            "SELECT id, author_id, created_at FROM posts WHERE thread_id = $1 ORDER BY seq DESC LIMIT 4",
+            spirit
+        )
+        .fetch_all(&mut *self.db)
+        .await?;
+        let first = tail.last().expect("the thread has posts");
+        let spirit_category = self.category_of(spirit).await?;
+        let split = mod_records::empty_thread(
+            &mut *self.db,
+            spirit_category,
+            "Spirit Island: favourite spirits for beginners",
+            first.author_id,
+            first.created_at,
+        )
+        .await?;
+        self.summary.threads += 1;
+        let ids: Vec<i64> = tail.iter().map(|p| p.id).collect();
+        mod_records::move_posts(&mut *self.db, spirit, &ids, split, ruth).await?;
+        self.logged(
+            NewAction {
+                actor_id: ruth,
+                action: "move_posts",
+                target_kind: "thread",
+                target_id: spirit,
+                user_id: None,
+                thread_id: Some(spirit),
+                post_id: None,
+                reason: "Off topic: a new conversation",
+                public: true,
+                details: json!({ "count": 4, "to_thread_id": split, "new_thread": true, "emptied": false }),
+            },
+            2,
+        )
+        .await?;
+        mod_records::add_note(
+            &mut *self.db,
+            hugo,
+            sam,
+            "Bea says he kept pressing after she said no. Talk to him before anything else.",
+        )
+        .await?;
+        self.logged(
+            NewAction {
+                actor_id: sam,
+                action: "add_note",
+                target_kind: "user",
+                target_id: hugo,
+                user_id: Some(hugo),
+                thread_id: None,
+                post_id: None,
+                reason: "",
+                public: false,
+                details: json!({}),
+            },
+            0,
+        )
+        .await?;
+        self.quiet_corner(general).await?;
+        self.summary.users = self.users.len();
+        Ok(())
+    }
+
+    /// Nell and Otto, two established members who keep to one thread of
+    /// their own (and so are free for the browser tests to log in as).
+    async fn quiet_corner(&mut self, general: i64) -> sqlx::Result<()> {
+        let nell = self.extra_member("nell", "Nell", "ana", 120).await?;
+        let otto = self.extra_member("otto", "Otto", "nell", 110).await?;
+        let lines = [
+            (nell, "What’s everyone listening to while they paint or read?"),
+            (otto, "The Sea of Thieves soundtrack, unironically."),
+            (nell, "Ha. I’ve been on Nils Frahm all week."),
+            (otto, "Good painting music: nothing with words in it."),
+            (nell, "Agreed. Podcasts are fatal for brushwork."),
+            (otto, "And for rules explanations, as Bea will tell you."),
+            (nell, "Next week: film scores only."),
+            (otto, "Deal. I’ll bring the Arrival soundtrack."),
+            (nell, "And I’ll bring biscuits."),
+            (otto, "Then it’s a date."),
+        ];
+        let start = self.now - Duration::days(60);
+        let created = store::create_thread(
+            &mut *self.db,
+            &NewThread {
+                category_id: general,
+                title: "Quiet corner: what are you listening to?".into(),
+                author_id: lines[0].0,
+                body_md: lines[0].1.into(),
+                forked_from_post_id: None,
+                pinned: false,
+                locked: false,
+                created_at: Some(start),
+            },
+        )
+        .await?;
+        self.summary.threads += 1;
+        self.summary.posts += 1;
+        for (i, (author, text)) in lines.iter().enumerate().skip(1) {
+            store::create_post(
+                &mut *self.db,
+                &NewPost {
+                    thread_id: created.thread_id,
+                    author_id: *author,
+                    body_md: (*text).into(),
+                    reply_to_post_id: None,
+                    created_at: Some(start + Duration::hours(i as i64 * 5)),
+                },
+            )
+            .await?;
+            self.summary.posts += 1;
+        }
+        Ok(())
+    }
+
+    async fn category_of(&mut self, thread: i64) -> sqlx::Result<i64> {
+        sqlx::query_scalar!(
+            r#"SELECT category_id AS "category_id!" FROM threads WHERE id = $1"#,
+            thread
+        )
+        .fetch_one(&mut *self.db)
+        .await
     }
 
     fn user(&self, username: &str) -> i64 {

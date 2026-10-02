@@ -97,6 +97,8 @@ struct ConversationModel {
     /// The current participants, by user id.
     participants: BTreeSet<i64>,
     last_seq: i64,
+    /// Whether one of its messages was reported, opening it to staff.
+    reported: bool,
 }
 
 struct MessageModel {
@@ -113,6 +115,19 @@ struct ThreadModel {
     title_token: String,
     deleted: bool,
     last_seq: i64,
+    /// Titles a moderator renamed it from, which the moderation log names
+    /// to those who can read the thread.
+    old_titles: Vec<String>,
+    /// The thread it was merged into, by moving all its posts there.
+    merged_into: Option<usize>,
+}
+
+/// A new member's post, held for a moderator.
+struct HeldModel {
+    id: i64,
+    author: i64,
+    title_token: String,
+    body_token: String,
 }
 
 struct PostModel {
@@ -155,6 +170,10 @@ struct World {
     messages: Vec<MessageModel>,
     /// Who each email address belongs to.
     addresses: HashMap<String, i64>,
+    /// Whether the member viewer is silenced or suspended now.
+    member_silenced: bool,
+    member_suspended: bool,
+    held: Vec<HeldModel>,
     /// How many of the mailer's sent emails have been checked.
     emails_checked: usize,
 }
@@ -196,6 +215,9 @@ impl World {
             messages: Vec::new(),
             addresses: HashMap::new(),
             emails_checked: 0,
+            member_silenced: false,
+            member_suspended: false,
+            held: Vec::new(),
         };
         for name in ["ruth", "jonah", "maya"] {
             let id = world
@@ -353,6 +375,15 @@ impl World {
         people
     }
 
+    /// The access layer's view of a member, as they are now.
+    fn viewer_of(&self, user: i64) -> Viewer {
+        Viewer::User(
+            self.block(sessions::user_ctx(self.fresh.state.db(), user))
+                .unwrap()
+                .unwrap(),
+        )
+    }
+
     fn viewer_id(&self, who: Who) -> Option<i64> {
         match who {
             Who::Anonymous => None,
@@ -365,7 +396,7 @@ impl World {
     /// and nobody else.
     fn conversation_readable(&self, conversation: usize, who: Who) -> bool {
         self.viewer_id(who)
-            .is_some_and(|id| self.conversations[conversation].participants.contains(&id))
+            .is_some_and(|id| self.conversation_readable_by(conversation, id))
     }
 
     fn add_message(&mut self, conversation: usize, author: i64, mention: bool) {
@@ -406,6 +437,12 @@ impl World {
     /// staff read everything.
     fn category_readable(&self, category: usize, who: Who) -> bool {
         let c = &self.categories[category];
+        // A suspended member reads what visitors read.
+        let who = if who == Who::Member && self.member_suspended {
+            Who::Anonymous
+        } else {
+            who
+        };
         match (c.read_level, who) {
             ("public", _) | ("members", Who::Member | Who::Staff) | (_, Who::Staff) => true,
             ("groups", Who::Member) => !self.member_groups.is_disjoint(&c.read_groups),
@@ -423,6 +460,14 @@ impl World {
         !p.deleted && !p.hidden && self.thread_readable(p.thread, who)
     }
 
+    /// Whether a post's text is shown to the viewer on pages: as
+    /// [`World::post_readable`], but staff also see hidden posts (marked
+    /// as hidden), with their history.
+    fn post_shown(&self, post: usize, who: Who) -> bool {
+        let p = &self.posts[post];
+        !p.deleted && (!p.hidden || who == Who::Staff) && self.thread_readable(p.thread, who)
+    }
+
     /// The viewer a member is, for the reference permission function:
     /// the logged-in viewers as themselves, and the other members (who
     /// are in no groups) as a member viewer in no groups would be.
@@ -431,6 +476,9 @@ impl World {
             return true;
         }
         let c = &self.categories[category];
+        if user == self.member_id && self.member_suspended {
+            return c.read_level == "public";
+        }
         match c.read_level {
             "public" | "members" => true,
             _ => user == self.member_id && !self.member_groups.is_disjoint(&c.read_groups),
@@ -452,21 +500,27 @@ impl World {
                 tokens.insert(p.body_token.as_str());
             }
         }
-        for c in &self.conversations {
-            if c.participants.contains(&user) {
+        for (i, c) in self.conversations.iter().enumerate() {
+            if self.conversation_readable_by(i, user) {
                 tokens.insert(c.title_token.as_str());
             }
         }
         for m in &self.messages {
-            if !m.deleted
-                && self.conversations[m.conversation]
-                    .participants
-                    .contains(&user)
-            {
+            if !m.deleted && self.conversation_readable_by(m.conversation, user) {
                 tokens.insert(m.body_token.as_str());
             }
         }
         tokens
+    }
+
+    /// Whether member `user` reads a conversation: they are in it, or they
+    /// are staff and it was reported; a suspended member reads none.
+    fn conversation_readable_by(&self, conversation: usize, user: i64) -> bool {
+        let c = &self.conversations[conversation];
+        if user == self.member_id && self.member_suspended {
+            return false;
+        }
+        c.participants.contains(&user) || (c.reported && user == self.staff_id)
     }
 
     /// How many unread notifications the viewer should see on the badge:
@@ -582,14 +636,24 @@ impl World {
             }
         }
         for (i, t) in self.threads.iter().enumerate() {
-            if self.thread_readable(i, who) {
+            // Staff are told in the moderation log what deleted threads
+            // were called.
+            let staff_knows = who == Who::Staff;
+            if self.thread_readable(i, who) || staff_knows {
                 tokens.insert(t.title_token.as_str());
+                tokens.extend(t.old_titles.iter().map(String::as_str));
             }
         }
         for (i, p) in self.posts.iter().enumerate() {
-            if self.post_readable(i, who) {
+            if self.post_shown(i, who) {
                 tokens.insert(p.body_token.as_str());
                 tokens.extend(p.history.iter().map(String::as_str));
+            }
+        }
+        for h in &self.held {
+            if who == Who::Staff || (who == Who::Member && h.author == self.member_id) {
+                tokens.insert(h.title_token.as_str());
+                tokens.insert(h.body_token.as_str());
             }
         }
         for (i, c) in self.conversations.iter().enumerate() {
@@ -661,8 +725,29 @@ impl World {
             paths.push(format!("/p/{}/revisions", m.id));
             paths.push(format!("/p/{}/reactions", m.id));
         }
+        paths.push("/moderation".to_owned());
+        for h in &self.held {
+            paths.push(format!("/held/{}", h.id));
+        }
         if who != Who::Anonymous {
             paths.extend(self.writing_paths());
+            for path in [
+                "/mod/queue",
+                "/mod/log",
+                "/mod/users/viewer",
+                "/mod/users/ruth",
+            ] {
+                paths.push(path.to_owned());
+            }
+            for t in &self.threads {
+                paths.push(format!("/mod/t/{}", t.id));
+            }
+            for p in &self.posts {
+                paths.push(format!("/mod/p/{}", p.id));
+            }
+            for m in &self.messages {
+                paths.push(format!("/mod/p/{}", m.id));
+            }
         }
         paths
     }
@@ -796,8 +881,20 @@ impl World {
             if self.thread_readable(i, who) {
                 assert_eq!(response.status, StatusCode::OK);
                 assert!(response.body.contains(&t.title_token));
+            } else if let Some(into) = t.merged_into.filter(|&into| {
+                t.deleted
+                    && self.category_readable(t.category, who)
+                    && self.thread_readable(into, who)
+            }) {
+                // A merged thread leads to the one it was merged into.
+                let into = &self.threads[into];
+                assert_eq!(response.status, StatusCode::TEMPORARY_REDIRECT);
+                assert_eq!(
+                    response.location(),
+                    format!("/t/{}/{}", into.id, self.slug_of(into))
+                );
             } else {
-                assert_eq!(response.status, StatusCode::NOT_FOUND);
+                assert_eq!(response.status, StatusCode::NOT_FOUND, "{who:?} thread {i}");
             }
         }
         for (i, p) in self.posts.iter().enumerate() {
@@ -815,7 +912,7 @@ impl World {
             };
             assert_eq!(permalink.location(), expected);
             let history = self.get_as(who, &format!("/p/{}/revisions", p.id));
-            if self.post_readable(i, who) {
+            if self.post_shown(i, who) {
                 let body = self.get_as(who, expected.split('#').next().unwrap()).body;
                 assert!(
                     body.contains(&p.body_token),
@@ -944,6 +1041,8 @@ impl World {
             title_token,
             deleted: false,
             last_seq: 1,
+            old_titles: Vec::new(),
+            merged_into: None,
         });
         self.posts.push(PostModel {
             id: created.first_post_id,
@@ -1270,6 +1369,7 @@ impl World {
             title_token,
             participants,
             last_seq: 1,
+            reported: false,
         });
         self.messages.push(MessageModel {
             id: created.first_post_id,
@@ -1329,6 +1429,299 @@ impl World {
             if deleted { "now()" } else { "NULL" }
         ));
         self.changed(Change::PostRemoved { post_id: id });
+    }
+
+    /// Someone in a conversation reports a message, which opens that
+    /// conversation to staff.
+    #[rule]
+    fn report_message(&mut self, tc: TestCase) {
+        tc.assume(!self.messages.is_empty());
+        let m = tc.draw(gs::integers::<usize>().max_value(self.messages.len() - 1));
+        let c = self.messages[m].conversation;
+        let people: Vec<i64> = self.conversations[c].participants.iter().copied().collect();
+        tc.assume(!people.is_empty());
+        let reporter = tc.draw(gs::sampled_from(people));
+        let viewer = self.viewer_of(reporter);
+        let outcome = self
+            .block(parlour::moderation::report_post(
+                &self.cached.state,
+                &viewer,
+                self.messages[m].id,
+                "harassment",
+                "",
+            ))
+            .unwrap();
+        if outcome.is_ok() {
+            self.conversations[c].reported = true;
+        }
+    }
+
+    /// A moderator silences or suspends the member viewer, or lifts it.
+    #[rule]
+    fn restrict_member(&mut self, tc: TestCase) {
+        use parlour::mod_records::Restriction;
+        let suspend = tc.draw(gs::booleans());
+        let (restriction, on) = if suspend {
+            (Restriction::Suspend, !self.member_suspended)
+        } else {
+            (Restriction::Silence, !self.member_silenced)
+        };
+        let staff = self.viewer_of(self.staff_id);
+        let outcome = self
+            .block(parlour::moderation::restrict_member(
+                &self.cached.state,
+                &staff,
+                "viewer",
+                restriction,
+                on.then_some(3),
+                "Testing",
+                None,
+            ))
+            .unwrap();
+        assert!(outcome.is_ok(), "{restriction:?} {on}: {outcome:?}");
+        if suspend {
+            self.member_suspended = on;
+        } else {
+            self.member_silenced = on;
+        }
+    }
+
+    /// A moderator hides a post or shows it again, through the moderation
+    /// action (which also logs it and tells its author).
+    #[rule]
+    fn moderator_hides(&mut self, tc: TestCase) {
+        use parlour::moderation::PostAction;
+        tc.assume(!self.posts.is_empty());
+        let post = tc.draw(gs::integers::<usize>().max_value(self.posts.len() - 1));
+        let p = &self.posts[post];
+        tc.assume(!self.threads[p.thread].deleted);
+        let action = if p.hidden {
+            PostAction::Unhide
+        } else {
+            PostAction::Hide
+        };
+        let staff = self.viewer_of(self.staff_id);
+        let outcome = self
+            .block(parlour::moderation::moderate_post(
+                &self.cached.state,
+                &staff,
+                p.id,
+                action,
+                "Testing",
+                None,
+            ))
+            .unwrap();
+        // A deleted post can't be hidden.
+        assert_eq!(outcome.is_ok(), !p.deleted, "{action:?}");
+        if outcome.is_ok() {
+            self.posts[post].hidden = action == PostAction::Hide;
+        }
+    }
+
+    /// A moderator renames a thread, which the log remembers.
+    #[rule]
+    fn moderator_renames(&mut self, tc: TestCase) {
+        use parlour::moderation::ThreadAction;
+        tc.assume(!self.threads.is_empty());
+        let t = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
+        tc.assume(!self.threads[t].deleted);
+        let token = self.token();
+        let staff = self.viewer_of(self.staff_id);
+        let outcome = self
+            .block(parlour::moderation::moderate_thread(
+                &self.cached.state,
+                &staff,
+                self.threads[t].id,
+                ThreadAction::Rename(format!("Thread {token}")),
+                "Clearer",
+            ))
+            .unwrap();
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let thread = &mut self.threads[t];
+        let old = std::mem::replace(&mut thread.title_token, token);
+        thread.old_titles.push(old);
+    }
+
+    /// A moderator moves some of a thread's posts to the end of another
+    /// thread or a new one (DESIGN.md §8). Moving them all merges the
+    /// thread into the other.
+    #[rule]
+    fn moderator_moves_posts(&mut self, tc: TestCase) {
+        use parlour::moderation::Destination;
+        tc.assume(!self.threads.is_empty());
+        let from = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
+        tc.assume(!self.threads[from].deleted);
+        let in_thread: Vec<usize> = (0..self.posts.len())
+            .filter(|&p| self.posts[p].thread == from)
+            .collect();
+        tc.assume(!in_thread.is_empty());
+        let moving: Vec<usize> = in_thread
+            .iter()
+            .copied()
+            .filter(|_| tc.draw(gs::booleans()))
+            .collect();
+        tc.assume(!moving.is_empty());
+        let numbers: Vec<String> = moving
+            .iter()
+            .map(|&p| self.posts[p].seq.to_string())
+            .collect();
+        let others: Vec<usize> = (0..self.threads.len())
+            .filter(|&t| t != from && !self.threads[t].deleted)
+            .collect();
+        let new_thread = others.is_empty() || tc.draw(gs::booleans());
+        let (destination, title_token, category) = if new_thread {
+            let category = tc.draw(gs::integers::<usize>().max_value(self.categories.len() - 1));
+            let token = self.token();
+            (
+                Destination::New {
+                    category: self.categories[category].slug.clone(),
+                    title: format!("Thread {token}"),
+                },
+                Some(token),
+                category,
+            )
+        } else {
+            let to = tc.draw(gs::sampled_from(others));
+            (
+                Destination::Existing(self.threads[to].id.to_string()),
+                None,
+                to,
+            )
+        };
+        let staff = self.viewer_of(self.staff_id);
+        let to_id = self
+            .block(parlour::moderation::move_posts(
+                &self.cached.state,
+                &staff,
+                self.threads[from].id,
+                &numbers.join(", "),
+                &destination,
+                "Tidying",
+            ))
+            .unwrap()
+            .expect("moving posts works");
+        let to = match title_token {
+            Some(title_token) => {
+                self.threads.push(ThreadModel {
+                    id: to_id,
+                    category,
+                    title_token,
+                    deleted: false,
+                    last_seq: 0,
+                    old_titles: Vec::new(),
+                    merged_into: None,
+                });
+                self.threads.len() - 1
+            }
+            None => category,
+        };
+        assert_eq!(self.threads[to].id, to_id);
+        for p in moving {
+            self.threads[to].last_seq += 1;
+            self.posts[p].thread = to;
+            self.posts[p].seq = self.threads[to].last_seq;
+        }
+        if !self.posts.iter().any(|p| p.thread == from) {
+            self.threads[from].deleted = true;
+            self.threads[from].merged_into = Some(to);
+        }
+    }
+
+    /// A new member's thread is held for a moderator.
+    #[rule]
+    fn hold_post(&mut self, tc: TestCase) {
+        tc.assume(self.held.len() < 3);
+        let author = tc.draw(gs::sampled_from(self.users.clone()));
+        let category = tc.draw(gs::integers::<usize>().max_value(self.categories.len() - 1));
+        let (title_token, body_token) = (self.token(), self.token());
+        let id = self
+            .block(parlour::mod_records::hold(
+                self.db(),
+                author,
+                &parlour::mod_records::HeldPlace::Thread {
+                    category_id: self.categories[category].id,
+                    title: format!("Thread {title_token}"),
+                    forked_from_post_id: None,
+                },
+                &format!("Held {body_token}"),
+            ))
+            .unwrap();
+        self.held.push(HeldModel {
+            id,
+            author,
+            title_token,
+            body_token,
+        });
+    }
+
+    /// A moderator approves a held post, which is posted if its author may
+    /// still post there, or rejects it.
+    #[rule]
+    fn decide_held(&mut self, tc: TestCase) {
+        tc.assume(!self.held.is_empty());
+        let h = tc.draw(gs::integers::<usize>().max_value(self.held.len() - 1));
+        let id = self.held[h].id;
+        let staff = self.viewer_of(self.staff_id);
+        if tc.draw(gs::booleans()) {
+            let approved = self
+                .block(parlour::moderation::approve(&self.cached.state, &staff, id))
+                .unwrap();
+            if let Ok(post_id) = approved {
+                let (thread_id, category_id): (i64, i64) = self
+                    .block(
+                        sqlx::query_as(
+                            "SELECT t.id, t.category_id FROM posts p JOIN threads t ON t.id = p.thread_id
+                             WHERE p.id = $1",
+                        )
+                        .bind(post_id)
+                        .fetch_one(self.db()),
+                    )
+                    .unwrap();
+                let held = &self.held[h];
+                let category = self
+                    .categories
+                    .iter()
+                    .position(|c| c.id == category_id)
+                    .unwrap();
+                let (title_token, body_token, author) = (
+                    held.title_token.clone(),
+                    held.body_token.clone(),
+                    held.author,
+                );
+                self.threads.push(ThreadModel {
+                    id: thread_id,
+                    category,
+                    title_token,
+                    deleted: false,
+                    last_seq: 1,
+                    old_titles: Vec::new(),
+                    merged_into: None,
+                });
+                self.posts.push(PostModel {
+                    id: post_id,
+                    thread: self.threads.len() - 1,
+                    seq: 1,
+                    author,
+                    body_token,
+                    deleted: false,
+                    hidden: false,
+                    history: Vec::new(),
+                    settled: false,
+                });
+                self.notify(post_id);
+                return;
+            }
+        }
+        // Rejected (or approved once already): either way it stays where
+        // its author and staff can read it.
+        let _ = self
+            .block(parlour::moderation::reject(
+                &self.cached.state,
+                &staff,
+                id,
+                "No",
+            ))
+            .unwrap();
     }
 
     /// The notification email jobs run, as the job workers would once the
@@ -1428,6 +1821,17 @@ struct UserModel {
     id: i64,
     staff: bool,
     groups: BTreeSet<usize>,
+    /// Silenced: reads as before, but may not post.
+    silenced: bool,
+    /// Suspended: reads only what visitors read, and isn't staff.
+    suspended: bool,
+}
+
+impl UserModel {
+    /// Staff, as far as reading goes: a suspended moderator is a visitor.
+    fn acts_as_staff(&self) -> bool {
+        self.staff && !self.suspended
+    }
 }
 
 struct AccessCategory {
@@ -1459,12 +1863,16 @@ struct AccessConversation {
     id: i64,
     /// Current participants, as indexes into `users`.
     participants: BTreeSet<usize>,
+    /// Whether one of its messages was reported, which opens it to staff.
+    reported: bool,
 }
 
 struct AccessMessage {
     id: i64,
     conversation: usize,
     deleted: bool,
+    /// Hidden by a moderator (after it was reported).
+    hidden: bool,
 }
 
 struct Access {
@@ -1477,6 +1885,8 @@ struct Access {
     categories: Vec<AccessCategory>,
     threads: Vec<AccessThread>,
     posts: Vec<AccessPost>,
+    /// For each post, the threads it has been moved out of.
+    moved_from: Vec<BTreeSet<usize>>,
     conversations: Vec<AccessConversation>,
     messages: Vec<AccessMessage>,
 }
@@ -1504,6 +1914,7 @@ impl Access {
             categories: Vec::new(),
             threads: Vec::new(),
             posts: Vec::new(),
+            moved_from: Vec::new(),
             conversations: Vec::new(),
             messages: Vec::new(),
         };
@@ -1530,6 +1941,8 @@ impl Access {
                 id,
                 staff: role != "user",
                 groups: BTreeSet::new(),
+                silenced: false,
+                suspended: false,
             });
         }
         for _ in 0..2 {
@@ -1613,13 +2026,17 @@ impl Access {
             deleted: false,
             hidden: false,
         });
+        self.moved_from.push(BTreeSet::new());
     }
 
     // -- The reference permission function, from DESIGN.md §3.1.
 
     /// `who` is an index into `users`, or `None` for an anonymous visitor.
+    /// A suspended member reads what a visitor reads (DESIGN.md §3.1:
+    /// members-only means members who are not suspended).
     fn reads_category(&self, who: Option<usize>, category: usize) -> bool {
         let c = &self.categories[category];
+        let who = who.filter(|&u| !self.users[u].suspended);
         match (c.level, who) {
             ("public", _) => true,
             (_, None) => false,
@@ -1629,6 +2046,18 @@ impl Access {
                 user.staff || !user.groups.is_disjoint(&c.read_groups)
             }
         }
+    }
+
+    /// Whether the viewer is staff who may read hidden posts.
+    fn sees_hidden(&self, who: Option<usize>) -> bool {
+        who.is_some_and(|u| self.users[u].acts_as_staff())
+    }
+
+    /// Whether the viewer is shown the post's text where it is: live
+    /// posts, and for staff hidden ones too.
+    fn shown_post(&self, who: Option<usize>, post: usize) -> bool {
+        let p = &self.posts[post];
+        !p.deleted && (!p.hidden || self.sees_hidden(who))
     }
 
     fn reads_thread(&self, who: Option<usize>, thread: usize) -> bool {
@@ -1645,10 +2074,19 @@ impl Access {
         self.post_live(post) && self.reads_thread(who, self.posts[post].thread)
     }
 
-    /// DESIGN.md §3.7: only a conversation's current participants read it;
-    /// being staff makes no difference.
+    /// DESIGN.md §3.7: only a conversation's current participants read it,
+    /// and staff once one of its messages has been reported; suspended
+    /// members read none.
     fn reads_conversation(&self, who: Option<usize>, conversation: usize) -> bool {
-        who.is_some_and(|u| self.conversations[conversation].participants.contains(&u))
+        let c = &self.conversations[conversation];
+        who.filter(|&u| !self.users[u].suspended)
+            .is_some_and(|u| c.participants.contains(&u) || (c.reported && self.users[u].staff))
+    }
+
+    /// The viewer's own conversations, which their list shows.
+    fn in_conversation(&self, who: Option<usize>, conversation: usize) -> bool {
+        who.filter(|&u| !self.users[u].suspended)
+            .is_some_and(|u| self.conversations[conversation].participants.contains(&u))
     }
 
     /// Checks everything the content module says about conversations.
@@ -1664,7 +2102,7 @@ impl Access {
             .collect();
         let expected = Self::ids(
             &self.conversations,
-            |c| self.reads_conversation(who, c),
+            |c| self.in_conversation(who, c),
             |c| c.id,
         );
         assert_eq!(listed, expected, "{who:?}: conversations");
@@ -1725,6 +2163,7 @@ impl Access {
         for (m, message) in self.messages.iter().enumerate() {
             let visible = self.reads_conversation(who, message.conversation);
             let live = visible && !message.deleted;
+            let reactable = live && !message.hidden;
             let target = self
                 .block(content::post_target(db, viewer, message.id))
                 .unwrap();
@@ -1737,13 +2176,14 @@ impl Access {
             let history = self
                 .block(content::post_history(db, viewer, message.id, &mut deps))
                 .unwrap();
-            assert_eq!(history.is_some(), live, "{who:?}: history of message {m}");
+            let shown = live && (!message.hidden || self.sees_hidden(who));
+            assert_eq!(history.is_some(), shown, "{who:?}: history of message {m}");
             let reactions = self
                 .block(content::post_reactions(db, viewer, message.id, &mut deps))
                 .unwrap();
             assert_eq!(
                 reactions.is_some(),
-                live,
+                reactable,
                 "{who:?}: reactions to message {m}"
             );
             // Messages can never be quoted into a thread.
@@ -1765,7 +2205,9 @@ impl Access {
     fn posts_in_category(&self, who: Option<usize>, category: usize) -> bool {
         let Some(u) = who else { return false };
         let (c, user) = (&self.categories[category], &self.users[u]);
-        self.reads_category(who, category)
+        !user.silenced
+            && !user.suspended
+            && self.reads_category(who, category)
             && match c.write_level {
                 "members" => true,
                 "groups" => user.staff || !user.groups.is_disjoint(&c.write_groups),
@@ -1996,12 +2438,18 @@ impl Access {
                 self.block(content::thread_target(db, &viewer, thread.id))
                     .unwrap()
                     .is_some(),
-                self.block(content::first_unread(db, &viewer, thread.id))
-                    .unwrap()
-                    .is_some(),
             ] {
                 assert_eq!(found, visible, "{who:?}: thread {t}");
             }
+            // A thread whose posts have all moved away has none to jump to.
+            let has_posts = self.posts.iter().any(|p| p.thread == t);
+            assert_eq!(
+                self.block(content::first_unread(db, &viewer, thread.id))
+                    .unwrap()
+                    .is_some(),
+                visible && has_posts,
+                "{who:?}: first unread in thread {t}"
+            );
             let Some(page) = page else { continue };
             match (thread.fork_of, &page.embed) {
                 (None, None) => {}
@@ -2016,14 +2464,34 @@ impl Access {
             }
             for shown in &page.posts {
                 let p = self.posts.iter().position(|p| p.id == shown.id).unwrap();
+                if let PostBody::Moved { to } = &shown.body {
+                    // A post moved away leaves its number here, naming
+                    // where it is now only to those who can read it there
+                    // (which may be this thread again, further on, if it
+                    // was moved back).
+                    let now = self.posts[p].thread;
+                    assert!(
+                        self.moved_from[p].contains(&t),
+                        "{who:?}: post {p} never left {t}"
+                    );
+                    assert_eq!(
+                        to.as_ref().map(|r| r.id),
+                        self.reads_thread(who, now).then(|| self.threads[now].id),
+                        "{who:?}: where post {p} went"
+                    );
+                    continue;
+                }
                 assert_eq!(self.posts[p].thread, t);
                 assert_eq!(
                     matches!(shown.body, PostBody::Live { .. }),
-                    self.post_live(p),
+                    self.shown_post(who, p),
                     "{who:?}: post {p}"
                 );
+                if let PostBody::Live { hidden, .. } = &shown.body {
+                    assert_eq!(*hidden, self.posts[p].hidden, "{who:?}: post {p} marked");
+                }
                 let backlinks: BTreeSet<i64> = shown.forks.iter().map(|f| f.thread.id).collect();
-                let expected = if self.post_live(p) {
+                let expected = if self.shown_post(who, p) {
                     Self::ids(
                         &self.threads,
                         |f| self.threads[f].fork_of == Some(p) && self.reads_thread(who, f),
@@ -2049,15 +2517,20 @@ impl Access {
             if let Some(target) = target {
                 assert_eq!(
                     target.body.is_some(),
-                    self.post_live(p),
+                    self.shown_post(who, p),
                     "{who:?}: post {p}"
                 );
+                assert_eq!(target.is_live(), self.post_live(p), "{who:?}: post {p}");
             }
             let readable = self.reads_post(who, p);
             let history = self
                 .block(content::post_history(db, &viewer, post.id, &mut deps))
                 .unwrap();
-            assert_eq!(history.is_some(), readable, "{who:?}: history of {p}");
+            assert_eq!(
+                history.is_some(),
+                in_thread && self.shown_post(who, p),
+                "{who:?}: history of {p}"
+            );
             let reactions = self
                 .block(content::post_reactions(db, &viewer, post.id, &mut deps))
                 .unwrap();
@@ -2176,6 +2649,7 @@ impl Access {
             deleted: false,
             hidden: false,
         });
+        self.moved_from.push(BTreeSet::new());
     }
 
     #[rule]
@@ -2262,11 +2736,13 @@ impl Access {
         self.conversations.push(AccessConversation {
             id: created.thread_id,
             participants: others,
+            reported: false,
         });
         self.messages.push(AccessMessage {
             id: created.first_post_id,
             conversation: self.conversations.len() - 1,
             deleted: false,
+            hidden: false,
         });
     }
 
@@ -2291,6 +2767,7 @@ impl Access {
             id,
             conversation: c,
             deleted: false,
+            hidden: false,
         });
     }
 
@@ -2331,6 +2808,119 @@ impl Access {
             message.id
         );
         self.exec(sql);
+    }
+
+    /// A moderator silences or suspends a member, or lifts it; the
+    /// fixed admin stays as they are.
+    #[rule]
+    fn toggle_restriction(&mut self, tc: TestCase) {
+        let u = tc.draw(
+            gs::integers::<usize>()
+                .min_value(FIXED_USERS)
+                .max_value(self.users.len() - 1),
+        );
+        let suspend = tc.draw(gs::booleans());
+        let user = &mut self.users[u];
+        let (column, on) = if suspend {
+            user.suspended = !user.suspended;
+            ("suspended_until", user.suspended)
+        } else {
+            user.silenced = !user.silenced;
+            ("silenced_until", user.silenced)
+        };
+        // Staff can't be restricted through the moderation pages, but the
+        // access layer mustn't depend on that.
+        let sql = format!(
+            "UPDATE users SET {column} = {} WHERE id = {}",
+            if on {
+                "now() + interval '1 day'"
+            } else {
+                "now() - interval '1 second'"
+            },
+            user.id
+        );
+        self.exec(sql);
+    }
+
+    /// Someone reports a message, which opens its conversation to staff.
+    #[rule]
+    fn report_message(&mut self, tc: TestCase) {
+        tc.assume(!self.messages.is_empty());
+        let m = tc.draw(gs::integers::<usize>().max_value(self.messages.len() - 1));
+        let (message, c) = (self.messages[m].id, self.messages[m].conversation);
+        let reporter =
+            self.users[tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1))].id;
+        let author: i64 = self
+            .block(
+                sqlx::query_scalar("SELECT author_id FROM posts WHERE id = $1")
+                    .bind(message)
+                    .fetch_one(&self.pool),
+            )
+            .unwrap();
+        self.block(parlour::mod_records::insert_report(
+            &self.pool,
+            &parlour::mod_records::NewReport {
+                reporter_id: Some(reporter),
+                contact_email: None,
+                about: parlour::mod_records::ReportAbout::Post {
+                    post_id: message,
+                    thread_id: self.conversations[c].id,
+                    author_id: author,
+                },
+                reason: "harassment",
+                details: "",
+            },
+        ))
+        .unwrap();
+        self.conversations[c].reported = true;
+    }
+
+    #[rule]
+    fn toggle_message_hidden(&mut self, tc: TestCase) {
+        tc.assume(!self.messages.is_empty());
+        let m = tc.draw(gs::integers::<usize>().max_value(self.messages.len() - 1));
+        let message = &mut self.messages[m];
+        message.hidden = !message.hidden;
+        let sql = format!(
+            "UPDATE posts SET hidden_at = {} WHERE id = {}",
+            if message.hidden { "now()" } else { "NULL" },
+            message.id
+        );
+        self.exec(sql);
+    }
+
+    /// A moderator moves some of a thread's posts to the end of another.
+    /// If none are left, the thread is merged into the other.
+    #[rule]
+    fn move_posts(&mut self, tc: TestCase) {
+        tc.assume(self.threads.len() >= 2);
+        let from = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
+        let to = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
+        tc.assume(from != to);
+        let moving: Vec<usize> = (0..self.posts.len())
+            .filter(|&p| self.posts[p].thread == from && tc.draw(gs::booleans()))
+            .collect();
+        tc.assume(!moving.is_empty());
+        let ids: Vec<i64> = moving.iter().map(|&p| self.posts[p].id).collect();
+        let moved = self
+            .block(parlour::mod_records::move_posts(
+                &self.pool,
+                self.threads[from].id,
+                &ids,
+                self.threads[to].id,
+                self.users[0].id,
+            ))
+            .unwrap();
+        assert_eq!(moved.posts.len(), moving.len());
+        for p in moving {
+            self.posts[p].thread = to;
+            self.moved_from[p].insert(from);
+        }
+        let left = self.posts.iter().any(|p| p.thread == from);
+        assert_eq!(moved.emptied, !left);
+        if moved.emptied {
+            self.threads[from].deleted = true;
+        }
     }
 
     /// Everything each viewer can get from the content module. It makes

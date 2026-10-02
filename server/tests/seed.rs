@@ -343,7 +343,8 @@ async fn the_seeded_invite_tree_has_everyone(pool: PgPool) {
 #[sqlx::test]
 async fn seed_has_conversations_and_notifications(pool: PgPool) {
     let summary = seed::seed(&pool).await.unwrap();
-    assert_eq!(summary.conversations, 4);
+    // The four from the mockup, and one that was reported.
+    assert_eq!(summary.conversations, 5);
     let f = Forum::new(pool.clone());
     let id = |name: &'static str| {
         let pool = pool.clone();
@@ -370,4 +371,83 @@ async fn seed_has_conversations_and_notifications(pool: PgPool) {
     let jonah = f.session(id("jonah").await).await;
     let list = f.page_as("/messages", &jonah).await;
     assert!(list.contains("No conversations yet"), "{list}");
+}
+
+/// The moderation queue from ModQueue.dc.html: a spam report, a reported
+/// message, personal information and a new member's held post, with a log
+/// of earlier actions.
+#[sqlx::test]
+async fn seed_has_things_for_the_moderators(pool: PgPool) {
+    seed::seed(&pool).await.unwrap();
+    let f = Forum::new(pool.clone());
+    let id = |name: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT id FROM users WHERE username = $1")
+                .bind(name)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let sam = f.session(id("sam").await).await;
+    let queue = f.page_as("/mod/queue", &sam).await;
+    for text in [
+        "Best replica watches, cheap",
+        "reported by maya and kit",
+        "Report on a message",
+        "why are you ignoring me",
+        "Personal information",
+        "Held for approval",
+        "Hello from Otley",
+        "4 items need attention",
+    ] {
+        assert!(
+            queue.contains(text),
+            "{text} missing from the queue:\n{queue}"
+        );
+    }
+    // The reported conversation is open to staff, and only that one.
+    let ruth = f.session(id("ruth").await).await;
+    let reported: i64 = sqlx::query_scalar(
+        "SELECT DISTINCT thread_id FROM reports r JOIN threads t ON t.id = r.thread_id
+         WHERE t.visibility = 'private'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    f.page_as(&format!("/messages/{reported}"), &ruth).await;
+    let brass: i64 =
+        sqlx::query_scalar("SELECT id FROM threads WHERE title = 'Tuesday 7th: Brass'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        f.get_as(&format!("/messages/{brass}"), Some(&ruth))
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    // The public log shows the public actions only.
+    let log = f.page("/moderation").await;
+    for text in [
+        "approved a post by new member",
+        "as a spammer",
+        "silenced",
+        "moved 4 posts",
+    ] {
+        assert!(log.contains(text), "{text} missing from the log:\n{log}");
+    }
+    assert!(!log.contains("staff note"), "{log}");
+    let staff_log = f.page_as("/mod/log", &sam).await;
+    assert!(
+        staff_log.contains("added a staff note about"),
+        "{staff_log}"
+    );
+    // The held post isn't anywhere public.
+    assert!(
+        !f.page("/c/introductions")
+            .await
+            .contains("Hello from Otley")
+    );
 }
