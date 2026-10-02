@@ -68,3 +68,10 @@ opt-level = 3
 
 [profile.dev.package.fdeflate]
 opt-level = 3
+
+# Optimise dependencies (askama, sqlx, axum, hegel, ...) even in dev and
+# test builds. Our own crate stays unoptimised so it rebuilds quickly, but
+# the tests spend most of their time inside dependencies, which are slow
+# unoptimised and only rebuild when they change.
+[profile.dev.package."*"]
+opt-level = 2

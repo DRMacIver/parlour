@@ -173,8 +173,16 @@ Server tests run against the dev Postgres; each test gets a fresh database:
     cargo test
 
 `tests/properties.rs` holds the Hegel property-based tests of the access
-layer, the page cache and every page's visibility; they take several
-minutes. The islands have unit tests (`cd web && npm test`), and the browser
+layer, the page cache and every page's visibility. They run random forum
+histories and render whole forums over HTTP, so how many histories they
+try is set in `server/hegel.toml`: a quick pass locally (a minute or two;
+most of it is query round trips to Postgres in Docker) and a thorough one
+on CI, where Hegel picks its `ci` profile automatically. To run the
+thorough pass locally:
+
+    HEGEL_DEFAULT_PROFILE=ci cargo test
+
+or set any number of histories with `HEGEL_TEST_CASES`. The islands have unit tests (`cd web && npm test`), and the browser
 tests are described in [e2e/README.md](e2e/README.md):
 
     cd e2e && npm install && npx playwright install chromium && npm test

@@ -1,0 +1,18 @@
+# Settings for the Hegel property-based tests. Most tests set their own
+# number of test cases; the expensive state-machine tests in
+# tests/properties.rs, which render whole forums over HTTP, take it from
+# here instead.
+#
+# Locally (the `development` profile) they run a quick pass. On a CI server
+# Hegel selects the `ci` profile automatically, which runs them thoroughly.
+# To run the thorough pass locally:
+#
+#     HEGEL_DEFAULT_PROFILE=ci cargo test
+#
+# or set any number with HEGEL_TEST_CASES.
+
+[profiles.development]
+test_cases = 15
+
+[profiles.ci]
+test_cases = 100

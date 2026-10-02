@@ -22,7 +22,9 @@
 //!   Logged-in viewers are also shown the writing pages, which display the
 //!   text being quoted, forked, edited or deleted: new threads, replies
 //!   quoting posts in their own and other threads, forks, edits and
-//!   deletions. The member writes posts of their own, so that leaving a
+//!   deletions, along with the moderation and island pages about each post.
+//!   There are many of those per post, so each check visits them for a
+//!   sample of posts, threads and messages that Hegel draws afresh. The member writes posts of their own, so that leaving a
 //!   group can strand them in a category they no longer read.
 //! - Conversations (DMs) come and go among the members, the member viewer
 //!   and the moderator viewer, who join, leave and are added back: a
@@ -143,6 +145,47 @@ struct PostModel {
     history: Vec<String>,
     /// Whether the grace period for edits is over (or an edit was kept).
     settled: bool,
+}
+
+/// How many posts, threads and messages each check samples for the
+/// logged-in item pages (see `World::sample`).
+const SAMPLE_SIZE: usize = 4;
+
+/// The posts, threads and messages (as indexes into `World`'s lists) whose
+/// logged-in item pages a check visits.
+struct Sample {
+    posts: Vec<usize>,
+    threads: Vec<usize>,
+    messages: Vec<usize>,
+}
+
+/// The pages one viewer has fetched during a check, so that each is
+/// rendered once however many checks look at it.
+struct Pages<'a> {
+    world: &'a World,
+    who: Who,
+    seen: std::cell::RefCell<HashMap<String, std::rc::Rc<Response>>>,
+}
+
+impl<'a> Pages<'a> {
+    fn new(world: &'a World, who: Who) -> Pages<'a> {
+        Pages {
+            world,
+            who,
+            seen: Default::default(),
+        }
+    }
+
+    fn get(&self, path: &str) -> std::rc::Rc<Response> {
+        if let Some(response) = self.seen.borrow().get(path) {
+            return response.clone();
+        }
+        let response = std::rc::Rc::new(self.world.get_as(self.who, path));
+        self.seen
+            .borrow_mut()
+            .insert(path.to_owned(), response.clone());
+        response
+    }
 }
 
 /// The forum, served twice: through the page cache and without it.
@@ -745,50 +788,65 @@ impl World {
             paths.push(format!("/held/{}", h.id));
         }
         if who != Who::Anonymous {
-            paths.extend(self.writing_paths());
+            // Writing pages show logged-in viewers the text they quote,
+            // fork or edit. Visitors are only asked to log in. The ones for
+            // particular posts and threads are in `item_paths`.
+            for c in &self.categories {
+                paths.push(format!("/c/{}/new", c.slug));
+            }
+            for c in &self.conversations {
+                paths.push(format!("/t/{}/reply", c.id));
+            }
             for path in [
                 "/mod/queue",
                 "/mod/log",
                 "/mod/users/viewer",
                 "/mod/users/ruth",
+                // What the notifications island fetches.
+                "/api/notifications",
             ] {
                 paths.push(path.to_owned());
-            }
-            for t in &self.threads {
-                paths.push(format!("/mod/t/{}", t.id));
-            }
-            for p in &self.posts {
-                paths.push(format!("/mod/p/{}", p.id));
-            }
-            for m in &self.messages {
-                paths.push(format!("/mod/p/{}", m.id));
-            }
-            // What the islands fetch.
-            paths.push("/api/notifications".to_owned());
-            for id in self
-                .posts
-                .iter()
-                .map(|p| p.id)
-                .chain(self.messages.iter().map(|m| m.id))
-            {
-                paths.push(format!("/api/posts/{id}/source"));
-                paths.push(format!("/api/posts/{id}/fork"));
             }
         }
         paths
     }
 
-    /// The pages for writing, which show logged-in viewers the text they
-    /// quote, fork or edit. Visitors are only asked to log in.
-    fn writing_paths(&self) -> Vec<String> {
+    /// Draws which posts, threads and messages a check (or a warming step)
+    /// visits the logged-in item pages of. There are about ten such pages
+    /// per post, plus quoting each post into each other thread, so visiting
+    /// all of them every time made the logged-in suites take many minutes
+    /// as forums grew. Hegel draws a fresh sample each time, so over a run
+    /// they are all visited, and a failure still shrinks to the pages
+    /// involved.
+    fn sample(&self, tc: &TestCase) -> Sample {
+        fn pick(tc: &TestCase, n: usize) -> Vec<usize> {
+            if n == 0 {
+                return Vec::new();
+            }
+            tc.draw(gs::btree_sets(gs::integers::<usize>().max_value(n - 1)).max_size(SAMPLE_SIZE))
+                .into_iter()
+                .collect()
+        }
+        Sample {
+            posts: pick(tc, self.posts.len()),
+            threads: pick(tc, self.threads.len()),
+            messages: pick(tc, self.messages.len()),
+        }
+    }
+
+    /// The logged-in pages about particular posts, threads and messages:
+    /// writing pages (which show the text being quoted, forked, edited or
+    /// deleted), moderation pages and what the islands fetch, for the
+    /// sampled ones.
+    fn item_paths(&self, sample: &Sample) -> Vec<String> {
         let mut paths = Vec::new();
-        for c in &self.categories {
-            paths.push(format!("/c/{}/new", c.slug));
-        }
-        for t in &self.threads {
+        for &t in &sample.threads {
+            let t = &self.threads[t];
             paths.push(format!("/t/{}/reply", t.id));
+            paths.push(format!("/mod/t/{}", t.id));
         }
-        for p in &self.posts {
+        for &p in &sample.posts {
+            let p = &self.posts[p];
             let thread = self.threads[p.thread].id;
             paths.push(format!("/p/{}/fork", p.id));
             paths.push(format!("/p/{}/edit", p.id));
@@ -797,18 +855,15 @@ impl World {
             paths.push(format!("/t/{thread}/reply?to={}", p.id));
             // Quoting a post into another thread is refused, but must not
             // show the post on the way.
-            if p.seq == 1 {
-                for other in &self.threads {
-                    if other.id != thread {
-                        paths.push(format!("/t/{}/reply?quote={}", other.id, p.id));
-                    }
+            for &other in &sample.threads {
+                let other = self.threads[other].id;
+                if other != thread {
+                    paths.push(format!("/t/{other}/reply?quote={}", p.id));
                 }
             }
         }
-        for c in &self.conversations {
-            paths.push(format!("/t/{}/reply", c.id));
-        }
-        for m in &self.messages {
+        for &m in &sample.messages {
+            let m = &self.messages[m];
             let conversation = self.conversations[m.conversation].id;
             for action in ["fork", "edit", "delete"] {
                 paths.push(format!("/p/{}/{action}", m.id));
@@ -816,11 +871,19 @@ impl World {
             paths.push(format!("/t/{conversation}/reply?quote={}", m.id));
             // Quoting a message into a thread is refused, and must not
             // show the message on the way.
-            if m.seq == 1
-                && let Some(t) = self.threads.first()
-            {
-                paths.push(format!("/t/{}/reply?quote={}", t.id, m.id));
+            for &t in &sample.threads {
+                paths.push(format!("/t/{}/reply?quote={}", self.threads[t].id, m.id));
             }
+        }
+        for id in sample
+            .posts
+            .iter()
+            .map(|&p| self.posts[p].id)
+            .chain(sample.messages.iter().map(|&m| self.messages[m].id))
+        {
+            paths.push(format!("/mod/p/{id}"));
+            paths.push(format!("/api/posts/{id}/source"));
+            paths.push(format!("/api/posts/{id}/fork"));
         }
         paths
     }
@@ -837,16 +900,15 @@ impl World {
         self.block(self.cached.get_as(path, self.cookie(who)))
     }
 
-    fn check(&self) {
+    fn check(&self, tc: &TestCase) {
         match self.mode {
             Mode::Coherence => self.check_coherence(),
+            Mode::Visibility(Who::Anonymous) => self.check_visibility(Who::Anonymous, &[]),
             Mode::Visibility(who) => {
-                self.check_visibility(who);
-                if who != Who::Anonymous {
-                    // Logged-in browsing never leaks into what the anonymous
-                    // cache serves.
-                    self.check_visibility(Who::Anonymous);
-                }
+                self.check_visibility(who, &self.item_paths(&self.sample(tc)));
+                // Logged-in browsing never leaks into what the anonymous
+                // cache serves.
+                self.check_visibility(Who::Anonymous, &[]);
             }
         }
     }
@@ -870,15 +932,19 @@ impl World {
         }
     }
 
-    fn check_visibility(&self, who: Who) {
+    /// Checks every page `who` can visit, plus `extra` ones.
+    fn check_visibility(&self, who: Who, extra: &[String]) {
+        // Nothing changes during a check, so each page is fetched once,
+        // however many of the checks below look at it.
+        let pages = Pages::new(self, who);
         let visible = self.visible_tokens(who);
         let forbidden: Vec<&String> = self
             .all_tokens
             .iter()
             .filter(|t| !visible.contains(t.as_str()))
             .collect();
-        for path in self.paths(who) {
-            let response = self.get_as(who, &path);
+        for path in self.paths(who).iter().chain(extra) {
+            let response = pages.get(path);
             assert!(
                 !response
                     .headers
@@ -903,7 +969,7 @@ impl World {
         // Visible things can be found where they should be, and invisible
         // things are not found at all.
         for (i, t) in self.threads.iter().enumerate() {
-            let response = self.get_as(who, &format!("/t/{}/{}", t.id, self.slug_of(t)));
+            let response = pages.get(&format!("/t/{}/{}", t.id, self.slug_of(t)));
             if self.thread_readable(i, who) {
                 assert_eq!(response.status, StatusCode::OK);
                 assert!(response.body.contains(&t.title_token));
@@ -924,7 +990,7 @@ impl World {
             }
         }
         for (i, p) in self.posts.iter().enumerate() {
-            let permalink = self.get_as(who, &format!("/p/{}", p.id));
+            let permalink = pages.get(&format!("/p/{}", p.id));
             if !self.thread_readable(p.thread, who) {
                 assert_eq!(permalink.status, StatusCode::NOT_FOUND);
                 continue;
@@ -937,9 +1003,10 @@ impl World {
                 format!("/t/{}/{}?page={page}#p{}", t.id, self.slug_of(t), p.id)
             };
             assert_eq!(permalink.location(), expected);
-            let history = self.get_as(who, &format!("/p/{}/revisions", p.id));
+            let history = pages.get(&format!("/p/{}/revisions", p.id));
             if self.post_shown(i, who) {
-                let body = self.get_as(who, expected.split('#').next().unwrap()).body;
+                let page = pages.get(expected.split('#').next().unwrap());
+                let body = &page.body;
                 assert!(
                     body.contains(&p.body_token),
                     "post {} missing from {expected}",
@@ -953,7 +1020,7 @@ impl World {
                         .contains(&format!("{} version", p.history.len() + 1))
                 );
                 for (n, token) in p.history.iter().enumerate() {
-                    let version = self.get_as(who, &format!("/p/{}/revisions?v={}", p.id, n + 1));
+                    let version = pages.get(&format!("/p/{}/revisions?v={}", p.id, n + 1));
                     assert!(
                         version.body.contains(token),
                         "version {} of post {} lacks {token}",
@@ -967,7 +1034,7 @@ impl World {
             }
         }
         for (i, c) in self.categories.iter().enumerate() {
-            let response = self.get_as(who, &format!("/c/{}", c.slug));
+            let response = pages.get(&format!("/c/{}", c.slug));
             let expected = if self.category_readable(i, who) {
                 StatusCode::OK
             } else {
@@ -976,7 +1043,7 @@ impl World {
             assert_eq!(response.status, expected);
         }
         for (i, c) in self.conversations.iter().enumerate() {
-            let response = self.get_as(who, &format!("/messages/{}", c.id));
+            let response = pages.get(&format!("/messages/{}", c.id));
             let expected = match who {
                 Who::Anonymous => StatusCode::SEE_OTHER,
                 _ if self.conversation_readable(i, who) => StatusCode::OK,
@@ -1011,7 +1078,7 @@ impl World {
             );
         }
         for m in &self.messages {
-            let permalink = self.get_as(who, &format!("/p/{}", m.id));
+            let permalink = pages.get(&format!("/p/{}", m.id));
             if !self.conversation_readable(m.conversation, who) {
                 assert_eq!(permalink.status, StatusCode::NOT_FOUND);
                 continue;
@@ -1025,7 +1092,8 @@ impl World {
             };
             assert_eq!(permalink.location(), expected);
             if !m.deleted {
-                let body = self.get_as(who, expected.split('#').next().unwrap()).body;
+                let page = pages.get(expected.split('#').next().unwrap());
+                let body = &page.body;
                 assert!(body.contains(&m.body_token), "message {} missing", m.id);
             }
         }
@@ -1761,7 +1829,7 @@ impl World {
     /// Requests every page through the cache, so that later changes have
     /// something to invalidate.
     #[rule]
-    fn warm(&mut self, _: TestCase) {
+    fn warm(&mut self, tc: TestCase) {
         for path in self.paths(Who::Anonymous) {
             self.get(&self.cached, &path);
         }
@@ -1771,40 +1839,35 @@ impl World {
             for path in self.paths(who) {
                 self.get_as(who, &path);
             }
+            for path in self.item_paths(&self.sample(&tc)) {
+                self.get_as(who, &path);
+            }
         }
     }
 
     /// Checked at the start and end of each run and sampled in between.
     #[invariant]
-    fn pages_are_right(&self, _: TestCase) {
-        self.check();
+    fn pages_are_right(&self, tc: TestCase) {
+        self.check(&tc);
     }
 }
 
 // Every step writes to Postgres and renders pages over HTTP, so a test
-// case takes seconds, and more when the four suites here run side by side.
+// case takes seconds, and more when the suites here run side by side.
 // Hegel counts that as slow generation; it is expected, so the TooSlow
-// health check is off. The number of test cases is unchanged.
-#[hegel::standalone_function(test_cases = 100, suppress_health_check = [HealthCheck::TooSlow])]
+// health check is off. The number of test cases comes from hegel.toml:
+// a quick run locally, a thorough one on CI (see the README).
+#[hegel::standalone_function(suppress_health_check = [HealthCheck::TooSlow])]
 fn run_machine(tc: TestCase, rt: &Handle, db: &PgPool, mode: Mode) {
-    let world = World::new(rt.clone(), db.clone(), mode);
-    hegel::stateful::machine(world).steps(25).run(tc);
-}
-
-#[hegel::standalone_function(test_cases = 50, suppress_health_check = [HealthCheck::TooSlow])]
-fn run_machine_briefly(tc: TestCase, rt: &Handle, db: &PgPool, mode: Mode) {
     let world = World::new(rt.clone(), db.clone(), mode);
     hegel::stateful::machine(world).steps(25).run(tc);
 }
 
 async fn run_in_blocking_thread(pool: PgPool, mode: Mode) {
     let rt = Handle::current();
-    tokio::task::spawn_blocking(move || match mode {
-        Mode::Visibility(Who::Member | Who::Staff) => run_machine_briefly(&rt, &pool, mode),
-        _ => run_machine(&rt, &pool, mode),
-    })
-    .await
-    .unwrap();
+    tokio::task::spawn_blocking(move || run_machine(&rt, &pool, mode))
+        .await
+        .unwrap();
 }
 
 /// Cached pages always match freshly rendered ones.
@@ -3196,7 +3259,7 @@ impl Access {
     }
 }
 
-#[hegel::standalone_function(test_cases = 100, suppress_health_check = [HealthCheck::TooSlow])]
+#[hegel::standalone_function(suppress_health_check = [HealthCheck::TooSlow])]
 fn run_access(tc: TestCase, rt: &Handle, pool: &PgPool) {
     let mut world = Access::new(rt.clone(), pool.clone());
     // Start from random settings, so that every run has a mix of levels
