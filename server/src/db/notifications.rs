@@ -274,19 +274,46 @@ pub struct Due {
     pub post_id: Option<i64>,
     pub message: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// The member has since blocked whoever it is from, or muted where it
+    /// happened, so it isn't to be emailed (nor shown, for a block).
+    pub quiet: bool,
 }
 
-/// A member's unread notifications that haven't been emailed and were made
-/// no later than `due`, oldest first: the ones one email can cover.
-pub async fn due_for_email(db: &Db, user_id: i64, due: DateTime<Utc>) -> sqlx::Result<Vec<Due>> {
+/// Claims a member's unread notifications that haven't been emailed and
+/// were made no later than `due`, oldest first: the ones one email can
+/// cover. They are marked as dealt with by email, so call this in the
+/// transaction that queues the email (or that decides not to send one):
+/// a concurrent claim waits for that transaction and then finds nothing,
+/// so no two emails cover the same notification.
+pub async fn claim_for_email<'c>(
+    db: impl Handle<'c>,
+    user_id: i64,
+    due: DateTime<Utc>,
+) -> sqlx::Result<Vec<Due>> {
+    let mut conn = db.open(KEY).acquire().await?;
     let rows = sqlx::query!(
-        r#"SELECT id, kind, post_id, message, created_at FROM notifications
-           WHERE user_id = $1 AND read_at IS NULL AND emailed_at IS NULL AND created_at <= $2
-           ORDER BY created_at, id"#,
+        r#"
+        WITH claimed AS (
+            UPDATE notifications SET emailed_at = now()
+            WHERE user_id = $1 AND read_at IS NULL AND emailed_at IS NULL AND created_at <= $2
+            RETURNING id, kind, post_id, message, created_at, actor_id
+        )
+        SELECT c.id, c.kind, c.post_id, c.message, c.created_at,
+               (EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id
+                        WHERE b.user_id = $1 AND b.blocked_user_id = c.actor_id AND bu.role = 'user')
+                OR coalesce((SELECT coalesce(tw.level, cw.level) = 'muted'
+                             FROM posts p
+                             JOIN threads t ON t.id = p.thread_id
+                             LEFT JOIN watches tw ON tw.user_id = $1 AND tw.thread_id = t.id
+                             LEFT JOIN watches cw ON cw.user_id = $1 AND cw.category_id = t.category_id
+                             WHERE p.id = c.post_id), false)) AS "quiet!"
+        FROM claimed c
+        ORDER BY c.created_at, c.id
+        "#,
         user_id,
         due
     )
-    .fetch_all(db.pool())
+    .fetch_all(&mut *conn)
     .await?;
     Ok(rows
         .into_iter()
@@ -296,19 +323,7 @@ pub async fn due_for_email(db: &Db, user_id: i64, due: DateTime<Utc>) -> sqlx::R
             post_id: row.post_id,
             message: row.message,
             created_at: row.created_at,
+            quiet: row.quiet,
         })
         .collect())
-}
-
-/// Records that these notifications were dealt with by email (sent, or
-/// deliberately not), so no later job emails them again.
-pub async fn mark_emailed<'c>(db: impl Handle<'c>, ids: &[i64]) -> sqlx::Result<()> {
-    let mut conn = db.open(KEY).acquire().await?;
-    sqlx::query!(
-        "UPDATE notifications SET emailed_at = now() WHERE id = ANY($1) AND emailed_at IS NULL",
-        ids
-    )
-    .execute(&mut *conn)
-    .await?;
-    Ok(())
 }

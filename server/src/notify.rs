@@ -20,8 +20,10 @@
 //! Each new notification also queues an email job, due once the site's
 //! delay has passed. When it runs it sends one email covering all of the
 //! member's notifications that are still unread, haven't been emailed, are
-//! about posts they can still read, are of kinds they want emailed, and
-//! are newer than the last time the member was seen on the site.
+//! about posts they can still read, aren't from someone they have since
+//! blocked or somewhere they have since muted, are of kinds they want
+//! emailed, and are newer than the last time the member was seen on the
+//! site.
 
 use std::collections::BTreeMap;
 
@@ -290,12 +292,15 @@ pub async fn email_if_away(state: &AppState, id: i64) -> anyhow::Result<bool> {
         .await?;
         return Ok(false);
     }
-    let due = stored::due_for_email(db, pending.user_id, cutoff).await?;
-    let ids: Vec<i64> = due.iter().map(|d| d.id).collect();
+    // Claimed in the transaction that queues the email, so two jobs for
+    // the same member running at once can't both email the same
+    // notifications: the second waits for the first, then finds nothing.
+    let mut tx = db.begin().await?;
+    let due = stored::claim_for_email(&mut tx, pending.user_id, cutoff).await?;
     let viewer = match viewer_for(state, pending.user_id).await? {
         Some(viewer) if !to.deleted && to.verified => viewer,
         _ => {
-            stored::mark_emailed(db, &ids).await?;
+            tx.commit().await?;
             return Ok(false);
         }
     };
@@ -304,6 +309,11 @@ pub async fn email_if_away(state: &AppState, id: i64) -> anyhow::Result<bool> {
     let mut items = Vec::new();
     let mut topics = Vec::new();
     for due in &due {
+        // They have since blocked whoever it's from, or muted where it
+        // happened.
+        if due.quiet {
+            continue;
+        }
         // Seen on the site since it was made: they have had the chance to
         // see it there, so it isn't emailed.
         if to.last_seen_at.is_some_and(|seen| seen > due.created_at) {
@@ -348,7 +358,7 @@ pub async fn email_if_away(state: &AppState, id: i64) -> anyhow::Result<bool> {
         items.push(item);
     }
     if items.is_empty() {
-        stored::mark_emailed(db, &ids).await?;
+        tx.commit().await?;
         return Ok(false);
     }
     let unsubscribe_topic = match topics.as_slice() {
@@ -369,9 +379,7 @@ pub async fn email_if_away(state: &AppState, id: i64) -> anyhow::Result<bool> {
         &unsubscribe,
         unsubscribe_topic.describe(),
     );
-    let mut tx = db.begin().await?;
     mail::queue(&mut tx, &email).await?;
-    stored::mark_emailed(&mut tx, &ids).await?;
     tx.commit().await?;
     state.jobs().wake();
     Ok(true)

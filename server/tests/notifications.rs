@@ -503,6 +503,132 @@ async fn unread_notifications_are_emailed(pool: PgPool) {
     );
 }
 
+/// Regression: two email jobs for one member falling due together (as
+/// they do after a burst of activity, with two workers polling on the same
+/// tick) each emailed the same notifications.
+#[sqlx::test]
+async fn email_jobs_running_together_send_one_email(pool: PgPool) {
+    let s = setup(pool).await;
+    settings::set(
+        &s.f.db,
+        "notifications",
+        &NotificationSettings {
+            email_delay_minutes: 15,
+        },
+    )
+    .await
+    .unwrap();
+    let (thread, first) = new_thread(&s.f, &s.ruth_cookie, "games", "Brass", "Hi").await;
+    for body in ["One", "Two", "Three"] {
+        reply(&s.f, &s.jonah_cookie, thread, body, Some(first)).await;
+    }
+    s.f.run_jobs().await;
+    s.f.exec("UPDATE notifications SET created_at = created_at - interval '20 minutes'")
+        .await;
+    s.f.exec("UPDATE users SET last_seen_at = now() - interval '1 hour'")
+        .await;
+    s.f.exec("DELETE FROM jobs").await;
+    for round in 0..10 {
+        s.f.exec("UPDATE notifications SET emailed_at = NULL").await;
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM notifications WHERE user_id = $1 AND emailed_at IS NULL ORDER BY id",
+        )
+        .bind(s.ruth)
+        .fetch_all(&s.f.db)
+        .await
+        .unwrap();
+        assert_eq!(ids.len(), 3);
+        let state = &s.f.state;
+        let (a, b, c) = tokio::join!(
+            parlour::notify::email_if_away(state, ids[0]),
+            parlour::notify::email_if_away(state, ids[1]),
+            parlour::notify::email_if_away(state, ids[2]),
+        );
+        let queued = [a.unwrap(), b.unwrap(), c.unwrap()];
+        assert_eq!(
+            queued.iter().filter(|q| **q).count(),
+            1,
+            "round {round}: {queued:?}"
+        );
+        assert_eq!(
+            count(&s.f, "SELECT count(*) FROM jobs WHERE kind = 'email'").await,
+            1,
+            "round {round}"
+        );
+        s.f.exec("DELETE FROM jobs").await;
+    }
+}
+
+/// Regression: the email job didn't look again at blocks and mutes made
+/// after the notification, though the notifications page does.
+#[sqlx::test]
+async fn blocks_and_mutes_made_before_the_email_stop_it(pool: PgPool) {
+    let s = setup(pool).await;
+    settings::set(
+        &s.f.db,
+        "notifications",
+        &NotificationSettings {
+            email_delay_minutes: 15,
+        },
+    )
+    .await
+    .unwrap();
+    let away = "UPDATE users SET last_seen_at = now() - interval '1 hour'";
+    let due = "UPDATE notifications SET created_at = created_at - interval '20 minutes'";
+    let (thread, first) = new_thread(&s.f, &s.ruth_cookie, "games", "Brass", "Hi").await;
+    // Jonah replies; Ruth blocks him before the email is due.
+    reply(&s.f, &s.jonah_cookie, thread, "Blocked words", Some(first)).await;
+    s.f.run_jobs().await;
+    s.f.submit("/u/jonah/block", &[], Some(&s.ruth_cookie))
+        .await;
+    s.f.exec(away).await;
+    s.f.exec(due).await;
+    s.f.exec("UPDATE jobs SET run_at = now()").await;
+    assert!(
+        s.f.emails().await.is_empty(),
+        "emailed a blocked member's post"
+    );
+    // Maya replies; Ruth mutes the thread before the email is due.
+    reply(&s.f, &s.maya_cookie, thread, "Muted words", Some(first)).await;
+    s.f.run_jobs().await;
+    watch(&s.f, &s.ruth_cookie, &format!("/t/{thread}/watch"), "muted").await;
+    s.f.exec(away).await;
+    s.f.exec(due).await;
+    s.f.exec("UPDATE jobs SET run_at = now()").await;
+    assert!(s.f.emails().await.is_empty(), "emailed a muted thread");
+    // Muting the category does the same for a thread with no setting of
+    // its own.
+    let (other, other_first) = new_thread(&s.f, &s.ruth_cookie, "games", "Other", "Hi").await;
+    watch(&s.f, &s.ruth_cookie, &format!("/t/{other}/watch"), "normal").await;
+    reply(
+        &s.f,
+        &s.maya_cookie,
+        other,
+        "Category words",
+        Some(other_first),
+    )
+    .await;
+    s.f.run_jobs().await;
+    watch(&s.f, &s.ruth_cookie, "/c/games/watch", "muted").await;
+    s.f.exec(away).await;
+    s.f.exec(due).await;
+    s.f.exec("UPDATE jobs SET run_at = now()").await;
+    assert!(s.f.emails().await.is_empty(), "emailed a muted category");
+    // Unmuted, a new reply is emailed as usual (and only that one).
+    watch(&s.f, &s.ruth_cookie, "/c/games/watch", "normal").await;
+    reply(&s.f, &s.maya_cookie, other, "Loud words", Some(other_first)).await;
+    s.f.run_jobs().await;
+    s.f.exec(away).await;
+    s.f.exec(due).await;
+    s.f.exec("UPDATE jobs SET run_at = now()").await;
+    let emails = s.f.emails().await;
+    assert_eq!(emails.len(), 1, "{emails:?}");
+    assert!(emails[0].body.contains("Loud words"));
+    for quiet in ["Blocked words", "Muted words", "Category words"] {
+        assert!(!emails[0].body.contains(quiet), "{}", emails[0].body);
+    }
+}
+
 #[sqlx::test]
 async fn members_who_are_around_are_not_emailed(pool: PgPool) {
     let s = setup(pool).await;
