@@ -1,3 +1,4 @@
+mod account_pages;
 pub mod accounts;
 mod admin_forum;
 mod admin_pages;
@@ -207,6 +208,14 @@ pub fn app(state: AppState) -> Router {
                 .layer(DefaultBodyLimit::max(upload_pages::MAX_BODY_BYTES)),
         )
         .route("/settings/avatar/remove", post(upload_pages::remove_avatar))
+        .route("/settings/export", post(account_pages::export))
+        .route("/settings/delete", post(account_pages::delete_account))
+        .route("/terms", get(account_pages::terms))
+        .route("/privacy", get(account_pages::privacy))
+        .route(
+            "/admin/pages",
+            get(account_pages::admin_pages_page).post(account_pages::save_admin_pages),
+        )
         // Writing
         .route(
             "/c/{slug}/new",

@@ -10,7 +10,7 @@ argon2 = "0.6.0"
 askama = "0.16.1"
 axum = { version = "0.8.9", features = ["multipart"] }
 base64 = "0.23.1"
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std", "serde"] }
 comrak = { version = "0.55.0", default-features = false }
 futures-util = "0.3.34"
 getrandom = { version = "0.4.3", features = ["sys_rng"] }

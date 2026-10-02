@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id, t.title, me.joined_at, me.left_at,\n                  array(SELECT u.username::text FROM private_thread_participants o\n                        JOIN users u ON u.id = o.user_id\n                        WHERE o.thread_id = t.id AND o.left_at IS NULL\n                        ORDER BY o.joined_at, u.id) AS \"people!\"\n           FROM private_thread_participants me JOIN threads t ON t.id = me.thread_id\n           WHERE me.user_id = $1\n           ORDER BY me.joined_at, t.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "joined_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "private_thread_participants",
+            "name": "joined_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "left_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "private_thread_participants",
+            "name": "left_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "people!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "0872289b161d455cea8a5121d3ccaa016e4fbf50586930a4285724d2821d31e8"
+}

@@ -1,7 +1,25 @@
 {% extends "base.html" %}
 {%- import "_forms.html" as f -%}
 {%- import "_macros.html" as m -%}
-{% block title %}Your account · {{ layout.site_name }}{% endblock %}
+{% block title %}Your account · {{ layout.site_name }}<section class="panel panel-danger" id="delete" aria-labelledby="delete-heading">
+  <h2 class="panel-bar" id="delete-heading">Delete your account</h2>
+  <form class="form" method="post" action="/settings/delete">
+    <p class="form-note">This can’t be undone. Your profile, picture, email address and password are deleted, and you leave your conversations. What you’ve posted stays, shown as by “Deleted member”: delete any posts you want gone first.</p>
+    <div class="field">
+      <label for="delete-confirm">Type your username, {{ user.username }}, to confirm</label>
+      <input id="delete-confirm" name="confirm" type="text" autocomplete="off" required>
+    </div>
+    {% if has_password %}
+    <div class="field">
+      <label for="delete-password">Your password</label>
+      <input id="delete-password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    {% endif %}
+    <div class="form-actions"><button class="button button-danger" type="submit">Delete my account</button></div>
+  </form>
+</section>
+</div>
+{% endblock %}
 {% block content %}
 <div class="narrow">
 <h1 class="page-title">Your account</h1>
@@ -152,11 +170,37 @@
   {% endif %}
 </section>
 
+<section class="panel" id="data" aria-labelledby="data-heading">
+  <h2 class="panel-bar" id="data-heading">Your data</h2>
+  <form class="form" method="post" action="/settings/export">
+    <p class="form-note">Download everything this forum holds about you as a JSON file: your account and profile, everything you’ve written (with earlier versions), your reactions, conversations, invites, uploads, sessions and the addresses recorded for you. Other people’s posts and messages aren’t included.</p>
+    <div class="form-actions"><button class="button button-quiet" type="submit">Download your data</button></div>
+  </form>
+</section>
+
 <section class="panel" aria-labelledby="sessions-heading">
   <h2 class="panel-bar" id="sessions-heading">Other browsers</h2>
   <form class="form" method="post" action="/settings/sessions">
     <p class="form-note">You are logged in on {{ crate::format::plural(other_sessions, "other browser or device", "other browsers or devices") }}.</p>
     <div class="form-actions"><button class="button button-quiet" type="submit">Log out everywhere else</button></div>
+  </form>
+</section>
+
+<section class="panel panel-danger" id="delete" aria-labelledby="delete-heading">
+  <h2 class="panel-bar" id="delete-heading">Delete your account</h2>
+  <form class="form" method="post" action="/settings/delete">
+    <p class="form-note">This can’t be undone. Your profile, picture, email address and password are deleted, and you leave your conversations. What you’ve posted stays, shown as by “Deleted member”: delete any posts you want gone first.</p>
+    <div class="field">
+      <label for="delete-confirm">Type your username, {{ user.username }}, to confirm</label>
+      <input id="delete-confirm" name="confirm" type="text" autocomplete="off" required>
+    </div>
+    {% if has_password %}
+    <div class="field">
+      <label for="delete-password">Your password</label>
+      <input id="delete-password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    {% endif %}
+    <div class="form-actions"><button class="button button-danger" type="submit">Delete my account</button></div>
   </form>
 </section>
 </div>

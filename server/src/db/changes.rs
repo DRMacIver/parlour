@@ -31,6 +31,9 @@ pub enum Change {
     UserChanged { user_id: i64 },
     /// Someone joined. Changes the invite tree and the inviter's profile.
     UserCreated { user_id: i64 },
+    /// Someone deleted their account: their name goes from every page,
+    /// and they leave the invite tree.
+    UserDeleted { user_id: i64 },
     /// An invite was used or revoked.
     InviteChanged { invite_id: i64 },
     /// Site settings or sections changed.
@@ -111,6 +114,11 @@ pub async fn tags_for(db: &Db, change: Change) -> sqlx::Result<Vec<Tag>> {
             .await?
             .flatten();
             tags.extend(inviter.map(Tag::User));
+        }
+        Change::UserDeleted { user_id } => {
+            tags.push(Tag::Members);
+            tags.push(Tag::User(user_id));
+            tags.push(Tag::Site);
         }
         Change::InviteChanged { invite_id } => tags.push(Tag::Invite(invite_id)),
         Change::SiteChanged => tags.push(Tag::Site),

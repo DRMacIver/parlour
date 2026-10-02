@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">{{ title }}</h1>
+<section class="panel">
+  {% if html.is_empty() %}
+  <p class="empty">The admin hasn’t written this page yet. If you have a question about it, <a href="/contact">ask the moderators</a>.</p>
+  {% else %}
+  <div class="post-body site-page">{{ html|safe }}</div>
+  {% endif %}
+</section>
+</div>
+{% endblock %}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE held_posts SET status = 'rejected', decided_at = now() WHERE author_id = $1 AND status = 'held'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ac0c6034ca8b63c8f8c4338bcb7b3831680a10de7d879fb04a57e308896e267b"
+}

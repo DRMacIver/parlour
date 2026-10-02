@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{%- import "_admin_nav.html" as an -%}
+{% block title %}Terms and privacy · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Terms and privacy</h1>
+{% call an::admin_nav("pages") %}{% endcall %}
+{% if saved %}<div class="notice notice-success" role="status"><p>Saved. The pages are at <a href="/terms">/terms</a> and <a href="/privacy">/privacy</a>, linked at the foot of every page.</p></div>{% endif %}
+<form method="post" action="/admin/pages">
+<section class="panel" aria-labelledby="terms-heading">
+  <h2 class="panel-bar" id="terms-heading">Terms of use</h2>
+  <div class="form">
+    <div class="field">
+      <label for="terms">The rules of this forum, in Markdown</label>
+      <textarea id="terms" name="terms" rows="14">{{ pages.terms_md }}</textarea>
+    </div>
+  </div>
+</section>
+<section class="panel" aria-labelledby="privacy-heading">
+  <h2 class="panel-bar" id="privacy-heading">Privacy</h2>
+  <div class="form">
+    <div class="field">
+      <label for="privacy">What you keep about members and why, in Markdown</label>
+      <textarea id="privacy" name="privacy" rows="14">{{ pages.privacy_md }}</textarea>
+      <span class="field-hint">Members can download what the forum holds about them, and delete their account, from their settings. Addresses are kept for the number of days set under Moderation.</span>
+    </div>
+  </div>
+</section>
+<div class="form-actions form-actions-page"><button class="button" type="submit">Save pages</button></div>
+</form>
+</div>
+{% endblock %}

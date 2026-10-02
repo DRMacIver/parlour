@@ -362,3 +362,81 @@ pub async fn update_profile<'c>(
     .await?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Deleting an account
+
+/// What became of deleting an account.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Deletion {
+    Deleted,
+    NoSuchMember,
+    /// It would leave the site without an admin.
+    LastAdmin,
+}
+
+/// Deletes a member's account at their request (DESIGN.md §2). What they
+/// wrote stays where it is, under "Deleted member": the account's row is
+/// kept, with everything that identified them (names, email address,
+/// password, profile, picture) replaced or removed, and so are its posts.
+/// Everything else that is theirs alone goes: sessions, tokens, recorded
+/// addresses, notifications, reactions, watches, blocks, read markers,
+/// group memberships and staff notes about them. They leave their
+/// conversations, unused invites are revoked, and posts waiting for
+/// approval are rejected.
+pub async fn delete_account(db: &Db, user_id: i64) -> sqlx::Result<Deletion> {
+    let mut tx = db.pool().begin().await?;
+    let admins = sqlx::query_scalar!(
+        "SELECT id FROM users WHERE role = 'admin' AND deleted_at IS NULL ORDER BY id FOR UPDATE"
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let Some(role) = sqlx::query_scalar!(
+        "SELECT role FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+        user_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    else {
+        return Ok(Deletion::NoSuchMember);
+    };
+    if role == Role::Admin.as_str() && admins.len() <= 1 {
+        return Ok(Deletion::LastAdmin);
+    }
+    sqlx::query!(
+        "UPDATE users SET username = 'deleted_' || id, display_name = 'Deleted member',
+                email = 'deleted-' || id || '@deleted.invalid', email_verified_at = NULL,
+                password_hash = NULL, role = 'user', title = NULL, pronouns = NULL,
+                status_line = NULL, location = NULL, avatar_upload_id = NULL,
+                dm_policy = 'nobody', email_prefs = '{}', last_seen_at = NULL, deleted_at = now()
+         WHERE id = $1",
+        user_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    macro_rules! remove {
+        ($sql:literal) => {
+            sqlx::query!($sql, user_id).execute(&mut *tx).await?;
+        };
+    }
+    remove!("DELETE FROM sessions WHERE user_id = $1");
+    remove!("DELETE FROM login_tokens WHERE user_id = $1");
+    remove!("DELETE FROM user_ips WHERE user_id = $1");
+    remove!("DELETE FROM notifications WHERE user_id = $1");
+    remove!("DELETE FROM reactions WHERE user_id = $1");
+    remove!("DELETE FROM watches WHERE user_id = $1");
+    remove!("DELETE FROM blocks WHERE user_id = $1 OR blocked_user_id = $1");
+    remove!("DELETE FROM thread_reads WHERE user_id = $1");
+    remove!("DELETE FROM group_members WHERE user_id = $1");
+    remove!("DELETE FROM user_notes WHERE user_id = $1");
+    remove!("UPDATE uploads SET user_id = NULL WHERE user_id = $1");
+    remove!(
+        "UPDATE private_thread_participants SET left_at = now() WHERE user_id = $1 AND left_at IS NULL"
+    );
+    remove!("UPDATE invites SET revoked_at = now() WHERE created_by = $1 AND revoked_at IS NULL");
+    remove!(
+        "UPDATE held_posts SET status = 'rejected', decided_at = now() WHERE author_id = $1 AND status = 'held'"
+    );
+    tx.commit().await?;
+    Ok(Deletion::Deleted)
+}

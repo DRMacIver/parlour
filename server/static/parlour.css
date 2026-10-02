@@ -1031,6 +1031,8 @@ p.quick-reply { font-style: italic; }
 /* ----------------------------------------------------------- Moderation */
 
 /* A destructive action: the one red button. */
+.panel-danger { border-color: var(--accent); }
+.panel-danger .panel-bar { background: var(--accent); border-color: var(--accent); color: var(--on-badge); }
 .button-danger { background: var(--accent); border-color: var(--accent); color: var(--on-badge); }
 .button-danger:hover { background: var(--ink); border-color: var(--ink); color: var(--on-ink); }
 

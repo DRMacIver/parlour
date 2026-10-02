@@ -1,0 +1,238 @@
+//! A member's own data, for them to download (DESIGN.md §2): their
+//! account and profile, everything they wrote (with earlier versions),
+//! their reactions, conversations, invites, groups, blocks, watches,
+//! uploads, reports, sessions and the addresses recorded for them.
+//!
+//! Other people's words are not included, not even in conversations the
+//! member is in. The title of a thread is included only if the member may
+//! read the thread now, judged by the shared visibility condition.
+
+use serde_json::{Value, json};
+
+use crate::db::Db;
+use crate::viewer::Viewer;
+
+pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
+    let Some(user_id) = viewer.user_id() else {
+        return Ok(None);
+    };
+    let filter = viewer.filter();
+    let pool = db.pool();
+    let account = sqlx::query!(
+        r#"SELECT u.username AS "username!: String", u.display_name, u.email AS "email!: String",
+                  u.email_verified_at, u.role, u.title, u.pronouns, u.status_line, u.location,
+                  u.created_at, u.last_seen_at, u.dm_policy, u.email_prefs,
+                  i.username AS "invited_by?: String", av.sha256 AS "avatar_sha256?", av.ext AS "avatar_ext?"
+           FROM users u
+           LEFT JOIN users i ON i.id = u.invited_by_user_id
+           LEFT JOIN uploads av ON av.id = u.avatar_upload_id
+           WHERE u.id = $1"#,
+        user_id
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let posts = sqlx::query!(
+        r#"SELECT p.id, p.thread_id, p.seq, p.created_at, p.edited_at, p.body_md,
+                  p.deleted_at IS NOT NULL AS "deleted!", p.hidden_at IS NOT NULL AS "hidden!",
+                  t.visibility = 'private' AS "conversation!",
+                  CASE WHEN t.deleted_at IS NULL
+                        AND (thread_readable(t.visibility, t.category_id, $2, $3)
+                             OR dm_readable(t.id, t.visibility, $4))
+                       THEN t.title END AS thread_title
+           FROM posts p JOIN threads t ON t.id = p.thread_id
+           WHERE p.author_id = $1
+           ORDER BY p.created_at, p.id"#,
+        user_id,
+        &filter.visibilities,
+        &filter.group_category_ids,
+        filter.dm_viewer,
+    )
+    .fetch_all(pool)
+    .await?;
+    let revisions = sqlx::query!(
+        r#"SELECT r.post_id, r.rev, r.created_at, r.body_md
+           FROM post_revisions r JOIN posts p ON p.id = r.post_id
+           WHERE p.author_id = $1 AND r.redacted_at IS NULL
+           ORDER BY r.post_id, r.rev"#,
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let conversations = sqlx::query!(
+        r#"SELECT t.id, t.title, me.joined_at, me.left_at,
+                  array(SELECT u.username::text FROM private_thread_participants o
+                        JOIN users u ON u.id = o.user_id
+                        WHERE o.thread_id = t.id AND o.left_at IS NULL
+                        ORDER BY o.joined_at, u.id) AS "people!"
+           FROM private_thread_participants me JOIN threads t ON t.id = me.thread_id
+           WHERE me.user_id = $1
+           ORDER BY me.joined_at, t.id"#,
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let reactions = sqlx::query!(
+        "SELECT post_id, emoji, created_at FROM reactions WHERE user_id = $1 ORDER BY created_at",
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let invites = sqlx::query!(
+        r#"SELECT created_at, email AS "email: String", max_uses, uses, expires_at, revoked_at, note
+           FROM invites WHERE created_by = $1 ORDER BY created_at"#,
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let invited = sqlx::query_scalar!(
+        r#"SELECT username::text AS "username!" FROM users
+           WHERE invited_by_user_id = $1 AND deleted_at IS NULL ORDER BY created_at"#,
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let groups = sqlx::query_scalar!(
+        "SELECT g.name FROM group_members m JOIN groups g ON g.id = m.group_id
+         WHERE m.user_id = $1 ORDER BY g.name",
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let blocks = sqlx::query_scalar!(
+        r#"SELECT u.username::text AS "username!" FROM blocks b JOIN users u ON u.id = b.blocked_user_id
+           WHERE b.user_id = $1 ORDER BY b.created_at"#,
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let watches = sqlx::query!(
+        r#"SELECT w.thread_id, w.category_id, w.level, c.slug AS "category_slug?"
+           FROM watches w LEFT JOIN categories c ON c.id = w.category_id
+           WHERE w.user_id = $1 ORDER BY w.updated_at"#,
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let uploads = sqlx::query!(
+        "SELECT sha256, ext, width, height, created_at FROM uploads WHERE user_id = $1 ORDER BY created_at",
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let reports = sqlx::query!(
+        "SELECT kind, reason, details, status, created_at FROM reports
+         WHERE reporter_id = $1 ORDER BY created_at",
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let sessions = sqlx::query!(
+        "SELECT created_at, last_seen_at, ip, user_agent FROM sessions
+         WHERE user_id = $1 ORDER BY created_at",
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let addresses = sqlx::query!(
+        "SELECT ip, first_seen_at, last_seen_at FROM user_ips WHERE user_id = $1 ORDER BY first_seen_at",
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(Some(json!({
+        "exported_at": chrono::Utc::now(),
+        "account": {
+            "username": account.username,
+            "display_name": account.display_name,
+            "email": account.email,
+            "email_verified_at": account.email_verified_at,
+            "role": account.role,
+            "title": account.title,
+            "pronouns": account.pronouns,
+            "status_line": account.status_line,
+            "location": account.location,
+            "avatar": match (account.avatar_sha256, account.avatar_ext) {
+                (Some(sha), Some(ext)) => Some(crate::uploads::url(&sha, &ext)),
+                _ => None,
+            },
+            "joined_at": account.created_at,
+            "last_seen_at": account.last_seen_at,
+            "invited_by": account.invited_by,
+            "who_can_message": account.dm_policy,
+            "email_preferences": account.email_prefs,
+        },
+        "posts": posts.iter().map(|p| json!({
+            "id": p.id,
+            "thread_id": p.thread_id,
+            "thread_title": p.thread_title,
+            "in_conversation": p.conversation,
+            "number": p.seq,
+            "created_at": p.created_at,
+            "edited_at": p.edited_at,
+            "deleted": p.deleted,
+            "hidden_by_moderator": p.hidden,
+            "markdown": p.body_md,
+        })).collect::<Vec<_>>(),
+        "earlier_versions": revisions.iter().map(|r| json!({
+            "post_id": r.post_id,
+            "version": r.rev,
+            "created_at": r.created_at,
+            "markdown": r.body_md,
+        })).collect::<Vec<_>>(),
+        "conversations": conversations.iter().map(|c| json!({
+            "id": c.id,
+            "title": c.title,
+            "people_now": c.people,
+            "joined_at": c.joined_at,
+            "left_at": c.left_at,
+        })).collect::<Vec<_>>(),
+        "reactions": reactions.iter().map(|r| json!({
+            "post_id": r.post_id,
+            "emoji": r.emoji,
+            "created_at": r.created_at,
+        })).collect::<Vec<_>>(),
+        "invites": invites.iter().map(|i| json!({
+            "created_at": i.created_at,
+            "email": i.email,
+            "max_uses": i.max_uses,
+            "uses": i.uses,
+            "expires_at": i.expires_at,
+            "revoked_at": i.revoked_at,
+            "note": i.note,
+        })).collect::<Vec<_>>(),
+        "invited_members": invited,
+        "groups": groups,
+        "blocked_members": blocks,
+        "watches": watches.iter().map(|w| json!({
+            "thread_id": w.thread_id,
+            "category": w.category_slug,
+            "level": w.level,
+        })).collect::<Vec<_>>(),
+        "uploads": uploads.iter().map(|u| json!({
+            "url": crate::uploads::url(&u.sha256, &u.ext),
+            "width": u.width,
+            "height": u.height,
+            "created_at": u.created_at,
+        })).collect::<Vec<_>>(),
+        "reports_sent": reports.iter().map(|r| json!({
+            "kind": r.kind,
+            "reason": r.reason,
+            "details": r.details,
+            "status": r.status,
+            "created_at": r.created_at,
+        })).collect::<Vec<_>>(),
+        "sessions": sessions.iter().map(|s| json!({
+            "created_at": s.created_at,
+            "last_seen_at": s.last_seen_at,
+            "ip": s.ip,
+            "user_agent": s.user_agent,
+        })).collect::<Vec<_>>(),
+        "addresses": addresses.iter().map(|a| json!({
+            "ip": a.ip,
+            "first_seen_at": a.first_seen_at,
+            "last_seen_at": a.last_seen_at,
+        })).collect::<Vec<_>>(),
+    })))
+}

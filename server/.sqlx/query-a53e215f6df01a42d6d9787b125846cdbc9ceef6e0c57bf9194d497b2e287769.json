@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.username::text AS \"username!\" FROM blocks b JOIN users u ON u.id = b.blocked_user_id\n           WHERE b.user_id = $1 ORDER BY b.created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "username!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a53e215f6df01a42d6d9787b125846cdbc9ceef6e0c57bf9194d497b2e287769"
+}

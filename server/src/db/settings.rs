@@ -190,3 +190,18 @@ impl Default for ModerationSettings {
 pub async fn moderation_settings(db: &Db) -> sqlx::Result<ModerationSettings> {
     Ok(get(db, "moderation").await?.unwrap_or_default())
 }
+
+/// The site's terms and privacy pages, as the admin wrote them in Markdown
+/// and as rendered when saved.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SitePages {
+    pub terms_md: String,
+    pub terms_html: String,
+    pub privacy_md: String,
+    pub privacy_html: String,
+}
+
+pub async fn site_pages(db: &Db) -> sqlx::Result<SitePages> {
+    Ok(get(db, "pages").await?.unwrap_or_default())
+}

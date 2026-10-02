@@ -57,6 +57,8 @@ pub enum Action {
     Search,
     /// Uploading an image.
     Upload,
+    /// Downloading one's own data.
+    Export,
 }
 
 /// Whose allowance a request uses up.
@@ -129,6 +131,8 @@ pub fn rule(action: Action, scope: Scope) -> Rule {
         (Action::Search, _) => Rule::new(20, 3),
         // Enough for a post with a handful of photos, then one a minute.
         (Action::Upload, _) => Rule::new(20, 60),
+        // Gathering it all takes a few queries; a few a day is plenty.
+        (Action::Export, _) => Rule::new(5, 3600),
     }
 }
 
