@@ -1329,3 +1329,129 @@ async fn quote_forks_follow_the_visibility_rule_property(pool: PgPool) {
         .await
         .unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// Expensive previews
+
+/// Previews are checked like posts: an over-long or deeply nested draft is
+/// refused at once, with the text kept, rather than rendered.
+#[sqlx::test]
+async fn previews_refuse_over_long_and_deeply_nested_drafts(pool: PgPool) {
+    let s = setup(pool).await;
+    let t = s.f.thread(s.games, s.ruth, "Spirit Island", "First").await;
+    let too_long = "> ".repeat(60_000);
+    let deep = format!("{}deep", "> ".repeat(20_000));
+    let paths = [
+        "/c/games/new".to_owned(),
+        format!("/t/{}/reply", t.thread_id),
+        format!("/p/{}/edit", t.first_post_id),
+        format!("/p/{}/fork", t.first_post_id),
+    ];
+    for path in &paths {
+        for (body, problem) in [(&too_long, "too long"), (&deep, "nested too deeply")] {
+            let started = std::time::Instant::now();
+            let response =
+                s.f.submit(
+                    path,
+                    &[("title", "Draft"), ("body", body), ("preview", "1")],
+                    Some(&s.ruth_cookie),
+                )
+                .await;
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(5),
+                "{path} took {:?}",
+                started.elapsed()
+            );
+            assert_status(&response, StatusCode::BAD_REQUEST);
+            assert!(response.body.contains(problem), "{path}: {problem}");
+            assert!(!response.body.contains("<blockquote>"), "{path}");
+            // The text is kept.
+            assert!(
+                response.body.contains("&gt; &gt; &gt;")
+                    || response.body.contains("&#62; &#62; &#62;"),
+                "{path}"
+            );
+        }
+    }
+    // Saving is refused the same way.
+    for path in &paths {
+        let response =
+            s.f.submit(
+                path,
+                &[("title", "Draft"), ("body", &deep)],
+                Some(&s.ruth_cookie),
+            )
+            .await;
+        assert_status(&response, StatusCode::BAD_REQUEST);
+        assert!(response.body.contains("nested too deeply"), "{path}");
+    }
+    assert_eq!(count(&s.f, "SELECT count(*) FROM posts").await, 1);
+}
+
+#[sqlx::test]
+async fn previews_are_rate_limited(pool: PgPool) {
+    let s = setup(pool).await;
+    let mut refused = false;
+    for i in 0..60 {
+        let body = format!("draft {i}");
+        let response =
+            s.f.submit(
+                "/c/games/new",
+                &[("title", "T"), ("body", &body), ("preview", "1")],
+                Some(&s.jonah_cookie),
+            )
+            .await;
+        if response.status == StatusCode::TOO_MANY_REQUESTS {
+            refused = true;
+            assert!(response.body.contains(&body), "the text is kept");
+            assert!(!response.body.contains(&format!("<p>{body}</p>")));
+            break;
+        }
+        assert_status(&response, StatusCode::OK);
+    }
+    assert!(refused);
+    // Others can still preview.
+    let response =
+        s.f.submit(
+            "/c/games/new",
+            &[("title", "T"), ("body", "mine"), ("preview", "1")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::OK);
+    assert!(response.body.contains("<p>mine</p>"));
+}
+
+/// What members type as HTML is shown as they typed it, and a post that
+/// would show nothing is refused.
+#[sqlx::test]
+async fn raw_html_is_shown_and_blank_posts_are_refused(pool: PgPool) {
+    let s = setup(pool).await;
+    let t = s.f.thread(s.games, s.ruth, "Spirit Island", "First").await;
+    let path = format!("/t/{}/reply", t.thread_id);
+    let response =
+        s.f.submit(
+            &path,
+            &[("body", "<sarcasm>Great idea</sarcasm>, really.")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+    let location = response.location().to_owned();
+    let post_id = anchored_post(&location);
+    let page = s.f.page(location.split('#').next().unwrap()).await;
+    assert!(
+        post_html(&page, post_id).contains("&lt;sarcasm&gt;Great idea&lt;/sarcasm&gt;, really."),
+        "{page}"
+    );
+    let response =
+        s.f.submit(
+            &path,
+            &[("body", "[l]: https://example.com")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::BAD_REQUEST);
+    assert!(response.body.contains("Write something first."));
+    assert_eq!(count(&s.f, "SELECT count(*) FROM posts").await, 2);
+}

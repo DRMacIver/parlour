@@ -11,6 +11,7 @@ use crate::AppState;
 use crate::changes::Change;
 use crate::content::{self, CategoryTarget, PostTarget, ThreadTarget};
 use crate::error::AppError;
+use crate::markdown;
 use crate::permissions::{at_most_as_visible, may_post, may_reply};
 use crate::ratelimit::{Action, Scope};
 use crate::store::{self, Edited, NewPost, NewThread};
@@ -59,14 +60,21 @@ pub fn clean_title(title: &str) -> String {
     title.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Checks a tidied body: it must be short enough, not too deeply nested
+/// (see [`markdown::MAX_NESTING`]) and show something.
 pub fn check_body(body: &str, problems: &mut Vec<String>) {
-    if body.trim().is_empty() {
-        problems.push("Write something first.".to_owned());
-    } else if body.chars().count() > MAX_BODY_CHARS {
+    if body.chars().count() > MAX_BODY_CHARS {
         problems.push(format!(
             "That’s too long: posts can be up to {} characters.",
             crate::format::count(MAX_BODY_CHARS as i64)
         ));
+    } else if markdown::nesting_depth(body) > markdown::MAX_NESTING {
+        problems.push(
+            "That’s nested too deeply: take out some of the quotes inside quotes, lists inside lists or emphasis inside emphasis."
+                .to_owned(),
+        );
+    } else if markdown::is_blank(body) {
+        problems.push("Write something first.".to_owned());
     }
 }
 
@@ -83,6 +91,12 @@ fn allowed(state: &AppState, viewer: &Viewer, action: Action) -> bool {
         Some(id) => state.limiter().check(action, Scope::User, &id.to_string()),
         None => false,
     }
+}
+
+/// Whether the viewer may preview a post now, using up some of their
+/// allowance: rendering takes time, so previews are rate limited too.
+pub fn may_preview(state: &AppState, viewer: &Viewer) -> bool {
+    allowed(state, viewer, Action::Preview)
 }
 
 /// Whether the viewer may start threads in a category they can read.
@@ -432,6 +446,49 @@ mod tests {
             "    code\nmore"
         );
         assert_eq!(clean_title("  Heat   with\tfive "), "Heat with five");
+    }
+
+    fn problems_with(body: &str) -> Vec<String> {
+        let mut problems = Vec::new();
+        check_body(body, &mut problems);
+        problems
+    }
+
+    #[test]
+    fn bodies_must_show_something() {
+        assert_eq!(problems_with("Hello"), Vec::<String>::new());
+        assert_eq!(
+            problems_with("<sarcasm>yes</sarcasm>"),
+            Vec::<String>::new()
+        );
+        for body in [
+            "",
+            "  ",
+            "[l]: https://example.com",
+            "[](https://example.com)",
+        ] {
+            assert_eq!(
+                problems_with(body),
+                vec!["Write something first."],
+                "{body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bodies_may_not_nest_too_deeply() {
+        let deep = format!("{}x", "> ".repeat(crate::markdown::MAX_NESTING));
+        let problems = problems_with(&deep);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("nested too deeply"), "{problems:?}");
+        assert!(problems_with(&format!("{}x", "> ".repeat(10))).is_empty());
+    }
+
+    #[test]
+    fn long_bodies_are_refused_before_they_are_parsed() {
+        let problems = problems_with(&"> ".repeat(MAX_BODY_CHARS));
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("too long"), "{problems:?}");
     }
 
     #[hegel::test(test_cases = 300)]

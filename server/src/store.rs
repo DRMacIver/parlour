@@ -258,12 +258,19 @@ pub async fn render_post(
         .fetch_all(&mut *conn)
         .await?
     };
-    Ok(markdown::render_with_mentions(body_md, |name| {
-        known
-            .iter()
-            .find(|known| known.eq_ignore_ascii_case(name))
-            .cloned()
-    }))
+    // Rendering takes long enough that it shouldn't hold up other requests.
+    let body_md = body_md.to_owned();
+    let rendered = tokio::task::spawn_blocking(move || {
+        markdown::render_with_mentions(&body_md, |name| {
+            known
+                .iter()
+                .find(|known| known.eq_ignore_ascii_case(name))
+                .cloned()
+        })
+    })
+    .await
+    .expect("rendering a post panicked");
+    Ok(rendered)
 }
 
 /// Edits made this soon after posting replace the original rather than

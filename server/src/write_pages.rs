@@ -72,6 +72,9 @@ async fn not_allowed(
 const TOO_FAST: &str =
     "You’re posting faster than this forum allows. Wait a minute, then send it again.";
 
+const TOO_FAST_PREVIEW: &str =
+    "You’re previewing faster than this forum allows. Wait a few seconds, then try again.";
+
 // ---------------------------------------------------------------------------
 // The composer
 
@@ -173,13 +176,26 @@ async fn render_compose(
     errors: Vec<String>,
     preview: bool,
 ) -> Result<Response, AppError> {
-    let preview = if preview && !draft.body.trim().is_empty() {
-        let mut conn = state.db().acquire().await?;
-        Some(
-            store::render_post(&mut conn, &writing::clean_body(&draft.body))
-                .await?
-                .html,
-        )
+    // A preview is checked like a post, so that nothing too costly to
+    // render is rendered, and rate limited.
+    let mut status = status;
+    let mut errors = errors;
+    let preview = if preview {
+        let body = writing::clean_body(&draft.body);
+        let mut problems = Vec::new();
+        writing::check_body(&body, &mut problems);
+        if !problems.is_empty() {
+            status = StatusCode::BAD_REQUEST;
+            errors.extend(problems);
+            None
+        } else if !writing::may_preview(state, viewer) {
+            status = StatusCode::TOO_MANY_REQUESTS;
+            errors.push(TOO_FAST_PREVIEW.to_owned());
+            None
+        } else {
+            let mut conn = state.db().acquire().await?;
+            Some(store::render_post(&mut conn, &body).await?.html)
+        }
     } else {
         None
     };

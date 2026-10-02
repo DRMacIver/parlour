@@ -39,6 +39,8 @@ pub enum Action {
     Edit,
     /// Adding or removing a reaction.
     React,
+    /// Previewing a post.
+    Preview,
 }
 
 /// Whose allowance a request uses up.
@@ -95,6 +97,9 @@ pub fn rule(action: Action, scope: Scope) -> Rule {
         (Action::Post, _) => Rule::new(10, 20),
         (Action::Edit, _) => Rule::new(20, 10),
         (Action::React, _) => Rule::new(40, 2),
+        // Previews are checked like posts and rendered off the async
+        // workers, but each still takes some time.
+        (Action::Preview, _) => Rule::new(20, 3),
     }
 }
 

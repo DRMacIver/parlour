@@ -28,7 +28,101 @@ fn options() -> comrak::Options<'static> {
     options.extension.strikethrough = true;
     options.extension.autolink = true;
     options.extension.tasklist = true;
+    // Raw HTML that members type is shown as they typed it.
+    options.render.escape = true;
     options
+}
+
+/// How deeply elements may nest in a post. The sanitiser takes time that
+/// grows with the square of the nesting depth, so deeper posts are refused
+/// (see [`nesting_depth`]), and are rendered as plain text if they get this
+/// far.
+pub const MAX_NESTING: usize = 32;
+
+/// How deeply the elements of a parsed document nest, not counting the
+/// document itself.
+fn depth_of<'a>(root: &'a AstNode<'a>) -> usize {
+    use comrak::arena_tree::NodeEdge;
+    let (mut depth, mut deepest) = (0usize, 0usize);
+    for edge in root.traverse() {
+        match edge {
+            NodeEdge::Start(_) => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            NodeEdge::End(_) => depth -= 1,
+        }
+    }
+    deepest.saturating_sub(1)
+}
+
+/// How deeply the elements of a post nest.
+pub fn nesting_depth(source: &str) -> usize {
+    let arena = comrak::Arena::new();
+    depth_of(comrak::parse_document(&arena, source, &options()))
+}
+
+/// Whether a post would show nothing: no text, code or images.
+pub fn is_blank(source: &str) -> bool {
+    let arena = comrak::Arena::new();
+    let root = comrak::parse_document(&arena, source, &options());
+    !root
+        .descendants()
+        .any(|node| match &node.data.borrow().value {
+            NodeValue::Text(text) => !text.trim().is_empty(),
+            NodeValue::Code(code) => !code.literal.trim().is_empty(),
+            NodeValue::CodeBlock(block) => !block.literal.trim().is_empty(),
+            NodeValue::HtmlBlock(block) => !block.literal.trim().is_empty(),
+            NodeValue::HtmlInline(html) => !html.trim().is_empty(),
+            NodeValue::Image(_) => true,
+            _ => false,
+        })
+}
+
+/// Turns raw HTML into text, so that it is shown as typed: an HTML block
+/// becomes a paragraph, and inline HTML becomes text (where mentions are
+/// found like anywhere else).
+fn html_as_text<'a>(arena: &'a comrak::Arena<'a>, root: &'a AstNode<'a>) {
+    let html: Vec<&AstNode> = root
+        .descendants()
+        .filter(|node| {
+            matches!(
+                node.data.borrow().value,
+                NodeValue::HtmlBlock(_) | NodeValue::HtmlInline(_)
+            )
+        })
+        .collect();
+    for node in html {
+        let mut data = node.data.borrow_mut();
+        match &data.value {
+            NodeValue::HtmlBlock(block) => {
+                let text = block.literal.trim_end().to_owned();
+                data.value = NodeValue::Paragraph;
+                drop(data);
+                node.append(new_node(arena, NodeValue::Text(text.into())));
+            }
+            NodeValue::HtmlInline(literal) => {
+                data.value = NodeValue::Text(literal.clone().into());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A post too deeply nested to render as Markdown, as escaped plain text.
+fn as_plain_text(source: &str) -> String {
+    let mut html = String::from("<pre>");
+    for c in source.chars() {
+        match c {
+            '&' => html.push_str("&amp;"),
+            '<' => html.push_str("&lt;"),
+            '>' => html.push_str("&gt;"),
+            '"' => html.push_str("&quot;"),
+            c => html.push(c),
+        }
+    }
+    html.push_str("</pre>\n");
+    html
 }
 
 /// Renders a post body, with no mentions resolved.
@@ -42,6 +136,7 @@ pub fn render(source: &str) -> String {
 pub fn mention_candidates(source: &str) -> Vec<String> {
     let arena = comrak::Arena::new();
     let root = comrak::parse_document(&arena, source, &options());
+    html_as_text(&arena, root);
     let mut names = Vec::new();
     for node in mentionable_text_nodes(root) {
         if let NodeValue::Text(text) = &node.data.borrow().value {
@@ -62,6 +157,13 @@ pub fn render_with_mentions(source: &str, resolve: impl Fn(&str) -> Option<Strin
     let options = options();
     let arena = comrak::Arena::new();
     let root = comrak::parse_document(&arena, source, &options);
+    if depth_of(root) > MAX_NESTING {
+        return Rendered {
+            html: as_plain_text(source),
+            mentions: Vec::new(),
+        };
+    }
+    html_as_text(&arena, root);
     let mut mentions: Vec<String> = Vec::new();
     for node in mentionable_text_nodes(root) {
         let text = match &node.data.borrow().value {
@@ -202,7 +304,10 @@ static SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_mentions, mention_candidates, render, render_with_mentions};
+    use super::{
+        MAX_NESTING, find_mentions, is_blank, mention_candidates, nesting_depth, render,
+        render_with_mentions,
+    };
     use hegel::TestCase;
     use hegel::generators::{self as gs, Generator, PrintableGenerator};
 
@@ -229,10 +334,132 @@ mod tests {
     }
 
     #[test]
-    fn raw_html_is_removed() {
+    fn raw_html_is_shown_as_typed() {
         let html = render("<script>alert(1)</script><img src=x onerror=alert(1)>");
         assert!(!html.contains("<script"), "{html}");
-        assert!(!html.contains("onerror"), "{html}");
+        assert!(!html.contains("<img"), "{html}");
+        assert!(
+            html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+            "{html}"
+        );
+        assert_eq!(
+            render("<sarcasm>Great idea</sarcasm>, really."),
+            "<p>&lt;sarcasm&gt;Great idea&lt;/sarcasm&gt;, really.</p>\n"
+        );
+        assert_eq!(
+            render("Use the <kbd>Ctrl</kbd> key and a <br> break"),
+            "<p>Use the &lt;kbd&gt;Ctrl&lt;/kbd&gt; key and a &lt;br&gt; break</p>\n"
+        );
+        assert_eq!(
+            render("<div>My whole paragraph</div>\n\n<!-- note --> visible"),
+            "<p>&lt;div&gt;My whole paragraph&lt;/div&gt;</p>\n<p>&lt;!-- note --&gt; visible</p>\n"
+        );
+    }
+
+    #[test]
+    fn mentions_next_to_raw_html_are_found() {
+        let rendered = render_with_mentions("<script>x</script> hi @ruth", known);
+        assert_eq!(rendered.mentions, vec!["ruth"]);
+        assert!(
+            rendered.html.contains("href=\"/u/ruth\""),
+            "{}",
+            rendered.html
+        );
+        assert_eq!(mention_candidates("<b>@ruth</b>"), vec!["ruth"]);
+    }
+
+    #[test]
+    fn blank_posts_are_recognised() {
+        for source in [
+            "",
+            "  \n",
+            "[l]: https://example.com",
+            "[](https://example.com)",
+            ">",
+            "- \n- ",
+        ] {
+            assert!(is_blank(source), "{source:?}");
+        }
+        for source in [
+            "x",
+            "`@`",
+            "<!-- x -->",
+            "![](a.png)",
+            "    code",
+            "<div></div>",
+        ] {
+            assert!(!is_blank(source), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn nesting_depth_counts_quotes_lists_and_emphasis() {
+        assert_eq!(nesting_depth(""), 0);
+        assert_eq!(nesting_depth("x"), 2);
+        assert_eq!(nesting_depth("> > x"), 4);
+        assert_eq!(nesting_depth("- - x"), 6);
+        assert_eq!(nesting_depth("*a **b** a*"), 4);
+        assert!(nesting_depth(&"> ".repeat(1000)) > MAX_NESTING);
+    }
+
+    #[test]
+    fn too_deeply_nested_posts_are_shown_as_plain_text() {
+        let source = format!("{}<b>@ruth</b> & \"x\"", "> ".repeat(MAX_NESTING));
+        let rendered = render_with_mentions(&source, known);
+        assert_eq!(
+            rendered.html,
+            format!(
+                "<pre>{}&lt;b&gt;@ruth&lt;/b&gt; &amp; &quot;x&quot;</pre>\n",
+                "&gt; ".repeat(MAX_NESTING)
+            )
+        );
+        assert!(rendered.mentions.is_empty());
+        // Just within the limit is rendered as usual.
+        let source = format!("{}x", "> ".repeat(MAX_NESTING - 2));
+        assert!(render(&source).starts_with("<blockquote>"));
+    }
+
+    /// The depth to which the elements in some HTML nest.
+    fn html_depth(html: &str) -> usize {
+        let (mut depth, mut deepest) = (0usize, 0usize);
+        let mut rest = html;
+        while let Some(start) = rest.find('<') {
+            rest = &rest[start + 1..];
+            let end = rest.find('>').expect("unterminated tag");
+            let tag = &rest[..end];
+            rest = &rest[end + 1..];
+            if tag.starts_with('/') {
+                depth -= 1;
+            } else if !["br", "hr", "img", "input"]
+                .iter()
+                .any(|void| tag == *void || tag.starts_with(&format!("{void} ")))
+            {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+        }
+        assert_eq!(depth, 0, "{html}");
+        deepest
+    }
+
+    /// However deeply a post nests, its HTML nests at most
+    /// [`MAX_NESTING`] deep, so sanitising it stays quick.
+    #[hegel::test(test_cases = 300)]
+    fn rendered_nesting_is_bounded(tc: TestCase) {
+        let pieces = tc.draw(gs::vecs(gs::one_of(vec![
+            gs::sampled_from(vec![
+                "> ", "- ", "1. ", "  ", "*", "**", "_", "~~", "[", "](/a)", "x", " ", "\n", "|",
+                "`",
+            ])
+            .map(String::from)
+            .boxed_printable(),
+            gs::sampled_from(vec![10usize, 20, 40])
+                .map(|n| "> ".repeat(n))
+                .boxed_printable(),
+        ])));
+        let source: String = pieces.concat();
+        let html = render(&source);
+        assert!(html_depth(&html) <= MAX_NESTING, "{source:?} -> {html}");
     }
 
     #[test]
