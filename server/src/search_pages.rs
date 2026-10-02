@@ -132,17 +132,24 @@ pub async fn search_page(
     if !template.searched {
         return render(StatusCode::OK, &template);
     }
-    if template.query.text.chars().count() > MAX_QUERY_CHARS
-        || template.query.author.as_ref().is_some_and(|a| a.len() > 64)
-        || template
-            .query
-            .category
-            .as_ref()
-            .is_some_and(|c| c.len() > 100)
-    {
-        template.error = Some(format!(
+    let too_long = if template.query.text.chars().count() > MAX_QUERY_CHARS {
+        Some(format!(
             "Searches can be at most {MAX_QUERY_CHARS} characters long."
-        ));
+        ))
+    } else if template.query.author.as_ref().is_some_and(|a| a.len() > 64) {
+        Some("Usernames are at most 64 characters long.".to_owned())
+    } else if template
+        .query
+        .category
+        .as_ref()
+        .is_some_and(|c| c.len() > 100)
+    {
+        Some("Category names are at most 100 characters long.".to_owned())
+    } else {
+        None
+    };
+    if let Some(error) = too_long {
+        template.error = Some(error);
         return render(StatusCode::BAD_REQUEST, &template);
     }
     if !allowed(&state, &ip, &viewer) {

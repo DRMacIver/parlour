@@ -304,6 +304,32 @@ async fn empty_and_odd_queries(pool: PgPool) {
     let long = "x".repeat(300);
     let response = s.f.get(&format!("/search?q={long}")).await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(
+        response
+            .body
+            .contains("Searches can be at most 200 characters long.")
+    );
+    // Over-long filters are named as what's too long.
+    let response =
+        s.f.get(&format!("/search?q=words&by={}", "x".repeat(65)))
+            .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(
+        response
+            .body
+            .contains("Usernames are at most 64 characters long.")
+    );
+    assert!(!response.body.contains("Searches can be"));
+    let response =
+        s.f.get(&format!("/search?q=words&in={}", "x".repeat(101)))
+            .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(
+        response
+            .body
+            .contains("Category names are at most 100 characters long.")
+    );
+    assert!(!response.body.contains("Searches can be"));
     // Pages far past the end aren't searched.
     let response = s.f.get("/search?q=words&page=1000").await;
     assert_eq!(response.status, StatusCode::NOT_FOUND);
