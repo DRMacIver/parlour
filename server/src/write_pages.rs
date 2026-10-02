@@ -797,9 +797,10 @@ pub async fn revisions(
         return web::not_found(&state, &viewer).await;
     };
     let latest = history.versions.len() as i64;
-    // The newest version has the bare URL.
+    // The newest version has the bare URL. Only for now, though: after
+    // another edit this number means an older version.
     if wanted == Some(latest) {
-        return Ok(Redirect::permanent(&format!("/p/{post_id}/revisions")).into_response());
+        return Ok(Redirect::temporary(&format!("/p/{post_id}/revisions")).into_response());
     }
     let selected = wanted.unwrap_or(latest);
     if selected > latest {

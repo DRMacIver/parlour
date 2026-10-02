@@ -361,7 +361,10 @@ async fn deleted_and_hidden_posts_are_tombstones(pool: PgPool) {
     assert!(!page.contains("regrettable"));
     assert!(!page.contains("rule-breaking"));
     let d = post_html(&page, deleted);
-    assert!(d.contains("№ 2") && d.contains("Post deleted"), "{d}");
+    assert!(
+        d.contains("№ 2") && d.contains("Post deleted by its author"),
+        "{d}"
+    );
     let h = post_html(&page, hidden);
     assert!(
         h.contains("№ 3") && h.contains("hidden by a moderator"),

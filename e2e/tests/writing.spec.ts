@@ -87,7 +87,7 @@ test("a member starts a thread, replies, quotes, edits, reacts and deletes", asy
   await page.locator("article.post").nth(1).locator(".post-actions a", { hasText: "delete" }).click();
   await expectFits(page);
   await page.locator("button", { hasText: "Delete post" }).click();
-  await expect(page.locator(".post-tombstone")).toContainText("Post deleted");
+  await expect(page.locator(".post-tombstone")).toContainText("Post deleted by its author");
   await expect(page.getByText("ten minutes to teach")).toHaveCount(0);
 });
 
@@ -97,7 +97,7 @@ test("a member quotes a post into a new thread", async ({ page }) => {
   await page.locator(".row-title a", { hasText: "Cascadia scoring variants" }).first().click();
   const source = page.locator("article.post").first();
   const sourceText = (await source.locator(".post-body p").first().textContent())!;
-  await source.locator(".post-actions a", { hasText: "new thread" }).click();
+  await source.locator(".post-actions a", { hasText: "Quote in new thread" }).click();
   await expectFits(page);
   await expect(page.locator(".embed .post-body")).toContainText(sourceText);
   const title = `A tangent (${test.info().project.name} ${Date.now()})`;

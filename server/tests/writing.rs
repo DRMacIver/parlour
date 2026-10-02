@@ -629,6 +629,16 @@ async fn later_edits_keep_the_history(pool: PgPool) {
         "{original}"
     );
     assert!(original.contains("The original post"));
+    // The newest version's number redirects to the bare URL, but only for
+    // now: after another edit, the number means an older version.
+    let latest =
+        s.f.get(&format!("/p/{}/revisions?v=3", t.first_post_id))
+            .await;
+    assert_status(&latest, StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        latest.location(),
+        format!("/p/{}/revisions", t.first_post_id)
+    );
     assert_status(
         &s.f.get(&format!("/p/{}/revisions?v=4", t.first_post_id))
             .await,
@@ -696,7 +706,7 @@ async fn deleting_a_post_leaves_a_tombstone_and_hides_its_history(pool: PgPool) 
     assert_status(&response, StatusCode::SEE_OTHER);
     let page = s.f.page("/t/1/oops").await;
     assert!(!page.contains("regrettable"));
-    assert!(post_html(&page, reply).contains("Post deleted"));
+    assert!(post_html(&page, reply).contains("Post deleted by its author"));
     assert_status(
         &s.f.get(&format!("/p/{reply}/revisions")).await,
         StatusCode::NOT_FOUND,
@@ -1008,6 +1018,15 @@ async fn quote_forks_start_a_thread_that_embeds_the_post(pool: PgPool) {
     let t =
         s.f.thread(s.games, s.ruth, "Weekly", "Solo play is its own hobby")
             .await;
+    // Posts offer it by the mockups' name.
+    let page = s.f.page_as("/t/1/weekly", &s.jonah_cookie).await;
+    assert!(
+        post_html(&page, t.first_post_id).contains(&format!(
+            "<a href=\"/p/{}/fork\">Quote in new thread</a>",
+            t.first_post_id
+        )),
+        "{page}"
+    );
     let form =
         s.f.page_as(&format!("/p/{}/fork", t.first_post_id), &s.jonah_cookie)
             .await;

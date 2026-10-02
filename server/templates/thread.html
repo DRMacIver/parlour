@@ -77,7 +77,7 @@
         <span class="spacer"></span>
         <span class="post-actions">
           {%- if self.can_reply() %}<a href="/t/{{ thread.thread.id }}/reply?to={{ post.id }}">reply</a> · <a href="/t/{{ thread.thread.id }}/reply?quote={{ post.id }}">quote</a> · {% endif -%}
-          <a href="/p/{{ post.id }}/fork">new thread</a>
+          <a href="/p/{{ post.id }}/fork">Quote in new thread</a>
           {%- if self.is_mine(author.user.id) %}{% if can_edit %} · <a href="/p/{{ post.id }}/edit">edit</a>{% endif %} · <a href="/p/{{ post.id }}/delete">delete</a>{% endif -%}
         </span>
         {% endif %}
@@ -115,7 +115,7 @@
   {% when PostBody::Deleted %}
   <article class="post post-tombstone" id="p{{ post.id }}">
     <a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a>
-    <span>Post deleted</span>
+    <span>Post deleted by its author</span>
     {% call m::time(post.created_at) %}{% endcall %}
   </article>
   {% when PostBody::Hidden %}
