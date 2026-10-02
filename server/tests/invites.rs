@@ -1403,3 +1403,93 @@ async fn invites_behave_like_the_model(db: PgPool) {
         .await
         .unwrap();
 }
+
+/// A deleted member's username can't be taken by someone new, who could
+/// then pass as them in the posts that mention or quote them.
+#[sqlx::test]
+async fn deleted_members_usernames_stay_taken(db: PgPool) {
+    let Inviter { forum, cookie, .. } = setup(db, "user").await;
+    let otto = forum
+        .member("otto", "user", Some("correct horse battery"))
+        .await;
+    let otto_cookie = forum.session(otto).await;
+    let response = forum
+        .submit(
+            "/settings/delete",
+            &[("password", "correct horse battery"), ("confirm", "otto")],
+            Some(&otto_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+    for (n, name) in ["otto", "Otto"].into_iter().enumerate() {
+        let link = make_invite(
+            &forum,
+            &cookie,
+            &[("email", ""), ("note", ""), ("days", "7"), ("uses", "1")],
+        )
+        .await;
+        let response = join(&forum, &link, name, &format!("new{n}@example.com")).await;
+        assert!(
+            response.body.contains("That username is taken."),
+            "{name}: {}",
+            response.body
+        );
+    }
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM users WHERE username = 'otto' AND deleted_at IS NULL",
+    )
+    .fetch_one(&forum.db)
+    .await
+    .unwrap();
+    assert_eq!(live, 0);
+    // Nor can the name be taken any other way.
+    let inserted = sqlx::query(
+        "INSERT INTO users (username, display_name, email, role) VALUES ('OTTO', 'Otto', 'o@example.com', 'user')",
+    )
+    .execute(&forum.db)
+    .await;
+    assert!(inserted.is_err());
+}
+
+/// Deleted accounts are renamed `deleted_<id>`, so nobody can register a
+/// name like that: it would pass as a deleted member, and would stop that
+/// member from deleting their account.
+#[sqlx::test]
+async fn the_deleted_prefix_is_reserved(db: PgPool) {
+    let Inviter { forum, cookie, .. } = setup(db, "user").await;
+    let jude = forum
+        .member("jude", "user", Some("correct horse battery"))
+        .await;
+    let squatted = format!("deleted_{jude}");
+    for name in [squatted.as_str(), "Deleted_7", "DELETED_x"] {
+        let link = make_invite(
+            &forum,
+            &cookie,
+            &[("email", ""), ("note", ""), ("days", "7"), ("uses", "1")],
+        )
+        .await;
+        let response = join(&forum, &link, name, &format!("{name}@example.com")).await;
+        assert!(
+            response.body.contains("That username is reserved."),
+            "{name}: {}",
+            response.body
+        );
+    }
+    let inserted = sqlx::query(
+        "INSERT INTO users (username, display_name, email, role) VALUES ($1, 'Squatter', 's@example.com', 'user')",
+    )
+    .bind(&squatted)
+    .execute(&forum.db)
+    .await;
+    assert!(inserted.is_err());
+    // Jude can still delete his account.
+    let jude_cookie = forum.session(jude).await;
+    let response = forum
+        .submit(
+            "/settings/delete",
+            &[("password", "correct horse battery"), ("confirm", "jude")],
+            Some(&jude_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+}

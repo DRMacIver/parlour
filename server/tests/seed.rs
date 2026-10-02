@@ -451,3 +451,19 @@ async fn seed_has_things_for_the_moderators(pool: PgPool) {
             .contains("Hello from Otley")
     );
 }
+
+/// Deleting a seeded account retires its username; starting again from a
+/// fresh seed brings the name back.
+#[sqlx::test]
+async fn reset_forgets_retired_usernames(pool: PgPool) {
+    seed::seed(&pool).await.unwrap();
+    let otto: i64 =
+        sqlx::query_scalar("SELECT id FROM users WHERE role = 'user' ORDER BY id LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let db = parlour::db::Db::new(pool.clone());
+    parlour::db::users::delete_account(&db, otto).await.unwrap();
+    seed::reset(&pool).await.unwrap();
+    seed::seed(&pool).await.unwrap();
+}

@@ -114,7 +114,8 @@ pub async fn reset(db: &PgPool) -> Result<(), SeedError> {
         (false, Some(false)) => return Err(SeedError::ChangedSinceSeed),
     }
     sqlx::raw_sql(
-        "TRUNCATE posts, threads, categories, sections, groups, users RESTART IDENTITY CASCADE;
+        "TRUNCATE posts, threads, categories, sections, groups, users, retired_usernames
+             RESTART IDENTITY CASCADE;
          DELETE FROM settings WHERE key = 'dev_seed';",
     )
     .execute(&mut *tx)

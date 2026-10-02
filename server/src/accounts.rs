@@ -81,6 +81,10 @@ const RESERVED_USERNAMES: &[&str] = &[
     "me",
 ];
 
+/// How the usernames of deleted accounts start; the database refuses it
+/// for anyone else.
+const DELETED_PREFIX: &str = "deleted_";
+
 /// Checks a new username. The database enforces the same format.
 pub fn validate_username(username: &str) -> Result<(), &'static str> {
     if !(2..=24).contains(&username.len()) {
@@ -92,9 +96,13 @@ pub fn validate_username(username: &str) -> Result<(), &'static str> {
     {
         return Err("Usernames can only contain letters, digits and underscores.");
     }
+    // Deleted accounts are renamed `deleted_<id>`.
     if RESERVED_USERNAMES
         .iter()
         .any(|r| r.eq_ignore_ascii_case(username))
+        || username
+            .get(..DELETED_PREFIX.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(DELETED_PREFIX))
     {
         return Err("That username is reserved.");
     }
@@ -298,6 +306,10 @@ mod tests {
         assert!(validate_username("ruth smith").is_err());
         assert!(validate_username("rüth").is_err());
         assert!(validate_username("Admin").is_err());
+        assert!(validate_username("deleted_21").is_err());
+        assert!(validate_username("Deleted_x").is_err());
+        assert!(validate_username("deleted").is_ok());
+        assert!(validate_username("undeleted_21").is_ok());
         assert!(validate_username(&"a".repeat(25)).is_err());
     }
 
@@ -307,6 +319,7 @@ mod tests {
         if validate_username(&name).is_ok() {
             assert!((2..=24).contains(&name.len()));
             assert!(name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'));
+            assert!(!name.to_ascii_lowercase().starts_with("deleted_"));
         }
     }
 

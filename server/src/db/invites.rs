@@ -458,7 +458,9 @@ fn check_registration(
 
 async fn username_taken(db: &mut PgConnection, username: &str) -> sqlx::Result<bool> {
     sqlx::query_scalar!(
-        r#"SELECT EXISTS (SELECT 1 FROM users WHERE username = $1::citext) AS "e!""#,
+        r#"SELECT EXISTS (SELECT 1 FROM users WHERE username = $1::citext)
+                  OR EXISTS (SELECT 1 FROM retired_usernames
+                             WHERE username_hash = username_hash($1)) AS "e!""#,
         username as _,
     )
     .fetch_one(db)

@@ -379,6 +379,8 @@ pub enum Deletion {
 /// wrote stays where it is, under "Deleted member": the account's row is
 /// kept, with everything that identified them (names, email address,
 /// password, profile, picture) replaced or removed, and so are its posts.
+/// The old username is retired, so that nobody new can take it and pass as
+/// them in the posts that mention or quote them.
 /// Everything else that is theirs alone goes: sessions, tokens, recorded
 /// addresses, notifications, reactions, watches, blocks, read markers,
 /// group memberships and staff notes about them. They leave their
@@ -403,6 +405,14 @@ pub async fn delete_account(db: &Db, user_id: i64) -> sqlx::Result<Deletion> {
     if role == Role::Admin.as_str() && admins.len() <= 1 {
         return Ok(Deletion::LastAdmin);
     }
+    sqlx::query!(
+        "INSERT INTO retired_usernames (username_hash)
+         SELECT username_hash(username::text) FROM users WHERE id = $1
+         ON CONFLICT DO NOTHING",
+        user_id
+    )
+    .execute(&mut *tx)
+    .await?;
     sqlx::query!(
         "UPDATE users SET username = 'deleted_' || id, display_name = 'Deleted member',
                 email = 'deleted-' || id || '@deleted.invalid', email_verified_at = NULL,
