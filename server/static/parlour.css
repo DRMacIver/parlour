@@ -801,6 +801,8 @@ p.quick-reply { font-style: italic; }
   .list tr { border-top: 1px solid var(--rule); padding: 8px 0; }
   .list tbody tr:first-child { border-top: none; }
   .list .num, .list .last-col { display: inline-block; width: auto; text-align: left; font-size: var(--font-size-small); padding-top: 2px; }
+  /* A long unbroken title mustn't widen the row past the screen. */
+  .list .last-col { max-width: 100%; }
   .list .num::before { content: attr(data-label) " "; font-variant: small-caps; letter-spacing: 0.08em; }
   .list .last-col .row-meta { display: inline; }
   .last-title { max-width: 100%; }
