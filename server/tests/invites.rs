@@ -640,22 +640,35 @@ async fn members_have_limits_staff_dont(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn staff_links_can_be_used_several_times_and_record_groups(db: PgPool) {
+async fn staff_links_can_be_used_several_times_and_add_people_to_groups(db: PgPool) {
     let Inviter {
         forum,
         id: sam,
         cookie,
     } = setup(db, "admin").await;
+    let organisers = forum.group("organisers", "Organisers").await;
+    let board = forum.group("board", "Board").await;
     let page = forum.page_as("/invites", &cookie).await;
     assert!(page.contains("Number of uses"));
+    assert!(page.contains("Organisers") && page.contains("Board"));
+    // Only groups that exist can be chosen.
+    let response = forum
+        .submit(
+            "/invites",
+            &[("days", "90"), ("uses", "3"), ("group", "999")],
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(response.body.contains("Choose groups from the list."));
     let link = make_invite(
         &forum,
         &cookie,
         &[
             ("days", "90"),
             ("uses", "3"),
-            ("group", "7"),
-            ("group", "9"),
+            ("group", &organisers.to_string()),
+            ("group", &board.to_string()),
         ],
     )
     .await;
@@ -663,7 +676,17 @@ async fn staff_links_can_be_used_several_times_and_record_groups(db: PgPool) {
         .fetch_all(&forum.db)
         .await
         .unwrap();
-    assert_eq!(groups, vec![7, 9]);
+    assert_eq!(groups, vec![organisers, board]);
+    assert!(
+        forum
+            .page_as("/invites", &cookie)
+            .await
+            .contains("adds to Board, Organisers")
+    );
+    // A group deleted since is left out.
+    parlour::groups::delete(forum.state.db(), board)
+        .await
+        .unwrap();
     for name in ["alex", "bea", "cal"] {
         let response = join(&forum, &link, name, &format!("{name}@example.com")).await;
         assert_eq!(response.status, StatusCode::SEE_OTHER, "{name}");
@@ -679,6 +702,20 @@ async fn staff_links_can_be_used_several_times_and_record_groups(db: PgPool) {
     .await
     .unwrap();
     assert_eq!(inviters, vec![Some(sam); 3]);
+    let members: Vec<(String, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT u.username::text, m.group_id, m.added_by FROM group_members m JOIN users u ON u.id = m.user_id
+         ORDER BY u.username",
+    )
+    .fetch_all(&forum.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        members,
+        ["alex", "bea", "cal"]
+            .iter()
+            .map(|name| (name.to_string(), organisers, Some(sam)))
+            .collect::<Vec<_>>()
+    );
     assert!(
         forum
             .page_as("/invites", &cookie)
@@ -694,6 +731,61 @@ async fn staff_links_can_be_used_several_times_and_record_groups(db: PgPool) {
         )
         .await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
+}
+
+#[sqlx::test]
+async fn emailed_invites_add_people_to_their_groups_too(db: PgPool) {
+    let Inviter { forum, cookie, .. } = setup(db, "moderator").await;
+    let organisers = forum.group("organisers", "Organisers").await;
+    let response = forum
+        .submit(
+            "/invites",
+            &[
+                ("days", "7"),
+                ("uses", "1"),
+                ("email", "newbie@example.com"),
+                ("group", &organisers.to_string()),
+            ],
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+    let email = forum.last_email_to("newbie@example.com").await;
+    let link = link_in(&email.body, "/invite/");
+    let response = join(&forum, &link, "newbie", "").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let groups: Vec<i64> = sqlx::query_scalar(
+        "SELECT m.group_id FROM group_members m JOIN users u ON u.id = m.user_id WHERE u.username = 'newbie'",
+    )
+    .fetch_all(&forum.db)
+    .await
+    .unwrap();
+    assert_eq!(groups, vec![organisers]);
+}
+
+#[sqlx::test]
+async fn members_cant_make_invites_that_add_people_to_groups(db: PgPool) {
+    let Inviter { forum, cookie, .. } = setup(db, "user").await;
+    let organisers = forum.group("organisers", "Organisers").await;
+    let page = forum.page_as("/invites", &cookie).await;
+    assert!(!page.contains("Organisers"));
+    let response = forum
+        .submit(
+            "/invites",
+            &[
+                ("days", "7"),
+                ("uses", "1"),
+                ("group", &organisers.to_string()),
+            ],
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(
+        response
+            .body
+            .contains("Only staff can make invites that add people to groups.")
+    );
 }
 
 #[sqlx::test]
@@ -988,7 +1080,7 @@ mod model {
                     let cookie = forum.session(id).await;
                     let token = cookie.trim_start_matches("parlour_session=");
                     creators.push(
-                        parlour::sessions::lookup(&forum.db, token)
+                        parlour::sessions::lookup(forum.state.db(), token)
                             .await
                             .unwrap()
                             .unwrap(),
@@ -1225,7 +1317,7 @@ mod model {
             let revoked = self
                 .rt
                 .block_on(invites::revoke(
-                    &self.forum.db,
+                    self.forum.state.db(),
                     &self.creators[actor],
                     self.invites[index].id,
                 ))

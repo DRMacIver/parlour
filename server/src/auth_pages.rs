@@ -28,6 +28,7 @@ use crate::ratelimit::{Action, Scope};
 use crate::sessions;
 use crate::settings;
 use crate::tokens;
+use crate::users::{self, LoginAccount};
 use crate::viewer::{UserCtx, Viewer, session_cookie};
 use crate::web::{
     self, Layout, Nav, cacheable, redirect_unless_canonical, render, secret_url, see_other,
@@ -38,34 +39,8 @@ fn destination(next: &str) -> &str {
     web::safe_next(next).unwrap_or("/")
 }
 
-/// The account a login form names, by username or email address.
-struct LoginAccount {
-    id: i64,
-    display_name: String,
-    email: String,
-    password_hash: Option<String>,
-}
-
 async fn find_account(state: &AppState, identifier: &str) -> sqlx::Result<Option<LoginAccount>> {
-    let identifier = identifier.trim();
-    if identifier.is_empty() || identifier.len() > 254 {
-        return Ok(None);
-    }
-    let row = sqlx::query!(
-        r#"SELECT id, display_name, email AS "email: String", password_hash FROM users
-           WHERE (username = $1::citext OR email = $1::citext) AND deleted_at IS NULL
-           ORDER BY username = $1::citext DESC
-           LIMIT 1"#,
-        identifier as _
-    )
-    .fetch_optional(state.db())
-    .await?;
-    Ok(row.map(|row| LoginAccount {
-        id: row.id,
-        display_name: row.display_name,
-        email: row.email,
-        password_hash: row.password_hash,
-    }))
+    users::find_login_account(state.db(), identifier).await
 }
 
 /// Uses up one of an account's allowance for `action` (the account
@@ -94,13 +69,7 @@ async fn log_in(
 
 /// A magic link or reset link proves the member can read their email.
 async fn mark_verified(state: &AppState, user_id: i64) -> sqlx::Result<()> {
-    sqlx::query!(
-        "UPDATE users SET email_verified_at = coalesce(email_verified_at, now()) WHERE id = $1",
-        user_id
-    )
-    .execute(state.db())
-    .await?;
-    Ok(())
+    users::mark_verified(state.db(), user_id).await
 }
 
 async fn expired_link(
@@ -421,13 +390,7 @@ pub async fn use_magic_link(
     Path(token): Path<String>,
     Form(form): Form<NextForm>,
 ) -> Result<Response, AppError> {
-    match login_tokens::consume(
-        &mut *state.db().acquire().await?,
-        &token,
-        Purpose::MagicLink,
-    )
-    .await?
-    {
+    match login_tokens::consume(state.db(), &token, Purpose::MagicLink).await? {
         Some(used) => {
             mark_verified(&state, used.user_id).await?;
             log_in(&state, used.user_id, &headers, &ip, &form.next).await
@@ -633,13 +596,7 @@ pub async fn reset_password(
         )
         .await;
     };
-    sqlx::query!(
-        "UPDATE users SET password_hash = $2, email_verified_at = coalesce(email_verified_at, now()) WHERE id = $1",
-        used.user_id,
-        hash
-    )
-    .execute(&mut *tx)
-    .await?;
+    users::set_password(&mut tx, used.user_id, &hash, true).await?;
     // Whoever knew the old password is logged out everywhere.
     sessions::delete_all(&mut tx, used.user_id, None).await?;
     tx.commit().await?;
@@ -700,27 +657,16 @@ pub async fn verify_email(
         )
         .await;
     };
-    let updated = sqlx::query!(
-        "UPDATE users SET email = $2, email_verified_at = now() WHERE id = $1",
-        used.user_id,
-        used.email.as_deref() as _,
-    )
-    .execute(&mut *tx)
-    .await;
-    match updated {
-        Ok(_) => {}
-        Err(sqlx::Error::Database(err)) if err.is_unique_violation() => {
-            return web::message(
-                &state,
-                &viewer,
-                StatusCode::CONFLICT,
-                "Address already in use",
-                &["Another account has started using that email address since the link was sent."],
-                Some(("/settings", "Back to your settings")),
-            )
-            .await;
-        }
-        Err(err) => return Err(err.into()),
+    if !users::confirm_email(&mut tx, used.user_id, used.email.as_deref()).await? {
+        return web::message(
+            &state,
+            &viewer,
+            StatusCode::CONFLICT,
+            "Address already in use",
+            &["Another account has started using that email address since the link was sent."],
+            Some(("/settings", "Back to your settings")),
+        )
+        .await;
     }
     tx.commit().await?;
     if viewer.user_id() == Some(used.user_id) {
@@ -812,24 +758,14 @@ async fn render_settings(
     token: Option<&str>,
     outcome: SettingsOutcome,
 ) -> Result<Response, AppError> {
-    let row = sqlx::query!(
-        r#"SELECT password_hash IS NOT NULL AS "has_password!",
-                  (SELECT count(*) FROM sessions s WHERE s.user_id = u.id AND s.token_hash IS DISTINCT FROM $2
-                     AND s.last_seen_at > now() - make_interval(days => $3)) AS "sessions!"
-           FROM users u WHERE u.id = $1"#,
-        user.id,
-        token.map(tokens::hash),
-        sessions::IDLE_DAYS,
-    )
-    .fetch_one(state.db())
-    .await?;
+    let row = users::account_summary(state.db(), user.id, token).await?;
     render(
         outcome.status,
         &SettingsTemplate {
             layout: Layout::load(state, viewer, Nav::Account).await?,
             user,
             has_password: row.has_password,
-            other_sessions: row.sessions,
+            other_sessions: row.other_sessions,
             notice: outcome.notice,
             errors: outcome.errors,
             new_email: outcome.new_email,
@@ -876,10 +812,7 @@ pub async fn change_password(
     if !user_allows(&state, Action::Login, user.id) {
         return web::rate_limited(&state, &viewer).await;
     }
-    let current_hash =
-        sqlx::query_scalar!("SELECT password_hash FROM users WHERE id = $1", user.id)
-            .fetch_one(state.db())
-            .await?;
+    let current_hash = users::password_hash(state.db(), user.id).await?;
     let mut problems = Vec::new();
     if current_hash.is_some() && !accounts::verify_password(current_hash, &form.current).await {
         problems.push("Your current password isn’t right.".to_owned());
@@ -898,13 +831,7 @@ pub async fn change_password(
     }
     let hash = accounts::hash_password(&form.password).await;
     let mut tx = state.db().begin().await?;
-    sqlx::query!(
-        "UPDATE users SET password_hash = $2 WHERE id = $1",
-        user.id,
-        hash
-    )
-    .execute(&mut *tx)
-    .await?;
+    users::set_password(&mut tx, user.id, &hash, false).await?;
     sessions::delete_all(&mut tx, user.id, token).await?;
     tx.commit().await?;
     Ok(see_other("/settings?done=password"))
@@ -930,10 +857,7 @@ pub async fn change_email(
         return web::rate_limited(&state, &viewer).await;
     }
     let token = session_cookie(&headers);
-    let current_hash =
-        sqlx::query_scalar!("SELECT password_hash FROM users WHERE id = $1", user.id)
-            .fetch_one(state.db())
-            .await?;
+    let current_hash = users::password_hash(state.db(), user.id).await?;
     let mut problems = Vec::new();
     // Someone who has borrowed a logged-in browser mustn't be able to take
     // the account over by moving it to their own address.
@@ -947,16 +871,10 @@ pub async fn change_email(
             None
         }
     };
-    if let Some(email) = &email {
-        let taken = sqlx::query_scalar!(
-            r#"SELECT EXISTS (SELECT 1 FROM users WHERE email = $1::citext) AS "e!""#,
-            email.as_str() as _
-        )
-        .fetch_one(state.db())
-        .await?;
-        if taken {
-            problems.push("That address is already in use.".to_owned());
-        }
+    if let Some(email) = &email
+        && users::email_taken(state.db(), email).await?
+    {
+        problems.push("That address is already in use.".to_owned());
     }
     let Some(email) = email.filter(|_| problems.is_empty()) else {
         return render_settings(
@@ -1016,11 +934,6 @@ pub async fn log_out_elsewhere(
     let Some(user) = viewer.user() else {
         return Ok(web::login_first("/settings"));
     };
-    sessions::delete_all(
-        &mut *state.db().acquire().await?,
-        user.id,
-        session_cookie(&headers),
-    )
-    .await?;
+    sessions::delete_all(state.db(), user.id, session_cookie(&headers)).await?;
     Ok(see_other("/settings?done=sessions"))
 }

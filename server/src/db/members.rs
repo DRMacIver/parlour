@@ -7,11 +7,11 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
 
 use crate::accounts::Role;
 use crate::cache::Tag;
 use crate::content::{self, Deps, UserRef};
+use crate::db::Db;
 use crate::viewer::Viewer;
 
 pub struct Profile {
@@ -37,7 +37,7 @@ pub struct Member {
 
 /// A member's profile, by username (any capitalisation).
 pub async fn profile(
-    db: &PgPool,
+    db: &Db,
     viewer: &Viewer,
     username: &str,
     deps: &mut Deps,
@@ -51,7 +51,7 @@ pub async fn profile(
            WHERE u.username = $1::citext AND u.deleted_at IS NULL"#,
         username as _
     )
-    .fetch_optional(db)
+    .fetch_optional(db.pool())
     .await?
     else {
         return Ok(None);
@@ -63,7 +63,7 @@ pub async fn profile(
          ORDER BY created_at, id",
         row.id
     )
-    .fetch_all(db)
+    .fetch_all(db.pool())
     .await?
     .into_iter()
     .map(|r| Member {
@@ -175,14 +175,14 @@ pub struct TreeRow {
 }
 
 /// The whole invite tree, and the number of members in it.
-pub async fn tree(db: &PgPool, deps: &mut Deps) -> sqlx::Result<(Vec<TreeItem>, usize)> {
+pub async fn tree(db: &Db, deps: &mut Deps) -> sqlx::Result<(Vec<TreeItem>, usize)> {
     deps.add(Tag::Members);
     let rows = sqlx::query!(
         "SELECT id, username, display_name, role, created_at, invited_by_user_id FROM users
          WHERE deleted_at IS NULL
          ORDER BY created_at, id"
     )
-    .fetch_all(db)
+    .fetch_all(db.pool())
     .await?;
     let rows: Vec<TreeRow> = rows
         .into_iter()

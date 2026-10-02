@@ -23,9 +23,9 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use crate::db::{Handle, KEY};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use sqlx::PgConnection;
 use tokio::sync::Notify;
 
 use crate::AppState;
@@ -99,24 +99,25 @@ impl Jobs {
 }
 
 /// Adds a job that is due now.
-pub async fn enqueue(db: &mut PgConnection, kind: &str, payload: &Value) -> sqlx::Result<i64> {
+pub async fn enqueue<'c>(db: impl Handle<'c>, kind: &str, payload: &Value) -> sqlx::Result<i64> {
     enqueue_at(db, kind, payload, None).await
 }
 
 /// Adds a job that is due at `run_at` (or now).
-pub async fn enqueue_at(
-    db: &mut PgConnection,
+pub async fn enqueue_at<'c>(
+    db: impl Handle<'c>,
     kind: &str,
     payload: &Value,
     run_at: Option<DateTime<Utc>>,
 ) -> sqlx::Result<i64> {
+    let mut conn = db.open(KEY).acquire().await?;
     sqlx::query_scalar!(
         "INSERT INTO jobs (kind, payload, run_at) VALUES ($1, $2, coalesce($3, now())) RETURNING id",
         kind,
         payload,
         run_at,
     )
-    .fetch_one(db)
+    .fetch_one(&mut *conn)
     .await
 }
 
@@ -148,7 +149,7 @@ pub fn backoff(attempts: i32) -> Duration {
 
 /// Claims and runs one due job, if there is one.
 pub async fn run_next(state: &AppState) -> sqlx::Result<Option<Outcome>> {
-    let db = state.db();
+    let db = state.db().pool();
     let mut tx = db.begin().await?;
     let Some(job) = sqlx::query!(
         r#"SELECT id, kind, payload, attempts, max_attempts FROM jobs

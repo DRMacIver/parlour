@@ -2,15 +2,15 @@
 //! categories, threads and posts with their bookkeeping (post numbering,
 //! thread activity, rendered HTML) kept consistent.
 //!
-//! Each takes a pool, a connection or an open transaction.
+//! Each takes a [`Handle`]: the database, or an open transaction.
 //!
 //! These functions don't check permissions or clear the page cache. Request
 //! handlers that write (M4 onwards) check permissions first and then call
 //! [`crate::AppState::changed`] once the write has committed. The `seed`
 //! command uses them directly.
 
+use crate::db::{Handle, KEY};
 use chrono::{DateTime, Utc};
-use sqlx::{Acquire, Postgres};
 
 use crate::markdown;
 
@@ -58,11 +58,8 @@ pub struct NewUser {
     pub created_at: Option<DateTime<Utc>>,
 }
 
-pub async fn create_user<'c>(
-    db: impl Acquire<'c, Database = Postgres>,
-    user: &NewUser,
-) -> sqlx::Result<i64> {
-    let mut conn = db.acquire().await?;
+pub async fn create_user<'c>(db: impl Handle<'c>, user: &NewUser) -> sqlx::Result<i64> {
+    let mut conn = db.open(KEY).acquire().await?;
     sqlx::query_scalar!(
         r#"INSERT INTO users (username, display_name, email, role, title, pronouns, status_line,
                               location, invited_by_user_id, created_at)
@@ -84,11 +81,11 @@ pub async fn create_user<'c>(
 }
 
 pub async fn create_section<'c>(
-    db: impl Acquire<'c, Database = Postgres>,
+    db: impl Handle<'c>,
     name: &str,
     position: i32,
 ) -> sqlx::Result<i64> {
-    let mut conn = db.acquire().await?;
+    let mut conn = db.open(KEY).acquire().await?;
     sqlx::query_scalar!(
         "INSERT INTO sections (name, position) VALUES ($1, $2) RETURNING id",
         name,
@@ -111,11 +108,8 @@ pub struct NewCategory {
     pub write_level: String,
 }
 
-pub async fn create_category<'c>(
-    db: impl Acquire<'c, Database = Postgres>,
-    category: &NewCategory,
-) -> sqlx::Result<i64> {
-    let mut conn = db.acquire().await?;
+pub async fn create_category<'c>(db: impl Handle<'c>, category: &NewCategory) -> sqlx::Result<i64> {
+    let mut conn = db.open(KEY).acquire().await?;
     sqlx::query_scalar!(
         r#"INSERT INTO categories (section_id, slug, name, description, position, read_level, write_level)
            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"#,
@@ -129,6 +123,295 @@ pub async fn create_category<'c>(
     )
     .fetch_one(&mut *conn)
     .await
+}
+
+// ---------------------------------------------------------------------------
+// Sections and categories, as admins manage them
+
+pub const READ_LEVELS: [&str; 3] = ["public", "members", "groups"];
+pub const WRITE_LEVELS: [&str; 3] = ["members", "groups", "staff"];
+pub const MAX_SECTION_NAME_CHARS: usize = 80;
+pub const MAX_CATEGORY_NAME_CHARS: usize = 80;
+pub const MAX_CATEGORY_DESCRIPTION_CHARS: usize = 500;
+pub const MAX_CATEGORY_SLUG_CHARS: usize = 40;
+
+/// Everything about a category that an admin sets.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CategorySettings {
+    pub section_id: Option<i64>,
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub position: i32,
+    /// `public`, `members` or `groups`.
+    pub read_level: String,
+    /// `members`, `groups` or `staff`.
+    pub write_level: String,
+    /// With the `groups` read level, the groups whose members may read.
+    pub read_groups: Vec<i64>,
+    /// With the `groups` write level, the groups whose members may post.
+    pub write_groups: Vec<i64>,
+}
+
+fn one_line(text: &str) -> String {
+    text.replace(|c: char| c.is_control(), " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+impl CategorySettings {
+    /// Tidies the settings, returning the problems with them if any. Group
+    /// lists are sorted and deduplicated, and dropped for levels that don't
+    /// use them.
+    pub fn clean(&self) -> Result<CategorySettings, Vec<String>> {
+        let mut clean = CategorySettings {
+            section_id: self.section_id,
+            slug: self.slug.trim().to_ascii_lowercase(),
+            name: one_line(&self.name),
+            description: one_line(&self.description),
+            position: self.position,
+            read_level: self.read_level.clone(),
+            write_level: self.write_level.clone(),
+            read_groups: self.read_groups.clone(),
+            write_groups: self.write_groups.clone(),
+        };
+        for groups in [&mut clean.read_groups, &mut clean.write_groups] {
+            groups.sort();
+            groups.dedup();
+        }
+        if clean.read_level != "groups" {
+            clean.read_groups.clear();
+        }
+        if clean.write_level != "groups" {
+            clean.write_groups.clear();
+        }
+        let mut problems = Vec::new();
+        if !crate::groups::valid_slug(&clean.slug) || clean.slug.len() > MAX_CATEGORY_SLUG_CHARS {
+            problems.push(format!(
+                "The address should be up to {MAX_CATEGORY_SLUG_CHARS} lower-case letters and digits, with single hyphens between words."
+            ));
+        }
+        if clean.name.is_empty() || clean.name.chars().count() > MAX_CATEGORY_NAME_CHARS {
+            problems.push(format!(
+                "The name should be between 1 and {MAX_CATEGORY_NAME_CHARS} characters."
+            ));
+        }
+        if clean.description.chars().count() > MAX_CATEGORY_DESCRIPTION_CHARS {
+            problems.push(format!(
+                "Keep the description to {MAX_CATEGORY_DESCRIPTION_CHARS} characters."
+            ));
+        }
+        if !READ_LEVELS.contains(&clean.read_level.as_str()) {
+            problems.push("Choose who can read the category.".to_owned());
+        }
+        if !WRITE_LEVELS.contains(&clean.write_level.as_str()) {
+            problems.push("Choose who can post in the category.".to_owned());
+        }
+        // Nobody can post where they can't read, so a group that may post
+        // but not read would be a mistake.
+        if clean.read_level == "groups"
+            && clean.write_level == "groups"
+            && !clean
+                .write_groups
+                .iter()
+                .all(|g| clean.read_groups.contains(g))
+        {
+            problems.push("Groups that can post must also be able to read.".to_owned());
+        }
+        if problems.is_empty() {
+            Ok(clean)
+        } else {
+            Err(problems)
+        }
+    }
+}
+
+const CATEGORY_SLUG_TAKEN: &str = "Another category has that address.";
+
+fn slug_clash(err: &sqlx::Error) -> bool {
+    matches!(err, sqlx::Error::Database(err) if err.is_unique_violation())
+}
+
+/// Replaces the groups named for a category.
+async fn set_category_groups(
+    conn: &mut sqlx::PgConnection,
+    category_id: i64,
+    settings: &CategorySettings,
+) -> sqlx::Result<()> {
+    sqlx::query!(
+        "DELETE FROM category_groups WHERE category_id = $1",
+        category_id
+    )
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query!(
+        "INSERT INTO category_groups (category_id, group_id, access)
+         SELECT $1::bigint, g, 'read' FROM unnest($2::bigint[]) g
+         UNION ALL
+         SELECT $1::bigint, g, 'write' FROM unnest($3::bigint[]) g",
+        category_id,
+        &settings.read_groups,
+        &settings.write_groups,
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// Makes a category from settings that [`CategorySettings::clean`]
+/// accepted. Returns the problem if another category has its address.
+pub async fn add_category<'c>(
+    db: impl Handle<'c>,
+    settings: &CategorySettings,
+) -> sqlx::Result<Result<i64, String>> {
+    let mut tx = db.open(KEY).begin().await?;
+    let inserted = sqlx::query_scalar!(
+        r#"INSERT INTO categories (section_id, slug, name, description, position, read_level, write_level)
+           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"#,
+        settings.section_id,
+        settings.slug,
+        settings.name,
+        settings.description,
+        settings.position,
+        settings.read_level,
+        settings.write_level,
+    )
+    .fetch_one(&mut *tx)
+    .await;
+    let id = match inserted {
+        Ok(id) => id,
+        Err(err) if slug_clash(&err) => return Ok(Err(CATEGORY_SLUG_TAKEN.to_owned())),
+        Err(err) => return Err(err),
+    };
+    set_category_groups(&mut tx, id, settings).await?;
+    tx.commit().await?;
+    Ok(Ok(id))
+}
+
+/// Changes a category to settings that [`CategorySettings::clean`]
+/// accepted. Its threads' visibility follows its new read level (a trigger
+/// sees to that). `Ok(Ok(false))` if there is no such category.
+pub async fn update_category<'c>(
+    db: impl Handle<'c>,
+    id: i64,
+    settings: &CategorySettings,
+) -> sqlx::Result<Result<bool, String>> {
+    let mut tx = db.open(KEY).begin().await?;
+    let updated = sqlx::query!(
+        r#"UPDATE categories SET section_id = $2, slug = $3, name = $4, description = $5, position = $6,
+                  read_level = $7, write_level = $8, version = version + 1
+           WHERE id = $1"#,
+        id,
+        settings.section_id,
+        settings.slug,
+        settings.name,
+        settings.description,
+        settings.position,
+        settings.read_level,
+        settings.write_level,
+    )
+    .execute(&mut *tx)
+    .await;
+    match updated {
+        Ok(done) if done.rows_affected() == 0 => return Ok(Ok(false)),
+        Ok(_) => {}
+        Err(err) if slug_clash(&err) => return Ok(Err(CATEGORY_SLUG_TAKEN.to_owned())),
+        Err(err) => return Err(err),
+    }
+    set_category_groups(&mut tx, id, settings).await?;
+    tx.commit().await?;
+    Ok(Ok(true))
+}
+
+/// Deletes a category that has never had threads. Returns the problem if
+/// it has some, and `Ok(Ok(false))` if there is no such category.
+pub async fn delete_category(db: &crate::db::Db, id: i64) -> sqlx::Result<Result<bool, String>> {
+    let mut tx = db.pool().begin().await?;
+    let threads = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM threads WHERE category_id = $1"#,
+        id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if threads > 0 {
+        return Ok(Err(
+            "Only an empty category can be deleted. Move its threads elsewhere first.".to_owned(),
+        ));
+    }
+    let done = sqlx::query!("DELETE FROM categories WHERE id = $1", id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Ok(done.rows_affected() == 1))
+}
+
+/// Tidies a section name, or says what is wrong with it.
+pub fn clean_section_name(name: &str) -> Result<String, String> {
+    let name = one_line(name);
+    if name.is_empty() || name.chars().count() > MAX_SECTION_NAME_CHARS {
+        Err(format!(
+            "A section name should be between 1 and {MAX_SECTION_NAME_CHARS} characters."
+        ))
+    } else {
+        Ok(name)
+    }
+}
+
+/// Renames or moves a section. Returns whether there was one.
+pub async fn update_section(
+    db: &crate::db::Db,
+    id: i64,
+    name: &str,
+    position: i32,
+) -> sqlx::Result<bool> {
+    let done = sqlx::query!(
+        "UPDATE sections SET name = $2, position = $3 WHERE id = $1",
+        id,
+        name,
+        position
+    )
+    .execute(db.pool())
+    .await?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Deletes a section. Its categories stay, outside any section.
+pub async fn delete_section(db: &crate::db::Db, id: i64) -> sqlx::Result<bool> {
+    let done = sqlx::query!("DELETE FROM sections WHERE id = $1", id)
+        .execute(db.pool())
+        .await?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Moves a thread to another category, returning the category it was in,
+/// or `None` if there is no such thread in a category. Its visibility
+/// follows its new category (a trigger sees to that).
+pub async fn move_thread<'c>(
+    db: impl Handle<'c>,
+    thread_id: i64,
+    category_id: i64,
+) -> sqlx::Result<Option<i64>> {
+    let mut tx = db.open(KEY).begin().await?;
+    let Some(previous) = sqlx::query_scalar!(
+        r#"SELECT category_id AS "category_id!" FROM threads
+           WHERE id = $1 AND category_id IS NOT NULL FOR UPDATE"#,
+        thread_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    else {
+        return Ok(None);
+    };
+    sqlx::query!(
+        "UPDATE threads SET category_id = $2, version = version + 1 WHERE id = $1",
+        thread_id,
+        category_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Some(previous))
 }
 
 #[derive(Clone, Debug)]
@@ -151,10 +434,10 @@ pub struct CreatedThread {
 
 /// Creates a thread together with its first post.
 pub async fn create_thread<'c>(
-    db: impl Acquire<'c, Database = Postgres>,
+    db: impl Handle<'c>,
     thread: &NewThread,
 ) -> sqlx::Result<CreatedThread> {
-    let mut tx = db.begin().await?;
+    let mut tx = db.open(KEY).begin().await?;
     let created_at = thread.created_at.unwrap_or_else(Utc::now);
     let thread_id = sqlx::query_scalar!(
         r#"INSERT INTO threads (category_id, visibility, title, slug, author_id, forked_from_post_id,
@@ -200,11 +483,8 @@ pub struct NewPost {
 }
 
 /// Adds a post to the end of a thread.
-pub async fn create_post<'c>(
-    db: impl Acquire<'c, Database = Postgres>,
-    post: &NewPost,
-) -> sqlx::Result<i64> {
-    let mut tx = db.begin().await?;
+pub async fn create_post<'c>(db: impl Handle<'c>, post: &NewPost) -> sqlx::Result<i64> {
+    let mut tx = db.open(KEY).begin().await?;
     let id = insert_post(&mut tx, post).await?;
     tx.commit().await?;
     Ok(id)
@@ -242,14 +522,15 @@ async fn insert_post(tx: &mut sqlx::PgConnection, post: &NewPost) -> sqlx::Resul
 
 /// Renders a post body as it will be saved, linking mentions of members
 /// who exist now.
-pub async fn render_post(
-    conn: &mut sqlx::PgConnection,
+pub async fn render_post<'c>(
+    db: impl Handle<'c>,
     body_md: &str,
 ) -> sqlx::Result<markdown::Rendered> {
     let candidates = markdown::mention_candidates(body_md);
     let known: Vec<String> = if candidates.is_empty() {
         Vec::new()
     } else {
+        let mut conn = db.open(KEY).acquire().await?;
         sqlx::query_scalar!(
             r#"SELECT username::text AS "username!" FROM users
                WHERE lower(username::text) = ANY($1) AND deleted_at IS NULL"#,
@@ -291,12 +572,12 @@ pub enum Edited {
 /// `post_revisions` unless the post is still in its grace period and has
 /// never been edited since. Doesn't check permissions.
 pub async fn edit_post<'c>(
-    db: impl Acquire<'c, Database = Postgres>,
+    db: impl Handle<'c>,
     post_id: i64,
     editor_id: i64,
     body_md: &str,
 ) -> sqlx::Result<Edited> {
-    let mut tx = db.begin().await?;
+    let mut tx = db.open(KEY).begin().await?;
     let post = sqlx::query!(
         r#"SELECT body_md, body_html, author_id, created_at, edited_at, edited_by,
                   created_at > now() - make_interval(mins => $2) AS "in_grace!"
@@ -352,11 +633,8 @@ pub async fn edit_post<'c>(
 
 /// Deletes a post, leaving a tombstone. Its number, history and reactions
 /// stay in the database but are no longer shown.
-pub async fn delete_post<'c>(
-    db: impl Acquire<'c, Database = Postgres>,
-    post_id: i64,
-) -> sqlx::Result<bool> {
-    let mut conn = db.acquire().await?;
+pub async fn delete_post<'c>(db: impl Handle<'c>, post_id: i64) -> sqlx::Result<bool> {
+    let mut conn = db.open(KEY).acquire().await?;
     let done = sqlx::query!(
         "UPDATE posts SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
         post_id
@@ -369,12 +647,12 @@ pub async fn delete_post<'c>(
 /// Adds a reaction; adding one twice does nothing. Returns whether it was
 /// added.
 pub async fn add_reaction<'c>(
-    db: impl Acquire<'c, Database = Postgres>,
+    db: impl Handle<'c>,
     post_id: i64,
     user_id: i64,
     emoji: &str,
 ) -> sqlx::Result<bool> {
-    let mut conn = db.acquire().await?;
+    let mut conn = db.open(KEY).acquire().await?;
     let done = sqlx::query!(
         "INSERT INTO reactions (post_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
         post_id,
@@ -388,12 +666,12 @@ pub async fn add_reaction<'c>(
 
 /// Removes a reaction, returning whether there was one.
 pub async fn remove_reaction<'c>(
-    db: impl Acquire<'c, Database = Postgres>,
+    db: impl Handle<'c>,
     post_id: i64,
     user_id: i64,
     emoji: &str,
 ) -> sqlx::Result<bool> {
-    let mut conn = db.acquire().await?;
+    let mut conn = db.open(KEY).acquire().await?;
     let done = sqlx::query!(
         "DELETE FROM reactions WHERE post_id = $1 AND user_id = $2 AND emoji = $3",
         post_id,
@@ -408,12 +686,12 @@ pub async fn remove_reaction<'c>(
 /// Moves a member's read marker in a thread forward to `seq`. It never
 /// moves back.
 pub async fn mark_read<'c>(
-    db: impl Acquire<'c, Database = Postgres>,
+    db: impl Handle<'c>,
     user_id: i64,
     thread_id: i64,
     seq: i64,
 ) -> sqlx::Result<()> {
-    let mut conn = db.acquire().await?;
+    let mut conn = db.open(KEY).acquire().await?;
     let seq = i32::try_from(seq.max(0)).unwrap_or(i32::MAX);
     sqlx::query!(
         r#"INSERT INTO thread_reads (user_id, thread_id, last_read_seq) VALUES ($1, $2, $3)
@@ -432,11 +710,11 @@ pub async fn mark_read<'c>(
 /// Marks every thread in a category, as listed in `thread_ids`, as read up
 /// to its last post.
 pub async fn mark_threads_read<'c>(
-    db: impl Acquire<'c, Database = Postgres>,
+    db: impl Handle<'c>,
     user_id: i64,
     thread_ids: &[i64],
 ) -> sqlx::Result<()> {
-    let mut conn = db.acquire().await?;
+    let mut conn = db.open(KEY).acquire().await?;
     sqlx::query!(
         r#"INSERT INTO thread_reads (user_id, thread_id, last_read_seq)
            SELECT $1, t.id, t.last_seq FROM threads t WHERE t.id = ANY($2)
@@ -466,12 +744,12 @@ pub fn valid_reaction(emoji: &str) -> bool {
 /// used. At most `max` can be enabled at once. Returns the problem, if any,
 /// to show the admin.
 pub async fn change_reaction_type<'c>(
-    db: impl Acquire<'c, Database = Postgres>,
+    db: impl Handle<'c>,
     action: &str,
     emoji: &str,
     max: usize,
 ) -> sqlx::Result<Result<(), String>> {
-    let mut tx = db.begin().await?;
+    let mut tx = db.open(KEY).begin().await?;
     // One change at a time, so that the limit and positions hold.
     sqlx::query!("LOCK TABLE reaction_types IN SHARE ROW EXCLUSIVE MODE")
         .execute(&mut *tx)

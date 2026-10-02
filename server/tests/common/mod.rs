@@ -314,6 +314,71 @@ impl Forum {
         .unwrap()
     }
 
+    /// A group, with no members.
+    pub async fn group(&self, slug: &str, name: &str) -> i64 {
+        parlour::groups::create(
+            self.state.db(),
+            &parlour::groups::GroupFields {
+                slug: slug.into(),
+                name: name.into(),
+                description: String::new(),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap()
+    }
+
+    pub async fn join_group(&self, group_id: i64, user_id: i64) {
+        assert!(
+            parlour::groups::add_member(self.state.db(), group_id, user_id, None)
+                .await
+                .unwrap()
+        );
+    }
+
+    /// Lets these groups read (and, with `write`, post in) a category,
+    /// which becomes group-restricted.
+    pub async fn restrict(&self, category_id: i64, groups: &[i64], write: Option<&[i64]>) {
+        let db = self.state.db();
+        let viewer = parlour::viewer::Viewer::User(
+            parlour::sessions::user_ctx(db, self.staff().await)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+        let mut settings = parlour::content::category_by_id(db, &viewer, category_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .settings();
+        settings.read_level = "groups".into();
+        settings.read_groups = groups.to_vec();
+        if let Some(write) = write {
+            settings.write_level = "groups".into();
+            settings.write_groups = write.to_vec();
+        }
+        let settings = settings.clean().unwrap();
+        parlour::store::update_category(db, category_id, &settings)
+            .await
+            .unwrap()
+            .unwrap();
+        self.changed(Change::CategoryChanged { category_id }).await;
+    }
+
+    /// Some admin's id, making one if there is none.
+    async fn staff(&self) -> i64 {
+        let existing: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1")
+                .fetch_optional(&self.db)
+                .await
+                .unwrap();
+        match existing {
+            Some(id) => id,
+            None => self.member("root", "admin", None).await,
+        }
+    }
+
     pub async fn exec(&self, sql: &str) {
         sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_owned()))
             .execute(&self.db)

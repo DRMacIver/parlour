@@ -7,13 +7,13 @@
 //! The token lives only in memory: restarting the server before setup is
 //! finished prints a new one.
 
+use crate::db::Db;
 use askama::Template;
 use axum::Form;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use serde::Deserialize;
-use sqlx::PgPool;
 
 use crate::AppState;
 use crate::accounts;
@@ -27,16 +27,13 @@ use crate::ratelimit::{Action, Scope};
 use crate::sessions;
 use crate::settings;
 use crate::tokens;
+use crate::users::{self, FirstAdmin, NewAdmin};
 use crate::viewer::{UserCtx, Viewer};
 use crate::web::{self, Layout, Nav, render, secret_url, see_other};
 
 /// Whether the site still needs its first admin.
-pub async fn needed(db: &PgPool) -> sqlx::Result<bool> {
-    Ok(!sqlx::query_scalar!(
-        r#"SELECT EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND deleted_at IS NULL) AS "e!""#
-    )
-    .fetch_one(db)
-    .await?)
+pub async fn needed(db: &Db) -> sqlx::Result<bool> {
+    Ok(!users::has_admin(db).await?)
 }
 
 /// If the site has no admin, makes a new setup token and returns the link
@@ -217,32 +214,20 @@ pub async fn create_admin(
     }
     let hash = accounts::hash_password(&form.password).await;
     let mut tx = state.db().begin().await?;
-    // Two people racing through setup can't both make an admin.
-    sqlx::query!("SELECT pg_advisory_xact_lock(hashtext('parlour setup'))")
-        .execute(&mut *tx)
-        .await?;
-    let exists = sqlx::query_scalar!(
-        r#"SELECT EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND deleted_at IS NULL) AS "e!""#
+    let created = users::create_first_admin(
+        &mut tx,
+        &NewAdmin {
+            username,
+            display_name: &display_name,
+            email: &email,
+            password_hash: &hash,
+        },
     )
-    .fetch_one(&mut *tx)
     .await?;
-    if exists {
-        return not_needed(&state, &viewer).await;
-    }
-    let inserted = sqlx::query_scalar!(
-        "INSERT INTO users (username, display_name, email, email_verified_at, password_hash, role)
-         VALUES ($1, $2, $3, now(), $4, 'admin')
-         RETURNING id",
-        username as _,
-        display_name,
-        email.as_str() as _,
-        hash,
-    )
-    .fetch_one(&mut *tx)
-    .await;
-    let user_id = match inserted {
-        Ok(id) => id,
-        Err(sqlx::Error::Database(err)) if err.is_unique_violation() => {
+    let user_id = match created {
+        FirstAdmin::Created(id) => id,
+        FirstAdmin::NotNeeded => return not_needed(&state, &viewer).await,
+        FirstAdmin::Taken => {
             return Ok(secret_url(render(
                 StatusCode::BAD_REQUEST,
                 &SetupTemplate {
@@ -258,7 +243,6 @@ pub async fn create_admin(
                 },
             )?));
         }
-        Err(err) => return Err(err.into()),
     };
     settings::set(&mut tx, "site_name", &site_name).await?;
     tx.commit().await?;
@@ -355,7 +339,7 @@ pub async fn save_email(
         match choose_smtp(&form.smtp, saved.as_ref(), env.as_ref()) {
             Err(problems) => errors.extend(problems),
             Ok(smtp) => {
-                save_smtp(&mut *state.db().acquire().await?, smtp.as_ref()).await?;
+                save_smtp(state.db(), smtp.as_ref()).await?;
                 return Ok(see_other("/setup/invites"));
             }
         }

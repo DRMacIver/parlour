@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO category_groups (category_id, group_id, access)\n         SELECT $1::bigint, g, 'read' FROM unnest($2::bigint[]) g\n         UNION ALL\n         SELECT $1::bigint, g, 'write' FROM unnest($3::bigint[]) g",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7f5fadcb0b5722c18858ee4ed6e10c0476be662ba25b27683c4c2407061809ed"
+}

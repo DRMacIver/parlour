@@ -17,9 +17,9 @@ use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgConnection, PgPool};
 
-use crate::{AppState, jobs};
+use crate::db::{Db, Handle};
+use crate::{AppState, jobs, settings};
 
 pub const JOB_KIND: &str = "email";
 
@@ -148,7 +148,7 @@ impl Mailer {
 
 /// Queues an email to be sent by a job worker. Call
 /// [`crate::jobs::Jobs::wake`] after committing.
-pub async fn queue(db: &mut PgConnection, email: &Email) -> sqlx::Result<()> {
+pub async fn queue<'c>(db: impl Handle<'c>, email: &Email) -> sqlx::Result<()> {
     let payload = serde_json::to_value(email).expect("emails serialise");
     jobs::enqueue(db, JOB_KIND, &payload).await?;
     Ok(())
@@ -186,12 +186,8 @@ pub async fn smtp_settings(state: &AppState) -> sqlx::Result<Option<SmtpSettings
         .or_else(|| state.config().smtp.clone()))
 }
 
-pub async fn saved_smtp_settings(db: &PgPool) -> sqlx::Result<Option<SmtpSettings>> {
-    let value: Option<serde_json::Value> =
-        sqlx::query_scalar!("SELECT value FROM settings WHERE key = 'smtp'")
-            .fetch_optional(db)
-            .await?;
-    Ok(value.and_then(|v| serde_json::from_value(v).ok()))
+pub async fn saved_smtp_settings(db: &Db) -> sqlx::Result<Option<SmtpSettings>> {
+    settings::get(db, "smtp").await
 }
 
 /// Sends an email straight away with the settings in effect.

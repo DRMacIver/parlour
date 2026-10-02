@@ -15,11 +15,13 @@ use crate::AppState;
 use crate::accounts::Role;
 use crate::changes::Change;
 use crate::content::page_count;
+use crate::db::Handle;
 use crate::emails;
 use crate::error::AppError;
 use crate::mail::{self, SmtpSecurity, SmtpSettings};
 use crate::pagination::{PageItem, Pagination};
 use crate::settings::{self, InvitePolicy, RegistrationMode};
+use crate::users::{self, AdminMember, RoleChange};
 use crate::viewer::{UserCtx, Viewer};
 use crate::web::{self, Layout, Nav, render, see_other};
 
@@ -141,18 +143,10 @@ pub fn choose_smtp(
 }
 
 /// Saves SMTP settings, or forgets them (falling back to the environment's).
-pub async fn save_smtp(
-    db: &mut sqlx::PgConnection,
-    smtp: Option<&SmtpSettings>,
-) -> sqlx::Result<()> {
+pub async fn save_smtp<'c>(db: impl Handle<'c>, smtp: Option<&SmtpSettings>) -> sqlx::Result<()> {
     match smtp {
         Some(smtp) => settings::set(db, "smtp", smtp).await,
-        None => {
-            sqlx::query!("DELETE FROM settings WHERE key = 'smtp'")
-                .execute(db)
-                .await?;
-            Ok(())
-        }
+        None => settings::unset(db, "smtp").await,
     }
 }
 
@@ -395,16 +389,6 @@ pub async fn test_email(
 /// Members per page of `/admin/users`.
 const MEMBERS_PER_PAGE: i64 = 100;
 
-/// One member in the admin list.
-pub struct AdminMember {
-    pub id: i64,
-    pub username: String,
-    pub display_name: String,
-    pub role: Role,
-    pub joined_at: chrono::DateTime<chrono::Utc>,
-    pub inviter: Option<String>,
-}
-
 #[derive(Template)]
 #[template(path = "admin_users.html")]
 struct AdminUsersTemplate {
@@ -440,37 +424,12 @@ async fn render_users(
     errors: Vec<String>,
 ) -> Result<Response, AppError> {
     let db = state.db();
-    let total =
-        sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM users WHERE deleted_at IS NULL"#)
-            .fetch_one(db)
-            .await?;
+    let total = users::member_count(db).await?;
     let pages = page_count(total, MEMBERS_PER_PAGE);
     if page > pages {
         return web::not_found(state, viewer).await;
     }
-    let rows = sqlx::query!(
-        r#"SELECT u.id, u.username AS "username: String", u.display_name, u.role, u.created_at,
-                  i.username AS "inviter?: String"
-           FROM users u LEFT JOIN users i ON i.id = u.invited_by_user_id
-           WHERE u.deleted_at IS NULL
-           ORDER BY u.username
-           LIMIT $1 OFFSET $2"#,
-        MEMBERS_PER_PAGE,
-        (page - 1) * MEMBERS_PER_PAGE,
-    )
-    .fetch_all(db)
-    .await?;
-    let members = rows
-        .into_iter()
-        .map(|row| AdminMember {
-            id: row.id,
-            username: row.username,
-            display_name: row.display_name,
-            role: Role::parse(&row.role).unwrap_or(Role::User),
-            joined_at: row.created_at,
-            inviter: row.inviter,
-        })
-        .collect();
+    let members = users::members(db, MEMBERS_PER_PAGE, (page - 1) * MEMBERS_PER_PAGE).await?;
     render(
         status,
         &AdminUsersTemplate {
@@ -534,38 +493,16 @@ pub async fn change_role(
     let Some(role) = Role::parse(&form.role) else {
         return refuse("Choose a role from the list.").await;
     };
-    let mut tx = state.db().begin().await?;
-    // Lock the admins first, so that two admins demoting each other at
-    // once can't leave none.
-    let admins = sqlx::query_scalar!(
-        "SELECT id FROM users WHERE role = 'admin' AND deleted_at IS NULL ORDER BY id FOR UPDATE"
-    )
-    .fetch_all(&mut *tx)
-    .await?;
-    let Some(current) = sqlx::query_scalar!(
-        "SELECT role FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
-        id
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    else {
-        return web::not_found(&state, &viewer).await;
-    };
-    if current == Role::Admin.as_str() && role != Role::Admin && admins.len() <= 1 {
-        return refuse(
-            "There must always be at least one admin. Make someone else an admin first.",
-        )
-        .await;
+    match users::change_role(state.db(), id, role).await? {
+        RoleChange::Done => {}
+        RoleChange::NoSuchMember => return web::not_found(&state, &viewer).await,
+        RoleChange::LastAdmin => {
+            return refuse(
+                "There must always be at least one admin. Make someone else an admin first.",
+            )
+            .await;
+        }
     }
-    // M7: record this in mod_actions.
-    sqlx::query!(
-        "UPDATE users SET role = $2 WHERE id = $1",
-        id,
-        role.as_str()
-    )
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
     // Profiles and the invite tree show staff badges.
     state.changed(Change::UserChanged { user_id: id }).await?;
     if id == user.id && role != Role::Admin {

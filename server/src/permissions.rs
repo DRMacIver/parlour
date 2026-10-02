@@ -4,9 +4,7 @@
 //! Reading is checked in SQL by the access layer ([`crate::content`]);
 //! these are the decisions made in Rust before a write. They work on
 //! [`Audience`]s, which name the group sets of group-restricted categories
-//! in full. Groups arrive in M5: until then a group-restricted category has
-//! no groups, so only staff can read or write in it, and the rule below is
-//! already complete for when they do.
+//! in full.
 
 use std::collections::BTreeSet;
 
@@ -291,6 +289,7 @@ mod tests {
             role,
             created_at: Utc::now(),
             group_ids: groups.into_iter().collect(),
+            group_category_ids: Vec::new(),
         }
     }
 

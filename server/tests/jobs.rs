@@ -16,8 +16,7 @@ use sqlx::PgPool;
 use tokio::runtime::Handle;
 
 async fn enqueue(state: &AppState, kind: &str, payload: serde_json::Value) -> i64 {
-    let mut conn = state.db().acquire().await.unwrap();
-    jobs::enqueue(&mut conn, kind, &payload).await.unwrap()
+    jobs::enqueue(state.db(), kind, &payload).await.unwrap()
 }
 
 /// Makes every waiting job due now, as if time had passed.
@@ -68,7 +67,7 @@ async fn jobs_wait_until_they_are_due(db: PgPool) {
     state.jobs().register("note", |_, _| async { Ok(()) });
     let mut conn = db.acquire().await.unwrap();
     let later = chrono::Utc::now() + chrono::Duration::hours(1);
-    jobs::enqueue_at(&mut conn, "note", &json!({}), Some(later))
+    jobs::enqueue_at(&mut *conn, "note", &json!({}), Some(later))
         .await
         .unwrap();
     assert!(jobs::run_due(&state).await.unwrap().is_empty());
@@ -275,7 +274,7 @@ async fn queued_email_is_sent_over_smtp(db: PgPool) {
         secret: false,
     };
     let mut conn = db.acquire().await.unwrap();
-    mail::queue(&mut conn, &email).await.unwrap();
+    mail::queue(&mut *conn, &email).await.unwrap();
     let outcomes = jobs::run_due(&state).await.unwrap();
     assert!(
         matches!(outcomes[..], [Outcome::Done { .. }]),
@@ -306,7 +305,7 @@ async fn saved_smtp_settings_take_precedence(db: PgPool) {
     };
     let state = AppState::new(db.clone()).with_config(config);
     let mut conn = db.acquire().await.unwrap();
-    parlour::settings::set(&mut conn, "smtp", &smtp_settings(saved_server.port))
+    parlour::settings::set(&mut *conn, "smtp", &smtp_settings(saved_server.port))
         .await
         .unwrap();
     mail::send_now(
@@ -338,7 +337,7 @@ async fn email_is_retried_when_the_server_is_unreachable(db: PgPool) {
     let state = AppState::new(db.clone()).with_config(config);
     let mut conn = db.acquire().await.unwrap();
     mail::queue(
-        &mut conn,
+        &mut *conn,
         &Email {
             to: "ruth@example.com".into(),
             subject: "Hi".into(),
@@ -360,7 +359,7 @@ async fn without_an_smtp_server_email_waits(db: PgPool) {
     let state = AppState::new(db.clone());
     let mut conn = db.acquire().await.unwrap();
     mail::queue(
-        &mut conn,
+        &mut *conn,
         &Email {
             to: "ruth@example.com".into(),
             subject: "Hi".into(),
@@ -389,13 +388,13 @@ async fn failed_emails_dont_keep_their_secrets(db: PgPool) {
     let link = "http://localhost:8080/reset/SECRETSECRETSECRETSECRETSECRETSECRETSECRET1";
     let mut conn = db.acquire().await.unwrap();
     mail::queue(
-        &mut conn,
+        &mut *conn,
         &parlour::emails::reset("ruth@example.com", "Club", "Ruth", link),
     )
     .await
     .unwrap();
     mail::queue(
-        &mut conn,
+        &mut *conn,
         &parlour::emails::test("ruth@example.com", "Club"),
     )
     .await

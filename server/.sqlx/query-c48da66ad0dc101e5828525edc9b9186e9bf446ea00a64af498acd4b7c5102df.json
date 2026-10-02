@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT u.id, u.username, u.display_name, u.email, u.email_verified_at IS NOT NULL AS \"verified!\",\n                  u.role, u.created_at, s.last_seen_at < now() - interval '5 minutes' AS \"stale!\"\n           FROM sessions s JOIN users u ON u.id = s.user_id\n           WHERE s.token_hash = $1 AND u.deleted_at IS NULL\n             AND s.last_seen_at > now() - make_interval(days => $2)",
+  "query": "SELECT u.id, u.username AS \"username: String\", u.display_name, m.added_at,\n                  a.id AS \"added_by_id?\", a.username AS \"added_by_username?: String\",\n                  a.display_name AS \"added_by_name?\"\n           FROM group_members m\n           JOIN users u ON u.id = m.user_id\n           LEFT JOIN users a ON a.id = m.added_by\n           WHERE m.group_id = $1 AND u.deleted_at IS NULL\n           ORDER BY lower(u.username::text)",
   "describe": {
     "columns": [
       {
@@ -16,7 +16,7 @@
       },
       {
         "ordinal": 1,
-        "name": "username",
+        "name": "username: String",
         "type_info": {
           "Custom": {
             "name": "citext",
@@ -43,7 +43,29 @@
       },
       {
         "ordinal": 3,
-        "name": "email",
+        "name": "added_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "group_members",
+            "name": "added_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "added_by_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "added_by_username?: String",
         "type_info": {
           "Custom": {
             "name": "citext",
@@ -53,49 +75,25 @@
         "origin": {
           "Table": {
             "table": "users",
-            "name": "email"
-          }
-        }
-      },
-      {
-        "ordinal": 4,
-        "name": "verified!",
-        "type_info": "Bool",
-        "origin": "Expression"
-      },
-      {
-        "ordinal": 5,
-        "name": "role",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "users",
-            "name": "role"
+            "name": "username"
           }
         }
       },
       {
         "ordinal": 6,
-        "name": "created_at",
-        "type_info": "Timestamptz",
+        "name": "added_by_name?",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "users",
-            "name": "created_at"
+            "name": "display_name"
           }
         }
-      },
-      {
-        "ordinal": 7,
-        "name": "stale!",
-        "type_info": "Bool",
-        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
-        "Bytea",
-        "Int4"
+        "Int8"
       ]
     },
     "nullable": [
@@ -103,11 +101,10 @@
       false,
       false,
       false,
-      null,
       false,
       false,
-      null
+      false
     ]
   },
-  "hash": "bb53b54aab3adbfd80e0c643a867a6ff6ec69c162520c2f8c1f5102b5829146b"
+  "hash": "c48da66ad0dc101e5828525edc9b9186e9bf446ea00a64af498acd4b7c5102df"
 }

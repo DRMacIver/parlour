@@ -26,8 +26,7 @@
           <td class="main-col">
             <div class="row-title">
               <a href="/c/{{ summary.category.slug }}">{{ summary.category.name }}</a>
-              {% if summary.read_level == "members" %}<span class="flag">Members only</span>{% endif %}
-              {% if summary.read_level == "groups" %}<span class="flag">Restricted</span>{% endif %}
+              {% if let Some(access) = crate::format::access_label(summary.read_level, summary.group_names) %}<span class="flag flag-access">{{ access }}</span>{% endif %}
             </div>
             {% if !summary.description.is_empty() %}<div class="row-meta">{{ summary.description }}</div>{% endif %}
           </td>

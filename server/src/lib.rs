@@ -3,37 +3,33 @@ mod admin_pages;
 mod assets;
 mod auth_pages;
 pub mod cache;
-pub mod changes;
 pub mod client;
 pub mod config;
-pub mod content;
 pub mod csrf;
+pub mod db;
 pub mod diff;
 pub mod emails;
 mod error;
 pub mod format;
 pub mod http_cache;
 mod invite_pages;
-pub mod invites;
-pub mod jobs;
-pub mod login_tokens;
 pub mod mail;
 pub mod markdown;
-pub mod members;
 mod pages;
 pub mod pagination;
 pub mod permissions;
 pub mod ratelimit;
-pub mod seed;
-pub mod sessions;
-pub mod settings;
 pub mod setup;
-pub mod store;
 pub mod tokens;
 pub mod viewer;
 mod web;
 mod write_pages;
 pub mod writing;
+
+pub use db::{
+    changes, content, groups, invites, jobs, login_tokens, members, seed, sessions, settings,
+    store, users,
+};
 
 use std::sync::{Arc, Mutex};
 
@@ -43,6 +39,8 @@ use axum::middleware;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use sqlx::PgPool;
+
+use crate::db::Db;
 use sqlx::migrate::Migrator;
 
 use crate::cache::PageCache;
@@ -59,7 +57,7 @@ pub const DEFAULT_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
-    db: PgPool,
+    db: Db,
     cache: Arc<PageCache>,
     config: Arc<Config>,
     mailer: Mailer,
@@ -81,7 +79,7 @@ impl AppState {
         jobs.register(mail::JOB_KIND, mail::run_job);
         jobs.scrub_on_failure(mail::JOB_KIND, mail::scrub);
         AppState {
-            db,
+            db: Db::new(db),
             cache: Arc::new(cache),
             config: Arc::new(Config::development()),
             mailer: Mailer::default(),
@@ -106,7 +104,7 @@ impl AppState {
         self
     }
 
-    pub fn db(&self) -> &PgPool {
+    pub fn db(&self) -> &Db {
         &self.db
     }
 
@@ -271,7 +269,7 @@ pub fn app(state: AppState) -> Router {
 }
 
 async fn healthz(axum::extract::State(state): axum::extract::State<AppState>) -> impl IntoResponse {
-    match sqlx::query("SELECT 1").execute(&state.db).await {
+    match state.db.ping().await {
         Ok(_) => (StatusCode::OK, "ok"),
         Err(err) => {
             tracing::error!(%err, "health check failed to reach the database");

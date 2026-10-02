@@ -37,7 +37,7 @@
           Created {% call m::time(invite.created_at) %}{% endcall %}
           {% if invite.status == crate::invites::InviteStatus::Valid %} · expires {% call m::time(invite.expires_at) %}{% endcall %}{% endif %}
           {% if !invite.note.is_empty() %} · “{{ invite.note }}”{% endif %}
-          {% if !invite.grant_group_ids.is_empty() %} · adds to {{ crate::format::plural(invite.grant_group_ids.len() as i64, "group", "groups") }}{% endif %}
+          {% if !invite.grant_groups.is_empty() %} · adds to {{ invite.grant_groups.join(", ") }}{% endif %}
         </div>
         {% if !invite.used_by.is_empty() %}
         <div class="row-meta">Joined:
@@ -84,6 +84,14 @@
         <input id="uses" name="uses" type="number" min="1" max="1000" value="{{ form.uses }}">
         <span class="field-hint">Staff can make links that several people can use, for bringing in a group at once. An invite sent to an email address is used once.</span>
       </div>
+      {% if !groups.is_empty() %}
+      <fieldset class="field">
+        <legend>Add the people who join to these groups <span class="field-hint">(optional)</span></legend>
+        {% for group in groups %}
+        <label class="choice"><input type="checkbox" name="group" value="{{ group.id }}"{% if self.group_chosen(group.id) %} checked{% endif %}> {{ group.name }}</label>
+        {% endfor %}
+      </fieldset>
+      {% endif %}
       {% else %}
       <input type="hidden" name="uses" value="1">
       {% endif %}

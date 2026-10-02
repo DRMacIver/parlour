@@ -14,6 +14,7 @@ use crate::changes::Change;
 use crate::client::ClientIp;
 use crate::content::Deps;
 use crate::error::AppError;
+use crate::groups::{self, GroupSummary};
 use crate::invites::{
     self, CreatedInvite, FinishError, InviteRow, InviteStatus, NewInvite, PendingRegistration,
     RedeemError, Redeemed, Registration,
@@ -41,6 +42,14 @@ struct InvitesTemplate {
     created: Option<CreatedInvite>,
     errors: Vec<String>,
     form: InviteForm,
+    /// The groups staff can have an invite add people to.
+    groups: Vec<GroupSummary>,
+}
+
+impl InvitesTemplate {
+    fn group_chosen(&self, id: &i64) -> bool {
+        self.form.groups.contains(id)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -49,6 +58,7 @@ struct InviteForm {
     note: String,
     days: i64,
     uses: i64,
+    groups: Vec<i64>,
 }
 
 impl Default for InviteForm {
@@ -58,6 +68,7 @@ impl Default for InviteForm {
             note: String::new(),
             days: 7,
             uses: 1,
+            groups: Vec::new(),
         }
     }
 }
@@ -89,6 +100,11 @@ async fn render_invites(
             created,
             errors,
             form,
+            groups: if staff {
+                groups::list(db).await?
+            } else {
+                Vec::new()
+            },
         },
     )
 }
@@ -135,8 +151,9 @@ fn parse_invite_form(fields: &[(String, String)]) -> (InviteForm, NewInvite, Vec
         note: form.note.clone(),
         expires_in_days: form.days,
         max_uses: i32::try_from(form.uses).unwrap_or(0),
-        grant_group_ids: groups,
+        grant_group_ids: groups.clone(),
     };
+    form.groups = groups;
     (form, new, problems)
 }
 

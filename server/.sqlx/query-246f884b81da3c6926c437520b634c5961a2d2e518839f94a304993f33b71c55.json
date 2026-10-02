@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.id, c.slug, c.name, c.read_level, c.write_level, s.name AS \"section_name?\"\n        FROM categories c LEFT JOIN sections s ON s.id = c.section_id\n        WHERE category_readable(c.read_level, c.id, $1, $2)\n        ORDER BY s.position NULLS FIRST, s.id NULLS FIRST, c.position, c.id\n        ",
+  "query": "\n        SELECT c.id, c.slug, c.name, c.description, c.read_level, c.write_level, s.name AS \"section_name?\",\n               array(SELECT g.name FROM category_groups cg JOIN groups g ON g.id = cg.group_id\n                     WHERE cg.category_id = c.id AND cg.access = 'read' AND c.read_level = 'groups'\n                     ORDER BY lower(g.name), g.id) AS \"group_names!\",\n               (SELECT count(*) FROM threads t\n                WHERE t.category_id = c.id AND t.deleted_at IS NULL\n                  AND thread_readable(t.visibility, t.category_id, $2, $3)) AS \"thread_count!\"\n        FROM categories c\n        LEFT JOIN sections s ON s.id = c.section_id\n        WHERE c.slug = $1 AND category_readable(c.read_level, c.id, $2, $3)\n        ",
   "describe": {
     "columns": [
       {
@@ -38,6 +38,17 @@
       },
       {
         "ordinal": 3,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "categories",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
         "name": "read_level",
         "type_info": "Text",
         "origin": {
@@ -48,7 +59,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "write_level",
         "type_info": "Text",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "section_name?",
         "type_info": "Text",
         "origin": {
@@ -68,10 +79,23 @@
             "name": "name"
           }
         }
+      },
+      {
+        "ordinal": 7,
+        "name": "group_names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "thread_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
+        "Text",
         "TextArray",
         "Int8Array"
       ]
@@ -82,8 +106,11 @@
       false,
       false,
       false,
-      false
+      false,
+      true,
+      null,
+      null
     ]
   },
-  "hash": "dc5e3c25537069bdcfa75ca7683d366927ad0ec0b462853c9f59421452aec6ce"
+  "hash": "246f884b81da3c6926c437520b634c5961a2d2e518839f94a304993f33b71c55"
 }

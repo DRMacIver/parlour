@@ -5,17 +5,16 @@
 //! A session lasts until it has gone unused for [`IDLE_DAYS`] days, or until
 //! its owner logs out or resets their password.
 
+use crate::AppState;
+use crate::accounts::Role;
+use crate::db::{Db, Handle, KEY};
+use crate::tokens;
+use crate::viewer::{SESSION_COOKIE, UserCtx, Viewer, session_cookie};
 use axum::extract::{Request, State};
 use axum::http::header::{SET_COOKIE, USER_AGENT};
 use axum::http::{HeaderMap, HeaderValue};
 use axum::middleware::Next;
 use axum::response::Response;
-use sqlx::PgPool;
-
-use crate::AppState;
-use crate::accounts::Role;
-use crate::tokens;
-use crate::viewer::{SESSION_COOKIE, UserCtx, Viewer, session_cookie};
 
 /// Sessions unused for this long are no longer valid.
 pub const IDLE_DAYS: i32 = 30;
@@ -42,8 +41,8 @@ pub fn clear_cookie(secure: bool) -> HeaderValue {
 }
 
 /// Starts a session for a user, returning the token for the cookie.
-pub async fn create(
-    db: &PgPool,
+pub async fn create<'c>(
+    db: impl Handle<'c>,
     user_id: i64,
     headers: &HeaderMap,
     ip: &str,
@@ -53,7 +52,7 @@ pub async fn create(
         .get(USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .map(|ua| ua.chars().take(300).collect::<String>());
-    let mut tx = db.begin().await?;
+    let mut tx = db.open(KEY).begin().await?;
     sqlx::query!(
         "DELETE FROM sessions WHERE user_id = $1 AND last_seen_at < now() - make_interval(days => $2)",
         user_id,
@@ -82,23 +81,24 @@ pub async fn create(
 
 /// The user a session token belongs to, if it is a current session of an
 /// account that hasn't been deleted.
-pub async fn lookup(db: &PgPool, token: &str) -> sqlx::Result<Option<UserCtx>> {
+pub async fn lookup(db: &Db, token: &str) -> sqlx::Result<Option<UserCtx>> {
     if !tokens::plausible(token) {
         return Ok(None);
     }
     let hash = tokens::hash(token);
     let Some(row) = sqlx::query!(
-        r#"SELECT u.id, u.username, u.display_name, u.email, u.email_verified_at IS NOT NULL AS "verified!",
-                  u.role, u.created_at, s.last_seen_at < now() - interval '5 minutes' AS "stale!"
-           FROM sessions s JOIN users u ON u.id = s.user_id
-           WHERE s.token_hash = $1 AND u.deleted_at IS NULL
-             AND s.last_seen_at > now() - make_interval(days => $2)"#,
+        r#"SELECT s.user_id, s.last_seen_at < now() - interval '5 minutes' AS "stale!"
+           FROM sessions s
+           WHERE s.token_hash = $1 AND s.last_seen_at > now() - make_interval(days => $2)"#,
         hash,
         IDLE_DAYS,
     )
-    .fetch_optional(db)
+    .fetch_optional(db.pool())
     .await?
     else {
+        return Ok(None);
+    };
+    let Some(user) = user_ctx(db, row.user_id).await? else {
         return Ok(None);
     };
     // Recording every request would mean a write per page view; once every
@@ -109,10 +109,31 @@ pub async fn lookup(db: &PgPool, token: &str) -> sqlx::Result<Option<UserCtx>> {
              UPDATE users SET last_seen_at = now() WHERE id IN (SELECT user_id FROM s)",
             hash
         )
-        .execute(db)
+        .execute(db.pool())
         .await?;
     }
-    Ok(Some(UserCtx {
+    Ok(Some(user))
+}
+
+/// Everything about a member that decides what they may see and do, as
+/// it is now: their role, and their groups and the categories those groups
+/// may read. `None` if the account doesn't exist or was deleted.
+pub async fn user_ctx(db: &Db, user_id: i64) -> sqlx::Result<Option<UserCtx>> {
+    let row = sqlx::query!(
+        r#"SELECT u.id, u.username, u.display_name, u.email, u.email_verified_at IS NOT NULL AS "verified!",
+                  u.role, u.created_at,
+                  array(SELECT m.group_id FROM group_members m WHERE m.user_id = u.id ORDER BY 1)
+                      AS "group_ids!",
+                  array(SELECT DISTINCT cg.category_id FROM category_groups cg
+                        JOIN group_members m ON m.group_id = cg.group_id
+                        WHERE m.user_id = u.id AND cg.access = 'read' ORDER BY 1) AS "group_category_ids!"
+           FROM users u
+           WHERE u.id = $1 AND u.deleted_at IS NULL"#,
+        user_id,
+    )
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(row.map(|row| UserCtx {
         id: row.id,
         username: row.username.to_string(),
         display_name: row.display_name,
@@ -120,35 +141,36 @@ pub async fn lookup(db: &PgPool, token: &str) -> sqlx::Result<Option<UserCtx>> {
         email_verified: row.verified,
         role: Role::parse(&row.role).unwrap_or(Role::User),
         created_at: row.created_at,
-        // Group memberships are loaded here once groups exist (M5).
-        group_ids: Vec::new(),
+        group_ids: row.group_ids,
+        group_category_ids: row.group_category_ids,
     }))
 }
 
 /// Ends one session.
-pub async fn delete(db: &PgPool, token: &str) -> sqlx::Result<()> {
+pub async fn delete(db: &Db, token: &str) -> sqlx::Result<()> {
     sqlx::query!(
         "DELETE FROM sessions WHERE token_hash = $1",
         tokens::hash(token)
     )
-    .execute(db)
+    .execute(db.pool())
     .await?;
     Ok(())
 }
 
 /// Ends every session of a user except (optionally) one.
-pub async fn delete_all(
-    db: &mut sqlx::PgConnection,
+pub async fn delete_all<'c>(
+    db: impl Handle<'c>,
     user_id: i64,
     except_token: Option<&str>,
 ) -> sqlx::Result<()> {
+    let mut conn = db.open(KEY).acquire().await?;
     let keep = except_token.map(tokens::hash);
     sqlx::query!(
         "DELETE FROM sessions WHERE user_id = $1 AND token_hash IS DISTINCT FROM $2",
         user_id,
         keep
     )
-    .execute(db)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }

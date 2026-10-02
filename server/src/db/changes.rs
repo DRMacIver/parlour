@@ -4,7 +4,7 @@
 //! with a [`Change`], which works out the tags from the current state of the
 //! database and clears them.
 
-use sqlx::PgPool;
+use crate::db::Db;
 
 use crate::cache::Tag;
 
@@ -38,7 +38,7 @@ pub enum Change {
 }
 
 /// The tags to clear for a change.
-pub async fn tags_for(db: &PgPool, change: Change) -> sqlx::Result<Vec<Tag>> {
+pub async fn tags_for(db: &Db, change: Change) -> sqlx::Result<Vec<Tag>> {
     let mut tags = Vec::new();
     match change {
         Change::PostCreated { post_id } | Change::PostRemoved { post_id } => {
@@ -75,7 +75,7 @@ pub async fn tags_for(db: &PgPool, change: Change) -> sqlx::Result<Vec<Tag>> {
                    FROM threads t WHERE t.id = $1"#,
                 thread_id
             )
-            .fetch_optional(db)
+            .fetch_optional(db.pool())
             .await?;
             if let Some(thread) = thread {
                 tags.extend(thread.category_id.map(Tag::Category));
@@ -86,7 +86,7 @@ pub async fn tags_for(db: &PgPool, change: Change) -> sqlx::Result<Vec<Tag>> {
                 "SELECT DISTINCT author_id FROM posts WHERE thread_id = $1",
                 thread_id
             )
-            .fetch_all(db)
+            .fetch_all(db.pool())
             .await?;
             tags.extend(authors.into_iter().map(Tag::User));
         }
@@ -105,7 +105,7 @@ pub async fn tags_for(db: &PgPool, change: Change) -> sqlx::Result<Vec<Tag>> {
                 "SELECT invited_by_user_id FROM users WHERE id = $1",
                 user_id
             )
-            .fetch_optional(db)
+            .fetch_optional(db.pool())
             .await?
             .flatten();
             tags.extend(inviter.map(Tag::User));
@@ -123,7 +123,7 @@ struct PostContext {
     forked_from_thread_id: Option<i64>,
 }
 
-async fn post_context(db: &PgPool, post_id: i64) -> sqlx::Result<Option<PostContext>> {
+async fn post_context(db: &Db, post_id: i64) -> sqlx::Result<Option<PostContext>> {
     let row = sqlx::query!(
         r#"SELECT p.thread_id, p.author_id, t.category_id,
                   (SELECT sp.thread_id FROM posts sp WHERE sp.id = t.forked_from_post_id) AS forked_from_thread_id
@@ -131,7 +131,7 @@ async fn post_context(db: &PgPool, post_id: i64) -> sqlx::Result<Option<PostCont
            WHERE p.id = $1"#,
         post_id
     )
-    .fetch_optional(db)
+    .fetch_optional(db.pool())
     .await?;
     Ok(row.map(|row| PostContext {
         thread_id: row.thread_id,
@@ -142,12 +142,12 @@ async fn post_context(db: &PgPool, post_id: i64) -> sqlx::Result<Option<PostCont
 }
 
 /// Threads that embed this post.
-async fn forks_of(db: &PgPool, post_id: i64) -> sqlx::Result<Vec<Tag>> {
+async fn forks_of(db: &Db, post_id: i64) -> sqlx::Result<Vec<Tag>> {
     let ids = sqlx::query_scalar!(
         "SELECT id FROM threads WHERE forked_from_post_id = $1",
         post_id
     )
-    .fetch_all(db)
+    .fetch_all(db.pool())
     .await?;
     Ok(ids.into_iter().map(Tag::Thread).collect())
 }

@@ -87,6 +87,20 @@ pub fn names(names: &[String]) -> String {
     text
 }
 
+/// Who can read a category, for a label beside its name: nothing for a
+/// public category, "Members only", or the groups that may read it.
+pub fn access_label(read_level: &str, group_names: &[String]) -> Option<String> {
+    match read_level {
+        "public" => None,
+        "members" => Some("Members only".to_owned()),
+        _ => Some(match group_names {
+            [] => "Staff only".to_owned(),
+            [one] => format!("{one} group"),
+            [first @ .., last] => format!("{} and {last} groups", first.join(", ")),
+        }),
+    }
+}
+
 pub fn thread_href(id: &i64, slug: &str) -> String {
     format!("/t/{id}/{slug}")
 }
@@ -114,6 +128,22 @@ mod tests {
         assert_eq!(date(&at), "1 Oct 2026");
         assert_eq!(month_year(&at), "October 2026");
         assert_eq!(iso(&at), "2026-10-01T09:05:00Z");
+    }
+
+    #[test]
+    fn labels_who_can_read() {
+        let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(access_label("public", &[]), None);
+        assert_eq!(access_label("members", &[]).unwrap(), "Members only");
+        assert_eq!(access_label("groups", &[]).unwrap(), "Staff only");
+        assert_eq!(
+            access_label("groups", &names(&["Organisers"])).unwrap(),
+            "Organisers group"
+        );
+        assert_eq!(
+            access_label("groups", &names(&["Board", "Organisers", "Treasurers"])).unwrap(),
+            "Board, Organisers and Treasurers groups"
+        );
     }
 
     #[test]

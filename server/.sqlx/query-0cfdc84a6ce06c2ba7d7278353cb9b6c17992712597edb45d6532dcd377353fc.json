@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE invites SET uses = uses + 1 WHERE id = $1 RETURNING grant_group_ids",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "grant_group_ids",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "grant_group_ids"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0cfdc84a6ce06c2ba7d7278353cb9b6c17992712597edb45d6532dcd377353fc"
+}

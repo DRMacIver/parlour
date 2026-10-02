@@ -168,7 +168,7 @@ async fn setup_tests_and_saves_email_settings(db: PgPool) {
     assert!(server.messages()[0].contains("Test email from"));
     // Testing didn't save anything.
     assert!(
-        parlour::mail::saved_smtp_settings(&forum.db)
+        parlour::mail::saved_smtp_settings(forum.state.db())
             .await
             .unwrap()
             .is_none()
@@ -178,7 +178,7 @@ async fn setup_tests_and_saves_email_settings(db: PgPool) {
     save.push(("action", "save"));
     let response = forum.submit("/setup/email", &save, Some(&cookie)).await;
     assert_eq!(response.location(), "/setup/invites");
-    let saved = parlour::mail::saved_smtp_settings(&forum.db)
+    let saved = parlour::mail::saved_smtp_settings(forum.state.db())
         .await
         .unwrap()
         .unwrap();
@@ -392,7 +392,7 @@ async fn the_smtp_password_is_never_shown(db: PgPool) {
     let mut again = fields.to_vec();
     again.retain(|(k, _)| *k != "smtp_password");
     forum.submit("/admin/settings", &again, Some(&cookie)).await;
-    let saved = parlour::mail::saved_smtp_settings(&forum.db)
+    let saved = parlour::mail::saved_smtp_settings(forum.state.db())
         .await
         .unwrap()
         .unwrap();
@@ -421,7 +421,7 @@ async fn the_smtp_password_stays_with_its_server(db: PgPool) {
         ]
     };
     let saved_password = || async {
-        parlour::mail::saved_smtp_settings(&forum.db)
+        parlour::mail::saved_smtp_settings(forum.state.db())
             .await
             .unwrap()
             .unwrap()
@@ -506,7 +506,7 @@ async fn setup_doesnt_copy_the_environments_smtp_password(db: PgPool) {
         .await;
     assert_eq!(response.location(), "/setup/invites");
     assert!(
-        parlour::mail::saved_smtp_settings(&forum.db)
+        parlour::mail::saved_smtp_settings(forum.state.db())
             .await
             .unwrap()
             .is_none()

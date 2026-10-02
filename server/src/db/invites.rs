@@ -14,16 +14,17 @@
 //!   ([`finish`]) makes the account. A member's address gets a note
 //!   instead, and the page says the same either way.
 //! - Staff can also make links with several uses that put everyone who
-//!   joins with them into groups (the group ids are recorded now; groups
-//!   arrive in M5).
+//!   joins with them into groups.
 //! - Registering records who invited the new member and with which invite.
 //!   The database refuses to change either afterwards, so the invite tree is
 //!   a permanent public record.
 
 use chrono::{DateTime, Duration, Utc};
-use sqlx::{PgConnection, PgPool};
+use sqlx::PgConnection;
 
 use crate::accounts::{self, Role};
+use crate::db::Db;
+use crate::groups;
 use crate::settings::{InvitePolicy, RegistrationMode};
 use crate::viewer::UserCtx;
 use crate::{AppState, emails, format, mail, ratelimit, settings, tokens};
@@ -74,7 +75,7 @@ pub fn may_invite(
 }
 
 /// Whether this member may invite people now, and if not why not.
-pub async fn check_may_invite(db: &PgPool, user: &UserCtx) -> sqlx::Result<Result<(), String>> {
+pub async fn check_may_invite(db: &Db, user: &UserCtx) -> sqlx::Result<Result<(), String>> {
     let policy = settings::invite_policy(db).await?;
     let mode = settings::registration_mode(db).await?;
     Ok(may_invite(
@@ -152,8 +153,13 @@ pub async fn create(
     if email.is_some() && new.max_uses != 1 {
         problems.push("An invite sent to an email address can only be used once.".to_owned());
     }
-    if !staff && !new.grant_group_ids.is_empty() {
+    let mut grant_group_ids = new.grant_group_ids.clone();
+    grant_group_ids.sort();
+    grant_group_ids.dedup();
+    if !staff && !grant_group_ids.is_empty() {
         problems.push("Only staff can make invites that add people to groups.".to_owned());
+    } else if groups::existing(db, &grant_group_ids).await? != grant_group_ids {
+        problems.push("Choose groups from the list.".to_owned());
     }
     let note = new.note.trim();
     if note.chars().count() > 200 {
@@ -165,7 +171,7 @@ pub async fn create(
                WHERE created_by = $1 AND revoked_at IS NULL AND uses < max_uses AND expires_at > now()"#,
             creator.id
         )
-        .fetch_one(db)
+        .fetch_one(db.pool())
         .await?;
         if pending >= MAX_PENDING {
             problems.push(format!(
@@ -179,7 +185,7 @@ pub async fn create(
 
     let code = tokens::random_token(16);
     let url = state.config().url(&format!("/invite/{code}"));
-    let mut tx = db.begin().await?;
+    let mut tx = db.pool().begin().await?;
     let invite = sqlx::query!(
         r#"INSERT INTO invites (code_hash, created_by, email, max_uses, expires_at, grant_group_ids, note)
            VALUES ($1, $2, $3, $4, now() + make_interval(days => $5), $6, $7)
@@ -189,7 +195,7 @@ pub async fn create(
         email.as_deref() as _,
         new.max_uses,
         new.expires_in_days as i32,
-        &new.grant_group_ids,
+        &grant_group_ids,
         note,
     )
     .fetch_one(&mut *tx)
@@ -282,7 +288,8 @@ pub struct InviteRow {
     pub note: String,
     pub max_uses: i64,
     pub uses: i64,
-    pub grant_group_ids: Vec<i64>,
+    /// The names of the groups it adds people to.
+    pub grant_groups: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub status: InviteStatus,
@@ -290,9 +297,11 @@ pub struct InviteRow {
     pub used_by: Vec<(String, String, DateTime<Utc>)>,
 }
 
-pub async fn list_for(db: &PgPool, user_id: i64) -> sqlx::Result<Vec<InviteRow>> {
+pub async fn list_for(db: &Db, user_id: i64) -> sqlx::Result<Vec<InviteRow>> {
     let rows = sqlx::query!(
-        r#"SELECT i.id, i.email AS "email: String", i.note, i.max_uses, i.uses, i.grant_group_ids,
+        r#"SELECT i.id, i.email AS "email: String", i.note, i.max_uses, i.uses,
+                  array(SELECT g.name FROM groups g WHERE g.id = ANY(i.grant_group_ids)
+                        ORDER BY lower(g.name), g.id) AS "grant_groups!",
                   i.created_at, i.expires_at, invite_status(i.revoked_at, i.uses, i.max_uses, i.expires_at) AS "status!",
                   coalesce((SELECT array_agg(u.username::text ORDER BY u.created_at) FROM users u WHERE u.invite_id = i.id), '{}') AS "usernames!",
                   coalesce((SELECT array_agg(u.display_name ORDER BY u.created_at) FROM users u WHERE u.invite_id = i.id), '{}') AS "names!",
@@ -303,7 +312,7 @@ pub async fn list_for(db: &PgPool, user_id: i64) -> sqlx::Result<Vec<InviteRow>>
            LIMIT 200"#,
         user_id
     )
-    .fetch_all(db)
+    .fetch_all(db.pool())
     .await?;
     Ok(rows
         .into_iter()
@@ -313,7 +322,7 @@ pub async fn list_for(db: &PgPool, user_id: i64) -> sqlx::Result<Vec<InviteRow>>
             note: row.note,
             max_uses: i64::from(row.max_uses),
             uses: i64::from(row.uses),
-            grant_group_ids: row.grant_group_ids,
+            grant_groups: row.grant_groups,
             created_at: row.created_at,
             expires_at: row.expires_at,
             status: InviteStatus::parse(&row.status),
@@ -330,7 +339,7 @@ pub async fn list_for(db: &PgPool, user_id: i64) -> sqlx::Result<Vec<InviteRow>>
 
 /// Revokes an invite, if `user` made it or is staff. Returns whether there
 /// was such an invite to revoke.
-pub async fn revoke(db: &PgPool, user: &UserCtx, invite_id: i64) -> sqlx::Result<bool> {
+pub async fn revoke(db: &Db, user: &UserCtx, invite_id: i64) -> sqlx::Result<bool> {
     let revoked = sqlx::query!(
         "UPDATE invites SET revoked_at = coalesce(revoked_at, now())
          WHERE id = $1 AND (created_by = $2 OR $3)",
@@ -338,7 +347,7 @@ pub async fn revoke(db: &PgPool, user: &UserCtx, invite_id: i64) -> sqlx::Result
         user.id,
         user.role.is_staff(),
     )
-    .execute(db)
+    .execute(db.pool())
     .await?;
     Ok(revoked.rows_affected() > 0)
 }
@@ -354,7 +363,7 @@ pub struct InviteInfo {
     pub expires_at: DateTime<Utc>,
 }
 
-pub async fn find(db: &PgPool, code: &str) -> sqlx::Result<Option<InviteInfo>> {
+pub async fn find(db: &Db, code: &str) -> sqlx::Result<Option<InviteInfo>> {
     if !tokens::plausible(code) {
         return Ok(None);
     }
@@ -365,7 +374,7 @@ pub async fn find(db: &PgPool, code: &str) -> sqlx::Result<Option<InviteInfo>> {
            WHERE i.code_hash = $1"#,
         tokens::hash(code)
     )
-    .fetch_optional(db)
+    .fetch_optional(db.pool())
     .await?;
     Ok(row.map(|row| InviteInfo {
         id: row.id,
@@ -480,7 +489,7 @@ pub async fn redeem(
     let mut problems = Vec::new();
     let (username, display_name, password) = check_registration(registration, &mut problems);
 
-    let mut tx = db.begin().await?;
+    let mut tx = db.pool().begin().await?;
     let Some(invite) = sqlx::query!(
         r#"SELECT i.id, i.created_by, i.email AS "email: String", invite_status(i.revoked_at, i.uses, i.max_uses, i.expires_at) AS "status!"
            FROM invites i WHERE i.code_hash = $1 FOR UPDATE"#,
@@ -556,7 +565,6 @@ pub async fn redeem(
             "That username or email address has just been taken. Try another.".to_owned(),
         ])));
     };
-    // M5: add the new member to the invite's grant_group_ids here.
     tx.commit().await?;
     Ok(Ok(Redeemed::Joined(Joined {
         user_id,
@@ -595,12 +603,14 @@ async fn insert_member(
         Err(sqlx::Error::Database(err)) if err.is_unique_violation() => return Ok(None),
         Err(err) => return Err(err),
     };
-    sqlx::query!(
-        "UPDATE invites SET uses = uses + 1 WHERE id = $1",
+    let grant = sqlx::query_scalar!(
+        "UPDATE invites SET uses = uses + 1 WHERE id = $1 RETURNING grant_group_ids",
         invite_id
     )
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
+    // The invite's groups that still exist; the inviter added them.
+    groups::grant(&mut *tx, user_id, &grant, Some(invited_by)).await?;
     Ok(Some(user_id))
 }
 
@@ -623,7 +633,7 @@ async fn send_registration_email(
     ) {
         return Ok(());
     }
-    let mut tx = state.db().begin().await?;
+    let mut tx = state.db().pool().begin().await?;
     let site_name = settings::site_name(state.db()).await?;
     let message = match member_with_email(&mut tx, email).await? {
         Some(member) => emails::already_member(
@@ -677,7 +687,7 @@ pub struct PendingRegistration {
 }
 
 pub async fn pending_registration(
-    db: &PgPool,
+    db: &Db,
     token: &str,
 ) -> sqlx::Result<Option<PendingRegistration>> {
     if !tokens::plausible(token) {
@@ -690,7 +700,7 @@ pub async fn pending_registration(
            WHERE r.token_hash = $1 AND r.expires_at > now()"#,
         tokens::hash(token)
     )
-    .fetch_optional(db)
+    .fetch_optional(db.pool())
     .await?;
     Ok(row.map(|row| PendingRegistration {
         username: row.username,
@@ -724,7 +734,7 @@ pub async fn finish(
     if !tokens::plausible(token) {
         return Ok(Err(FinishError::Expired));
     }
-    let mut tx = db.begin().await?;
+    let mut tx = db.pool().begin().await?;
     let Some(registration) = sqlx::query!(
         r#"SELECT invite_id, display_name, email AS "email: String", password_hash
            FROM registrations WHERE token_hash = $1 AND expires_at > now()
@@ -775,7 +785,6 @@ pub async fn finish(
             "That username has just been taken. Try another.".to_owned(),
         ])));
     };
-    // M5: add the new member to the invite's grant_group_ids here.
     sqlx::query!(
         "DELETE FROM registrations WHERE token_hash = $1",
         tokens::hash(token)

@@ -8,9 +8,8 @@
 //! extensions, where the [`Viewer`] extractor finds it.
 //!
 //! Logged-in members can read public and members-only categories; staff can
-//! read every category (DESIGN.md §3.1). Group membership (M5) adds the
-//! group-restricted categories a member can read to [`ReadFilter`] without
-//! changing the queries' shape.
+//! read every category (DESIGN.md §3.1). Group membership adds the
+//! group-restricted categories a member's groups may read to [`ReadFilter`].
 
 use std::convert::Infallible;
 
@@ -42,9 +41,11 @@ pub struct UserCtx {
     pub email_verified: bool,
     pub role: Role,
     pub created_at: DateTime<Utc>,
-    /// The groups this member belongs to. Groups arrive in M5; until then
-    /// this is always empty.
+    /// The groups this member belongs to.
     pub group_ids: Vec<i64>,
+    /// The categories those groups may read. They matter only while a
+    /// category's read level is `groups`.
+    pub group_category_ids: Vec<i64>,
 }
 
 /// The bind parameters for the visibility condition in SQL.
@@ -65,7 +66,10 @@ impl Viewer {
         };
         ReadFilter {
             visibilities: levels.iter().map(|level| (*level).to_owned()).collect(),
-            group_category_ids: Vec::new(),
+            group_category_ids: match self {
+                Viewer::User(user) => user.group_category_ids.clone(),
+                Viewer::Anonymous => Vec::new(),
+            },
         }
     }
 
@@ -142,6 +146,7 @@ mod tests {
             role,
             created_at: Utc::now(),
             group_ids: Vec::new(),
+            group_category_ids: Vec::new(),
         })
     }
 
@@ -188,6 +193,18 @@ mod tests {
             );
         }
         assert!(!user(Role::User).is_staff());
+        let Viewer::User(mut ctx) = user(Role::User) else {
+            unreachable!()
+        };
+        ctx.group_ids = vec![4];
+        ctx.group_category_ids = vec![7, 9];
+        assert_eq!(
+            Viewer::User(ctx).filter(),
+            ReadFilter {
+                visibilities: vec!["public".into(), "members".into()],
+                group_category_ids: vec![7, 9],
+            }
+        );
         assert!(user(Role::Moderator).is_staff());
         assert!(!user(Role::Moderator).is_admin());
         assert!(user(Role::Admin).is_admin());

@@ -159,11 +159,16 @@ fn thread_crumbs(thread: &ThreadTarget) -> Vec<Crumb> {
     crumbs
 }
 
+/// A category's name with who can read it, as in "Lounge (members only)"
+/// or "Planning (Organisers group)".
 fn category_label(category: &CategoryTarget) -> String {
-    match category.read_level.as_str() {
-        "public" => category.category.name.clone(),
-        "members" => format!("{} (members only)", category.category.name),
-        _ => format!("{} (restricted)", category.category.name),
+    match format::access_label(&category.read_level, &category.group_names) {
+        None => category.category.name.clone(),
+        // Group names keep their capitals.
+        Some(access) if !category.group_names.is_empty() => {
+            format!("{} ({access})", category.category.name)
+        }
+        Some(access) => format!("{} ({})", category.category.name, access.to_lowercase()),
     }
 }
 
@@ -193,8 +198,7 @@ async fn render_compose(
             errors.push(TOO_FAST_PREVIEW.to_owned());
             None
         } else {
-            let mut conn = state.db().acquire().await?;
-            Some(store::render_post(&mut conn, &body).await?.html)
+            Some(store::render_post(state.db(), &body).await?.html)
         }
     } else {
         None

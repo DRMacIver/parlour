@@ -1,21 +1,22 @@
 //! Site settings, stored as JSON in the `settings` table and edited in
 //! `/setup` and `/admin/settings`.
 
+use crate::db::{Db, Handle, KEY};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use sqlx::{PgConnection, PgPool};
 
 pub const DEFAULT_SITE_NAME: &str = "Parlour";
 
-pub async fn get<T: DeserializeOwned>(db: &PgPool, key: &str) -> sqlx::Result<Option<T>> {
+pub async fn get<T: DeserializeOwned>(db: &Db, key: &str) -> sqlx::Result<Option<T>> {
     let value: Option<serde_json::Value> =
         sqlx::query_scalar!("SELECT value FROM settings WHERE key = $1", key)
-            .fetch_optional(db)
+            .fetch_optional(db.pool())
             .await?;
     Ok(value.and_then(|v| serde_json::from_value(v).ok()))
 }
 
-pub async fn set<T: Serialize>(db: &mut PgConnection, key: &str, value: &T) -> sqlx::Result<()> {
+pub async fn set<'c, T: Serialize>(db: impl Handle<'c>, key: &str, value: &T) -> sqlx::Result<()> {
+    let mut conn = db.open(KEY).acquire().await?;
     let value = serde_json::to_value(value).expect("settings serialise");
     sqlx::query!(
         "INSERT INTO settings (key, value) VALUES ($1, $2)
@@ -23,12 +24,21 @@ pub async fn set<T: Serialize>(db: &mut PgConnection, key: &str, value: &T) -> s
         key,
         value
     )
-    .execute(db)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
 
-pub async fn site_name(db: &PgPool) -> sqlx::Result<String> {
+/// Forgets a setting, so that its default applies again.
+pub async fn unset<'c>(db: impl Handle<'c>, key: &str) -> sqlx::Result<()> {
+    let mut conn = db.open(KEY).acquire().await?;
+    sqlx::query!("DELETE FROM settings WHERE key = $1", key)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+pub async fn site_name(db: &Db) -> sqlx::Result<String> {
     Ok(get::<String>(db, "site_name")
         .await?
         .unwrap_or_else(|| DEFAULT_SITE_NAME.to_owned()))
@@ -62,7 +72,7 @@ impl RegistrationMode {
     }
 }
 
-pub async fn registration_mode(db: &PgPool) -> sqlx::Result<RegistrationMode> {
+pub async fn registration_mode(db: &Db) -> sqlx::Result<RegistrationMode> {
     Ok(get(db, "registration_mode").await?.unwrap_or_default())
 }
 
@@ -80,6 +90,6 @@ pub enum InvitePolicy {
     Staff,
 }
 
-pub async fn invite_policy(db: &PgPool) -> sqlx::Result<InvitePolicy> {
+pub async fn invite_policy(db: &Db) -> sqlx::Result<InvitePolicy> {
     Ok(get(db, "invite_policy").await?.unwrap_or_default())
 }
