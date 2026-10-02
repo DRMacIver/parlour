@@ -222,7 +222,7 @@ pub async fn conversations(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<
             rows: Vec::new(),
         });
     };
-    let blocked = blocked_authors(db, viewer).await?;
+    let blocked = blocked_authors(viewer);
     let rows = sqlx::query!(
         r#"
         SELECT t.id, t.title, t.last_post_at, t.last_seq,
@@ -290,17 +290,9 @@ pub async fn unread_conversations(db: &Db, viewer: &Viewer) -> sqlx::Result<i64>
     let Some(user_id) = viewer.filter().dm_viewer else {
         return Ok(0);
     };
-    sqlx::query_scalar!(
-        r#"SELECT count(*) AS "n!" FROM private_thread_participants me
-           JOIN threads t ON t.id = me.thread_id
-           LEFT JOIN thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $1
-           WHERE me.user_id = $1 AND me.left_at IS NULL AND t.deleted_at IS NULL
-             AND dm_readable(t.id, t.visibility, $1)
-             AND t.last_seq > coalesce(tr.last_read_seq, 0)"#,
-        user_id
-    )
-    .fetch_one(db.pool())
-    .await
+    sqlx::query_scalar!(r#"SELECT unread_conversation_count($1) AS "n!""#, user_id)
+        .fetch_one(db.pool())
+        .await
 }
 
 pub struct ConversationPage {

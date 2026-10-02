@@ -473,8 +473,8 @@ async fn thread_rows(
 
 pub struct ThreadPage {
     pub thread: ThreadRef,
-    pub category: CategoryRef,
-    pub section_name: Option<String>,
+    /// The thread's category, with what decides who may post in it.
+    pub category: CategoryTarget,
     pub author: UserRef,
     pub created_at: DateTime<Utc>,
     /// The number of the last post; posts are numbered from 1 and deleted
@@ -482,9 +482,6 @@ pub struct ThreadPage {
     pub last_seq: i64,
     pub pinned: bool,
     pub locked: bool,
-    /// The category's read and write levels, for deciding who may reply.
-    pub read_level: String,
-    pub write_level: String,
     /// For a quote-fork, the post it quotes.
     pub embed: Option<Embed>,
     pub posts: Vec<PostView>,
@@ -492,6 +489,22 @@ pub struct ThreadPage {
     /// number of the last post they'd seen, or `None` if they had never
     /// opened the thread.
     pub read_marker: Option<i64>,
+    /// For a logged-in viewer, how closely they follow the thread, as
+    /// stored (`None` if they never chose).
+    pub watch_level: Option<String>,
+}
+
+impl ThreadPage {
+    /// The thread as somewhere to reply, from what the page already loaded.
+    pub fn target(&self) -> ThreadTarget {
+        ThreadTarget {
+            thread: self.thread.clone(),
+            name: self.thread.title.clone(),
+            place: Place::Category(self.category.clone()),
+            locked: self.locked,
+            last_seq: self.last_seq,
+        }
+    }
 }
 
 pub enum Embed {
@@ -595,14 +608,19 @@ pub async fn thread_page(
     let Some(thread) = sqlx::query!(
         r#"
         SELECT t.id, t.title, t.slug, t.created_at, t.last_seq, t.pinned, t.locked, t.forked_from_post_id,
-               c.id AS category_id, c.slug AS category_slug, c.name AS category_name, s.name AS "section_name?",
-               c.read_level, c.write_level,
+               c.id AS "category_id!", c.slug AS "category_slug!", c.name AS "category_name!",
+               c.description AS "category_description!", c.position AS "category_position!",
+               c.section_id AS "section_id?", c.section_name AS "section_name?",
+               c.read_level AS "read_level!", c.write_level AS "write_level!",
+               c.read_groups AS "read_groups!", c.write_groups AS "write_groups!",
+               c.group_names AS "group_names!", c.write_group_names AS "write_group_names!",
                (SELECT tr.last_read_seq FROM thread_reads tr
                 WHERE tr.thread_id = t.id AND tr.user_id = $4) AS read_marker,
+               (SELECT w.level FROM watches w
+                WHERE w.user_id = $5 AND w.thread_id = t.id AND w.category_id IS NULL) AS "watch_level?",
                a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name
         FROM threads t
-        JOIN categories c ON c.id = t.category_id
-        LEFT JOIN sections s ON s.id = c.section_id
+        JOIN category_targets c ON c.id = t.category_id
         JOIN users a ON a.id = t.author_id
         WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $2, $3)
         "#,
@@ -610,6 +628,7 @@ pub async fn thread_page(
         &filter.visibilities,
         &filter.group_category_ids,
         filter.dm_viewer,
+        viewer.user_id(),
     )
     .fetch_optional(db.pool())
     .await?
@@ -633,12 +652,23 @@ pub async fn thread_page(
             title: thread.title,
             slug: thread.slug,
         },
-        category: CategoryRef {
-            id: thread.category_id,
-            slug: thread.category_slug,
-            name: thread.category_name,
+        category: CategoryTarget {
+            category: CategoryRef {
+                id: thread.category_id,
+                slug: thread.category_slug,
+                name: thread.category_name,
+            },
+            section_id: thread.section_id,
+            section_name: thread.section_name,
+            description: thread.category_description,
+            position: thread.category_position,
+            read_level: thread.read_level,
+            write_level: thread.write_level,
+            read_groups: thread.read_groups,
+            write_groups: thread.write_groups,
+            group_names: thread.group_names,
+            write_group_names: thread.write_group_names,
         },
-        section_name: thread.section_name,
         author: UserRef {
             id: thread.author_id,
             username: thread.author_username.to_string(),
@@ -648,11 +678,10 @@ pub async fn thread_page(
         last_seq: i64::from(thread.last_seq),
         pinned: thread.pinned,
         locked: thread.locked,
-        read_level: thread.read_level,
-        write_level: thread.write_level,
         embed,
         posts,
         read_marker: thread.read_marker.map(i64::from),
+        watch_level: thread.watch_level,
     }))
 }
 
@@ -702,7 +731,7 @@ pub(super) async fn posts_on_page(
         ids
     };
     let authors = author_infos(db, viewer, &author_ids, deps).await?;
-    let blocked = blocked_authors(db, viewer).await?;
+    let blocked = blocked_authors(viewer);
     let post_ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
     let mut forks = forks_of(db, viewer, &post_ids, deps).await?;
     let live_ids: Vec<i64> = rows
@@ -803,20 +832,13 @@ pub(super) async fn posts_on_page(
 }
 
 /// The members whose posts the viewer has asked not to see: those they
-/// blocked, unless they are staff now (staff can't be blocked).
-pub(super) async fn blocked_authors(db: &Db, viewer: &Viewer) -> sqlx::Result<BTreeSet<i64>> {
-    let Some(user_id) = viewer.user_id() else {
-        return Ok(BTreeSet::new());
-    };
-    Ok(sqlx::query_scalar!(
-        r#"SELECT b.blocked_user_id FROM blocks b JOIN users u ON u.id = b.blocked_user_id
-           WHERE b.user_id = $1 AND u.role = 'user'"#,
-        user_id
-    )
-    .fetch_all(db.pool())
-    .await?
-    .into_iter()
-    .collect())
+/// blocked, unless they are staff now (staff can't be blocked). Loaded
+/// with the viewer's session.
+pub(super) fn blocked_authors(viewer: &Viewer) -> BTreeSet<i64> {
+    viewer
+        .user()
+        .map(|user| user.blocked_user_ids.iter().copied().collect())
+        .unwrap_or_default()
 }
 
 async fn author_infos(
@@ -831,10 +853,10 @@ async fn author_infos(
         SELECT u.id AS "id!", u.username AS "username!", u.display_name AS "display_name!",
                u.title, u.pronouns, u.status_line, u.location, u.created_at AS "created_at!",
                av.sha256 AS "avatar_sha256?", av.ext AS "avatar_ext?",
-               (SELECT count(*) FROM posts p JOIN threads t ON t.id = p.thread_id
-                WHERE p.author_id = u.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL
-                  AND t.deleted_at IS NULL
-                  AND thread_readable(t.visibility, t.category_id, $2, $3)) AS "post_count!"
+               (SELECT coalesce(sum(pc.posts), 0)::bigint
+                FROM user_category_post_counts pc JOIN categories c ON c.id = pc.category_id
+                WHERE pc.user_id = u.id
+                  AND category_readable(c.read_level, c.id, $2, $3)) AS "post_count!"
         FROM users u
         LEFT JOIN uploads av ON av.id = u.avatar_upload_id
         WHERE u.id = ANY($1)
@@ -1030,14 +1052,18 @@ async fn embed(db: &Db, viewer: &Viewer, post_id: i64, deps: &mut Deps) -> sqlx:
 // ---------------------------------------------------------------------------
 // Profiles
 
-/// How many of a member's posts the viewer can see. Pages showing it
-/// depend on `user:N`, which new posts and thread moves clear.
+/// How many of a member's posts the viewer can see, from the counts per
+/// category that triggers keep (migration 0019), so it costs the same
+/// however much they have posted. A post in a thread counts in the
+/// thread's category, whose read level the thread's visibility always
+/// copies. Pages showing it depend on `user:N`, which new posts and thread
+/// moves clear.
 pub async fn visible_post_count(db: &Db, viewer: &Viewer, user_id: i64) -> sqlx::Result<i64> {
     let filter = viewer.filter();
     sqlx::query_scalar!(
-        r#"SELECT count(*) AS "n!" FROM posts p JOIN threads t ON t.id = p.thread_id
-           WHERE p.author_id = $1 AND p.deleted_at IS NULL AND p.hidden_at IS NULL
-             AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $2, $3)"#,
+        r#"SELECT coalesce(sum(pc.posts), 0)::bigint AS "n!"
+           FROM user_category_post_counts pc JOIN categories c ON c.id = pc.category_id
+           WHERE pc.user_id = $1 AND category_readable(c.read_level, c.id, $2, $3)"#,
         user_id,
         &filter.visibilities,
         &filter.group_category_ids,
@@ -1222,21 +1248,14 @@ pub async fn readable_categories(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<C
     let filter = viewer.filter();
     let rows = sqlx::query!(
         r#"
-        SELECT c.id, c.slug, c.name, c.description, c.position, c.section_id, c.read_level, c.write_level,
-               s.name AS "section_name?",
-               array(SELECT cg.group_id FROM category_groups cg
-                     WHERE cg.category_id = c.id AND cg.access = 'read' ORDER BY 1) AS "read_groups!",
-               array(SELECT cg.group_id FROM category_groups cg
-                     WHERE cg.category_id = c.id AND cg.access = 'write' ORDER BY 1) AS "write_groups!",
-               array(SELECT g.name FROM category_groups cg JOIN groups g ON g.id = cg.group_id
-                     WHERE cg.category_id = c.id AND cg.access = 'write' AND c.write_level = 'groups'
-                     ORDER BY lower(g.name), g.id) AS "write_group_names!",
-               array(SELECT g.name FROM category_groups cg JOIN groups g ON g.id = cg.group_id
-                     WHERE cg.category_id = c.id AND cg.access = 'read' AND c.read_level = 'groups'
-                     ORDER BY lower(g.name), g.id) AS "group_names!"
-        FROM categories c LEFT JOIN sections s ON s.id = c.section_id
+        SELECT c.id AS "id!", c.slug AS "slug!", c.name AS "name!", c.description AS "description!",
+               c.position AS "position!", c.section_id AS "section_id?", c.section_name AS "section_name?",
+               c.read_level AS "read_level!", c.write_level AS "write_level!",
+               c.read_groups AS "read_groups!", c.write_groups AS "write_groups!",
+               c.group_names AS "group_names!", c.write_group_names AS "write_group_names!"
+        FROM category_targets c
         WHERE category_readable(c.read_level, c.id, $1, $2)
-        ORDER BY s.position NULLS FIRST, s.id NULLS FIRST, c.position, c.id
+        ORDER BY c.section_position NULLS FIRST, c.section_id NULLS FIRST, c.position, c.id
         "#,
         &filter.visibilities,
         &filter.group_category_ids,

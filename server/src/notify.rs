@@ -221,15 +221,16 @@ pub fn counts_changed(state: &AppState, user_id: i64) {
     state.live().publish(Event::Counts { user_id });
 }
 
-/// Marks a member's notifications about a page of a thread as read, now
-/// they have seen it.
+/// Records that a member has seen a page of a thread, up to post
+/// `up_to_seq`: their read marker advances and their notifications about
+/// those posts are read.
 pub async fn seen_thread(
     state: &AppState,
     user_id: i64,
     thread_id: i64,
     up_to_seq: i64,
 ) -> sqlx::Result<()> {
-    stored::mark_read_in_thread(state.db(), user_id, thread_id, up_to_seq).await?;
+    stored::seen_thread(state.db(), user_id, thread_id, up_to_seq).await?;
     // Reading a conversation changes the messages count even when there
     // was no notification to clear.
     counts_changed(state, user_id);

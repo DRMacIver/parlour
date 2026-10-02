@@ -80,36 +80,101 @@ pub async fn create<'c>(
     Ok(token)
 }
 
+/// A member as `member_contexts` (migration 0020) describes them.
+struct MemberRow {
+    id: i64,
+    username: String,
+    display_name: String,
+    email: String,
+    verified: bool,
+    role: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    silenced_until: Option<chrono::DateTime<chrono::Utc>>,
+    suspended_until: Option<chrono::DateTime<chrono::Utc>>,
+    group_ids: Vec<i64>,
+    group_category_ids: Vec<i64>,
+    blocked_user_ids: Vec<i64>,
+}
+
+impl From<MemberRow> for UserCtx {
+    fn from(row: MemberRow) -> UserCtx {
+        UserCtx {
+            id: row.id,
+            username: row.username,
+            display_name: row.display_name,
+            email: row.email,
+            email_verified: row.verified,
+            role: Role::parse(&row.role).unwrap_or(Role::User),
+            created_at: row.created_at,
+            group_ids: row.group_ids,
+            group_category_ids: row.group_category_ids,
+            silenced_until: row.silenced_until,
+            suspended_until: row.suspended_until,
+            blocked_user_ids: row.blocked_user_ids,
+        }
+    }
+}
+
+/// A current session and its member.
+struct SessionRow {
+    /// Whether it's time to record another visit (see [`lookup`]).
+    stale: bool,
+    member: MemberRow,
+}
+
+/// The current session with this token, and its member, in one query.
+async fn session(db: &Db, token: &str) -> sqlx::Result<Option<SessionRow>> {
+    if !tokens::plausible(token) {
+        return Ok(None);
+    }
+    let row = sqlx::query!(
+        r#"SELECT s.last_seen_at < now() - interval '5 minutes' AS "stale!",
+                  m.id AS "id!", m.username::text AS "username!", m.display_name AS "display_name!",
+                  m.email::text AS "email!", m.verified AS "verified!", m.role AS "role!",
+                  m.created_at AS "created_at!", m.silenced_until, m.suspended_until,
+                  m.group_ids AS "group_ids!", m.group_category_ids AS "group_category_ids!",
+                  m.blocked_user_ids AS "blocked_user_ids!"
+           FROM sessions s JOIN member_contexts m ON m.id = s.user_id
+           WHERE s.token_hash = $1 AND s.last_seen_at > now() - make_interval(days => $2)"#,
+        tokens::hash(token),
+        IDLE_DAYS,
+    )
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(row.map(|row| SessionRow {
+        stale: row.stale,
+        member: MemberRow {
+            id: row.id,
+            username: row.username,
+            display_name: row.display_name,
+            email: row.email,
+            verified: row.verified,
+            role: row.role,
+            created_at: row.created_at,
+            silenced_until: row.silenced_until,
+            suspended_until: row.suspended_until,
+            group_ids: row.group_ids,
+            group_category_ids: row.group_category_ids,
+            blocked_user_ids: row.blocked_user_ids,
+        },
+    }))
+}
+
 /// The user a session token belongs to, if it is a current session of an
 /// account that hasn't been deleted. Every few minutes this counts as a
 /// visit from `ip`, which is recorded for moderators (DESIGN.md §8).
 pub async fn lookup(db: &Db, token: &str, ip: &str) -> sqlx::Result<Option<UserCtx>> {
-    if !tokens::plausible(token) {
-        return Ok(None);
-    }
-    let hash = tokens::hash(token);
-    let Some(row) = sqlx::query!(
-        r#"SELECT s.user_id, s.last_seen_at < now() - interval '5 minutes' AS "stale!"
-           FROM sessions s
-           WHERE s.token_hash = $1 AND s.last_seen_at > now() - make_interval(days => $2)"#,
-        hash,
-        IDLE_DAYS,
-    )
-    .fetch_optional(db.pool())
-    .await?
-    else {
+    let Some(SessionRow { stale, member }) = session(db, token).await? else {
         return Ok(None);
     };
-    let Some(user) = user_ctx(db, row.user_id).await? else {
-        return Ok(None);
-    };
+    let user = UserCtx::from(member);
     // Recording every request would mean a write per page view; once every
     // few minutes is enough to keep the session alive.
-    if row.stale {
+    if stale {
         sqlx::query!(
             "WITH s AS (UPDATE sessions SET last_seen_at = now() WHERE token_hash = $1 RETURNING user_id)
              UPDATE users SET last_seen_at = now() WHERE id IN (SELECT user_id FROM s)",
-            hash
+            tokens::hash(token)
         )
         .execute(db.pool())
         .await?;
@@ -123,54 +188,29 @@ pub async fn lookup(db: &Db, token: &str, ip: &str) -> sqlx::Result<Option<UserC
 /// long-lived response such as a live stream, that the session hasn't
 /// ended and what its owner may see now.
 pub async fn still_current(db: &Db, token: &str) -> sqlx::Result<Option<UserCtx>> {
-    if !tokens::plausible(token) {
-        return Ok(None);
-    }
-    let Some(user_id) = sqlx::query_scalar!(
-        "SELECT user_id FROM sessions
-         WHERE token_hash = $1 AND last_seen_at > now() - make_interval(days => $2)",
-        tokens::hash(token),
-        IDLE_DAYS,
-    )
-    .fetch_optional(db.pool())
-    .await?
-    else {
-        return Ok(None);
-    };
-    user_ctx(db, user_id).await
+    Ok(session(db, token)
+        .await?
+        .map(|row| UserCtx::from(row.member)))
 }
 
 /// Everything about a member that decides what they may see and do, as
-/// it is now: their role, and their groups and the categories those groups
-/// may read. `None` if the account doesn't exist or was deleted.
+/// it is now: their role, their groups and the categories those groups may
+/// read, and whom they've blocked. `None` if the account doesn't exist or
+/// was deleted.
 pub async fn user_ctx(db: &Db, user_id: i64) -> sqlx::Result<Option<UserCtx>> {
-    let row = sqlx::query!(
-        r#"SELECT u.id, u.username, u.display_name, u.email, u.email_verified_at IS NOT NULL AS "verified!",
-                  u.role, u.created_at, u.silenced_until, u.suspended_until,
-                  array(SELECT m.group_id FROM group_members m WHERE m.user_id = u.id ORDER BY 1)
-                      AS "group_ids!",
-                  array(SELECT DISTINCT cg.category_id FROM category_groups cg
-                        JOIN group_members m ON m.group_id = cg.group_id
-                        WHERE m.user_id = u.id AND cg.access = 'read' ORDER BY 1) AS "group_category_ids!"
-           FROM users u
-           WHERE u.id = $1 AND u.deleted_at IS NULL"#,
+    let row = sqlx::query_as!(
+        MemberRow,
+        r#"SELECT m.id AS "id!", m.username::text AS "username!", m.display_name AS "display_name!",
+                  m.email::text AS "email!", m.verified AS "verified!", m.role AS "role!",
+                  m.created_at AS "created_at!", m.silenced_until, m.suspended_until,
+                  m.group_ids AS "group_ids!", m.group_category_ids AS "group_category_ids!",
+                  m.blocked_user_ids AS "blocked_user_ids!"
+           FROM member_contexts m WHERE m.id = $1"#,
         user_id,
     )
     .fetch_optional(db.pool())
     .await?;
-    Ok(row.map(|row| UserCtx {
-        id: row.id,
-        username: row.username.to_string(),
-        display_name: row.display_name,
-        email: row.email.to_string(),
-        email_verified: row.verified,
-        role: Role::parse(&row.role).unwrap_or(Role::User),
-        created_at: row.created_at,
-        group_ids: row.group_ids,
-        group_category_ids: row.group_category_ids,
-        silenced_until: row.silenced_until,
-        suspended_until: row.suspended_until,
-    }))
+    Ok(row.map(UserCtx::from))
 }
 
 /// Ends one session.

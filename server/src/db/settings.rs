@@ -39,9 +39,12 @@ pub async fn unset<'c>(db: impl Handle<'c>, key: &str) -> sqlx::Result<()> {
 }
 
 pub async fn site_name(db: &Db) -> sqlx::Result<String> {
-    Ok(get::<String>(db, "site_name")
-        .await?
-        .unwrap_or_else(|| DEFAULT_SITE_NAME.to_owned()))
+    Ok(site_name_from(get::<String>(db, "site_name").await?))
+}
+
+/// The site's name, given the stored `site_name` setting if there is one.
+pub fn site_name_from(stored: Option<String>) -> String {
+    stored.unwrap_or_else(|| DEFAULT_SITE_NAME.to_owned())
 }
 
 /// Who may join (DESIGN.md §7). Open registration modes come later.

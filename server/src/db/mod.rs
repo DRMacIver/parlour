@@ -20,6 +20,7 @@ pub mod content;
 pub mod export;
 pub mod forum_id;
 pub mod groups;
+pub mod header;
 pub mod invites;
 pub mod jobs;
 pub mod login_tokens;

@@ -12,7 +12,6 @@ use crate::content::Deps;
 use crate::error::AppError;
 use crate::http_cache::CacheTags;
 use crate::sessions;
-use crate::settings;
 use crate::viewer::Viewer;
 
 /// Which item in the top navigation is the current page.
@@ -64,23 +63,17 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// Everything the header needs, in one query: the site's name and, for
+    /// a member, their counts and any restriction on them.
     pub async fn load(state: &AppState, viewer: &Viewer, nav: Nav) -> sqlx::Result<Layout> {
-        let user = match viewer.user() {
-            None => None,
-            Some(user) => Some(NavUser {
-                username: user.username.clone(),
-                is_admin: viewer.is_admin(),
-                notifications: crate::content::notifications::unread_count(state.db(), viewer)
-                    .await?,
-                messages: crate::content::messages::unread_conversations(state.db(), viewer)
-                    .await?,
-                queue: if viewer.is_staff() {
-                    Some(crate::mod_records::queue_size(state.db()).await?)
-                } else {
-                    None
-                },
-            }),
-        };
+        let header = crate::db::header::load(state.db(), viewer).await?;
+        let user = viewer.user().map(|user| NavUser {
+            username: user.username.clone(),
+            is_admin: viewer.is_admin(),
+            notifications: header.notifications,
+            messages: header.messages,
+            queue: header.queue,
+        });
         let restriction = match viewer.user() {
             Some(user) if user.is_silenced() => {
                 let suspended = user.is_suspended();
@@ -92,7 +85,7 @@ impl Layout {
                 Some(RestrictionNotice {
                     suspended,
                     until: until.unwrap_or_default(),
-                    action_id: crate::mod_records::current_restriction(state.db(), user.id).await?,
+                    action_id: header.restriction_action,
                 })
             }
             _ => None,
@@ -103,7 +96,7 @@ impl Layout {
         };
         Ok(Layout {
             islands,
-            site_name: settings::site_name(state.db()).await?,
+            site_name: header.site_name,
             nav,
             user,
             restriction,

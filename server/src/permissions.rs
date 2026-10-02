@@ -296,6 +296,7 @@ mod tests {
             group_category_ids: Vec::new(),
             silenced_until: None,
             suspended_until: None,
+            blocked_user_ids: Vec::new(),
         }
     }
 

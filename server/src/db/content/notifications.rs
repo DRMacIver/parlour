@@ -214,18 +214,7 @@ pub async fn unread_count(db: &Db, viewer: &Viewer) -> sqlx::Result<i64> {
     };
     let filter = viewer.filter();
     sqlx::query_scalar!(
-        r#"
-        SELECT count(*) AS "n!"
-        FROM notifications n
-        LEFT JOIN posts p ON p.id = n.post_id
-        LEFT JOIN threads t ON t.id = p.thread_id
-        WHERE n.user_id = $1 AND n.read_at IS NULL
-          AND (n.post_id IS NULL
-               OR (p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
-                   AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))))
-          AND NOT EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id
-                          WHERE b.user_id = $1 AND b.blocked_user_id = n.actor_id AND bu.role = 'user')
-        "#,
+        r#"SELECT unread_notification_count($1, $2, $3, $4) AS "n!""#,
         user_id,
         &filter.visibilities,
         &filter.group_category_ids,

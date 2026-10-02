@@ -17,7 +17,6 @@ use crate::format;
 use crate::notify;
 use crate::pagination::{PageItem, Pagination, page_href, thread_list_pages};
 use crate::social::{self, WatchLevel, Watched};
-use crate::store;
 use crate::viewer::Viewer;
 use crate::web::{self, Layout, Nav, cacheable, redirect_unless_canonical};
 use crate::writing;
@@ -330,13 +329,9 @@ pub async fn thread(
     let (reply_box, can_edit, reaction_types, divider_before, watch) = match viewer.user() {
         None => (ReplyBox::LogIn, false, Vec::new(), None, None),
         Some(user) => {
-            let target = content::thread_target(&state.db, &viewer, id).await?;
-            let reply_box = match &target {
-                Some(t) => match writing::reply_refusal(&state, &viewer, t).await? {
-                    None => ReplyBox::Form,
-                    Some(reason) => ReplyBox::Note(reason),
-                },
-                None => ReplyBox::Note("You can’t post in this category."),
+            let reply_box = match writing::reply_refusal(&state, &viewer, &thread.target()).await? {
+                None => ReplyBox::Form,
+                Some(reason) => ReplyBox::Note(reason),
             };
             let divider_before = thread.read_marker.and_then(|marker| {
                 thread
@@ -346,7 +341,6 @@ pub async fn thread(
                     .map(|post| post.id)
             });
             if let Some(last) = thread.posts.last() {
-                store::mark_read(&state.db, user.id, id, last.seq).await?;
                 notify::seen_thread(&state, user.id, id, last.seq).await?;
             }
             (
@@ -354,7 +348,7 @@ pub async fn thread(
                 !thread.locked || viewer.is_staff(),
                 content::reaction_types(&state.db, true).await?,
                 divider_before,
-                Some(social::watch_level(&state.db, user.id, Watched::Thread(id)).await?),
+                Some(WatchLevel::from_stored(thread.watch_level.as_deref())),
             )
         }
     };

@@ -234,7 +234,6 @@ async fn render_conversation(
     });
     let participant = conversation.conversation.includes(user.id);
     if participant && let Some(last) = conversation.posts.last() {
-        store::mark_read(state.db(), user.id, id, last.seq).await?;
         notify::seen_thread(state, user.id, id, last.seq).await?;
     }
     // They may have left in the meantime (in another tab, say).

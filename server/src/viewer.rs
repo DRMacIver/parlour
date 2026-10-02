@@ -52,6 +52,9 @@ pub struct UserCtx {
     /// Until when they are suspended: they read only what visitors read,
     /// and can do nothing but contest it.
     pub suspended_until: Option<DateTime<Utc>>,
+    /// The members whose posts they have asked not to see: those they
+    /// blocked, unless they are staff now (staff can't be blocked).
+    pub blocked_user_ids: Vec<i64>,
 }
 
 impl UserCtx {
@@ -192,6 +195,7 @@ mod tests {
             group_category_ids: Vec::new(),
             silenced_until: None,
             suspended_until: None,
+            blocked_user_ids: Vec::new(),
         })
     }
 

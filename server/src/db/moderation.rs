@@ -370,16 +370,9 @@ pub async fn open_reports(db: &Db) -> sqlx::Result<Vec<OpenReport>> {
 /// How many things are waiting for a moderator: open reports (counting
 /// several about one post or member as one) and held posts.
 pub async fn queue_size(db: &Db) -> sqlx::Result<i64> {
-    sqlx::query_scalar!(
-        r#"SELECT (SELECT count(DISTINCT CASE kind WHEN 'post' THEN 'p' || post_id
-                                               WHEN 'user' THEN 'u' || user_id
-                                               ELSE 'r' || id END)
-                   FROM reports WHERE status = 'open')
-                + (SELECT count(*) FROM held_posts h JOIN users u ON u.id = h.author_id
-                   WHERE h.status = 'held' AND u.deleted_at IS NULL) AS "n!""#
-    )
-    .fetch_one(db.pool())
-    .await
+    sqlx::query_scalar!(r#"SELECT moderation_queue_size() AS "n!""#)
+        .fetch_one(db.pool())
+        .await
 }
 
 /// Which open reports a decision settles.
@@ -572,25 +565,9 @@ pub async fn appealed_by(db: &Db, action_id: i64, user_id: i64) -> sqlx::Result<
 /// now, for the notice on every page and the link to contest it: the one
 /// whose end is the end of the restriction (a suspension, if both).
 pub async fn current_restriction(db: &Db, user_id: i64) -> sqlx::Result<Option<i64>> {
-    sqlx::query_scalar!(
-        r#"SELECT a.id FROM users u
-           JOIN mod_actions a
-             ON a.action IN ('silence', 'suspend', 'suspend_branch')
-            AND (a.user_id = u.id
-                 OR (a.action = 'suspend_branch' AND a.details->'user_ids' @> to_jsonb(u.id)))
-           WHERE u.id = $1
-             AND CASE WHEN u.suspended_until > now()
-                        THEN a.action <> 'silence'
-                             AND abs(extract(epoch FROM (a.details->>'until')::timestamptz - u.suspended_until)) < 0.001
-                      WHEN u.silenced_until > now()
-                        THEN a.action = 'silence'
-                             AND abs(extract(epoch FROM (a.details->>'until')::timestamptz - u.silenced_until)) < 0.001
-                      ELSE false END
-           ORDER BY a.created_at DESC, a.id DESC LIMIT 1"#,
-        user_id
-    )
-    .fetch_optional(db.pool())
-    .await
+    sqlx::query_scalar!("SELECT current_restriction_action($1)", user_id)
+        .fetch_one(db.pool())
+        .await
 }
 
 /// The newest of these actions on a post or thread (`target_kind`), if

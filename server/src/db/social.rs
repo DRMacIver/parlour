@@ -265,6 +265,11 @@ impl WatchLevel {
         }
     }
 
+    /// The level a stored choice means: the default if there is none.
+    pub fn from_stored(level: Option<&str>) -> WatchLevel {
+        level.and_then(WatchLevel::parse).unwrap_or_default()
+    }
+
     pub fn parse(s: &str) -> Option<WatchLevel> {
         match s {
             "watching" => Some(WatchLevel::Watching),
@@ -330,9 +335,7 @@ pub async fn watch_level(db: &Db, user_id: i64, on: Watched) -> sqlx::Result<Wat
     )
     .fetch_optional(db.pool())
     .await?;
-    Ok(level
-        .and_then(|level| WatchLevel::parse(&level))
-        .unwrap_or_default())
+    Ok(WatchLevel::from_stored(level.as_deref()))
 }
 
 // ---------------------------------------------------------------------------

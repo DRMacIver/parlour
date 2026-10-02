@@ -161,18 +161,20 @@ pub async fn insert_moderation<'c>(
     .await
 }
 
-/// Marks a member's notifications about posts up to `seq` in a thread as
-/// read, as when they have been shown that page. Returns how many were
-/// unread.
-pub async fn mark_read_in_thread(
-    db: &Db,
-    user_id: i64,
-    thread_id: i64,
-    seq: i64,
-) -> sqlx::Result<u64> {
+/// Records that a member has been shown a thread up to post `seq`: their
+/// read marker advances (it never goes back), and their notifications about
+/// posts up to there are read. One statement, as this happens on every
+/// thread page a member views.
+pub async fn seen_thread(db: &Db, user_id: i64, thread_id: i64, seq: i64) -> sqlx::Result<()> {
     let seq = i32::try_from(seq.max(0)).unwrap_or(i32::MAX);
-    let done = sqlx::query!(
-        r#"UPDATE notifications n SET read_at = now()
+    sqlx::query!(
+        r#"WITH marker AS (
+               INSERT INTO thread_reads (user_id, thread_id, last_read_seq) VALUES ($1, $2, $3)
+               ON CONFLICT (user_id, thread_id)
+               DO UPDATE SET last_read_seq = greatest(thread_reads.last_read_seq, excluded.last_read_seq)
+               WHERE thread_reads.last_read_seq < excluded.last_read_seq
+           )
+           UPDATE notifications n SET read_at = now()
            FROM posts p
            WHERE n.user_id = $1 AND n.thread_id = $2 AND n.read_at IS NULL
              AND p.id = n.post_id AND p.seq <= $3"#,
@@ -182,7 +184,7 @@ pub async fn mark_read_in_thread(
     )
     .execute(db.pool())
     .await?;
-    Ok(done.rows_affected())
+    Ok(())
 }
 
 /// Marks one notification read. Returns whether it was the member's and

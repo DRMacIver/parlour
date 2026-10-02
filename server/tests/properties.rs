@@ -65,6 +65,22 @@ use parlour::writing;
 use sqlx::PgPool;
 use tokio::runtime::Handle;
 
+/// Counts the (member, category) pairs whose maintained post count, as
+/// thread pages and profiles show it, differs from counting the posts
+/// afresh: live posts in live threads in that category.
+const STALE_POST_COUNTS: &str = "
+    WITH actual AS (
+        SELECT p.author_id AS user_id, t.category_id, count(*) AS posts
+        FROM posts p JOIN threads t ON t.id = p.thread_id
+        WHERE t.category_id IS NOT NULL AND t.deleted_at IS NULL
+          AND p.deleted_at IS NULL AND p.hidden_at IS NULL
+        GROUP BY 1, 2
+    ), kept AS (
+        SELECT user_id, category_id, posts FROM user_category_post_counts WHERE posts <> 0
+    )
+    SELECT count(*) FROM actual FULL JOIN kept USING (user_id, category_id)
+    WHERE actual.posts IS DISTINCT FROM kept.posts";
+
 const LEVELS: [&str; 3] = ["public", "members", "groups"];
 
 /// Who is looking.
@@ -1850,6 +1866,15 @@ impl World {
     fn pages_are_right(&self, tc: TestCase) {
         self.check(&tc);
     }
+
+    /// Every change keeps the maintained post counts exact.
+    #[invariant(always_run)]
+    fn post_counts_are_current(&self, _: TestCase) {
+        let stale: i64 = self
+            .block(sqlx::query_scalar(STALE_POST_COUNTS).fetch_one(self.db()))
+            .unwrap();
+        assert_eq!(stale, 0, "maintained post counts are stale");
+    }
 }
 
 // Every step writes to Postgres and renders pages over HTTP, so a test
@@ -3230,6 +3255,16 @@ impl Access {
         for u in 0..self.users.len() {
             self.check_viewer(Some(u));
         }
+    }
+
+    /// The maintained post counts stay exact however posts and threads
+    /// move, and levels change.
+    #[invariant(always_run)]
+    fn post_counts_are_current(&self, _: TestCase) {
+        let stale: i64 = self
+            .block(sqlx::query_scalar(STALE_POST_COUNTS).fetch_one(&self.pool))
+            .unwrap();
+        assert_eq!(stale, 0, "maintained post counts are stale");
     }
 
     /// The denormalised `threads.visibility` is always the category's read
