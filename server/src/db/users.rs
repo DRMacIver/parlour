@@ -211,7 +211,10 @@ pub async fn members(db: &Db, limit: i64, offset: i64) -> sqlx::Result<Vec<Admin
 /// What became of a role change.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RoleChange {
-    Done,
+    /// Done; the member had this role before.
+    Done {
+        from: Role,
+    },
     NoSuchMember,
     /// It would leave the site without an admin.
     LastAdmin,
@@ -235,10 +238,10 @@ pub async fn change_role(db: &Db, user_id: i64, role: Role) -> sqlx::Result<Role
     else {
         return Ok(RoleChange::NoSuchMember);
     };
-    if current == Role::Admin.as_str() && role != Role::Admin && admins.len() <= 1 {
+    let from = Role::parse(&current).unwrap_or(Role::User);
+    if from == Role::Admin && role != Role::Admin && admins.len() <= 1 {
         return Ok(RoleChange::LastAdmin);
     }
-    // M7: record this in mod_actions.
     sqlx::query!(
         "UPDATE users SET role = $2 WHERE id = $1",
         user_id,
@@ -247,7 +250,7 @@ pub async fn change_role(db: &Db, user_id: i64, role: Role) -> sqlx::Result<Role
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok(RoleChange::Done)
+    Ok(RoleChange::Done { from })
 }
 
 // ---------------------------------------------------------------------------

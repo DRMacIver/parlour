@@ -47,6 +47,12 @@ async fn admins_give_members_roles(db: PgPool) {
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     assert_eq!(response.location(), "/admin/users?done=role");
     assert_eq!(role_of(&forum, ruth).await, "moderator");
+    // Like every other action by staff, it goes in the moderation log.
+    let log = forum.page("/moderation").await;
+    assert!(
+        log.contains("made <a href=\"/u/ruth\">ruth</a> a moderator"),
+        "{log}"
+    );
     assert!(
         forum
             .page_as("/admin/users?done=role", &sam_cookie)

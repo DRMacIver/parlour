@@ -341,7 +341,9 @@ struct ContactTemplate {
 
 /// The contact form. For a visitor it is the same page for everyone, so it
 /// is cached like any other anonymous page; `?post=` (from a post's
-/// "report" link) starts the message with a link to the post.
+/// "report" link) starts the message with a link to the post. Only posts
+/// the viewer can see have such a page: otherwise every made-up id would
+/// put another page in the anonymous cache.
 pub async fn contact_page(
     State(state): State<AppState>,
     viewer: Viewer,
@@ -350,16 +352,24 @@ pub async fn contact_page(
     let params = params_of(&uri);
     let (message, canonical) = match params.as_slice() {
         [] => (String::new(), "/contact".to_owned()),
-        [(key, value)] if key == "post" => match parse_id(value) {
-            Some(id) => (
+        [(key, value)] if key == "post" => {
+            let post = match parse_id(value) {
+                Some(id) => content::post_location(state.db(), &viewer, id)
+                    .await?
+                    .map(|_| id),
+                None => None,
+            };
+            let Some(id) = post else {
+                return web::not_found(&state, &viewer).await;
+            };
+            (
                 format!(
                     "About this post: {}\n\n",
                     state.config().url(&format!("/p/{id}"))
                 ),
                 format!("/contact?post={id}"),
-            ),
-            None => return web::not_found(&state, &viewer).await,
-        },
+            )
+        }
         [(key, value)] if key == "sent" && value == "1" => {
             (String::new(), "/contact?sent=1".to_owned())
         }

@@ -440,6 +440,27 @@ fn describe(row: Row, staff: bool) -> LogEntry {
             ]
         }
         "delete_spammer" => vec![text("deleted "), who(), text(" as a spammer")],
+        "change_role" => {
+            use crate::accounts::Role;
+            let role = |key: &str| {
+                row.details[key]
+                    .as_str()
+                    .and_then(Role::parse)
+                    .unwrap_or(Role::User)
+            };
+            let (from, to) = (role("from"), role("to"));
+            match to {
+                Role::User => vec![
+                    text(format!(
+                        "took away the {} role of ",
+                        from.label().to_lowercase()
+                    )),
+                    who(),
+                ],
+                Role::Moderator => vec![text("made "), who(), text(" a moderator")],
+                Role::Admin => vec![text("made "), who(), text(" an admin")],
+            }
+        }
         "approve_post" => vec![
             text("approved a post by new member "),
             who(),

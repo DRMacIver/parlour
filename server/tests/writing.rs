@@ -1023,6 +1023,54 @@ async fn your_own_reply_isnt_new_to_you(pool: PgPool) {
     assert!(divider < page.find(&format!("id=\"p{mine}\"")).unwrap());
 }
 
+/// A thread you start isn't new to you: you wrote its only post. Replies
+/// by others are new to you until you read them; your own aren't.
+#[sqlx::test]
+async fn your_own_new_thread_isnt_new_to_you(pool: PgPool) {
+    let s = setup(pool).await;
+    let response =
+        s.f.submit(
+            "/c/games/new",
+            &[("title", "Mine"), ("body", "I started this")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+    let thread = count(&s.f, "SELECT max(id) FROM threads").await;
+    let list = s.f.page_as("/c/games", &s.jonah_cookie).await;
+    assert!(!list.contains(" new<"), "{list}");
+    let response =
+        s.f.get_as(&format!("/t/{thread}/unread"), Some(&s.jonah_cookie))
+            .await;
+    assert!(
+        response
+            .location()
+            .starts_with(&format!("/t/{thread}/mine#p")),
+        "{}",
+        response.location()
+    );
+    // To everyone else it is a new thread with one new post.
+    let list = s.f.page_as("/c/games", &s.ruth_cookie).await;
+    assert!(list.contains("1 new"), "{list}");
+    // A reply by someone else is new to the author…
+    s.f.post(thread, s.ruth, "a reply").await;
+    let list = s.f.page_as("/c/games", &s.jonah_cookie).await;
+    assert!(list.contains("1 new"), "{list}");
+    // …until they read it; their own reply then isn't.
+    s.f.page_as(&format!("/t/{thread}/mine"), &s.jonah_cookie)
+        .await;
+    let response =
+        s.f.submit(
+            &format!("/t/{thread}/reply"),
+            &[("body", "and mine")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+    let list = s.f.page_as("/c/games", &s.jonah_cookie).await;
+    assert!(!list.contains(" new<"), "{list}");
+}
+
 #[sqlx::test]
 async fn whole_categories_can_be_marked_read(pool: PgPool) {
     let s = setup(pool).await;
@@ -1039,12 +1087,10 @@ async fn whole_categories_can_be_marked_read(pool: PgPool) {
     assert_eq!(response.location(), "/c/games");
     let list = s.f.page_as("/c/games", &s.jonah_cookie).await;
     assert!(!list.contains(" new<"), "{list}");
-    // Only for jonah.
-    assert!(
-        s.f.page_as("/c/games", &s.ruth_cookie)
-            .await
-            .contains("2 new")
-    );
+    // Only for jonah: ruth, who started both threads, has read their first
+    // posts, so to her thread A still has one new post.
+    let list = s.f.page_as("/c/games", &s.ruth_cookie).await;
+    assert!(list.contains("1 new") && !list.contains("2 new"), "{list}");
 }
 
 // ---------------------------------------------------------------------------

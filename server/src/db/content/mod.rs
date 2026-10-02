@@ -1203,10 +1203,7 @@ pub async fn category_by_id(
     viewer: &Viewer,
     id: i64,
 ) -> sqlx::Result<Option<CategoryTarget>> {
-    Ok(readable_categories(db, viewer)
-        .await?
-        .into_iter()
-        .find(|c| c.category.id == id))
+    Ok(category_targets(db, viewer, Some(id), None).await?.pop())
 }
 
 /// How many threads a category the viewer can read has ever had,
@@ -1245,6 +1242,17 @@ pub async fn sections(db: &Db) -> sqlx::Result<Vec<Section>> {
 
 /// Every category the viewer can read, in index order.
 pub async fn readable_categories(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<CategoryTarget>> {
+    category_targets(db, viewer, None, None).await
+}
+
+/// The categories the viewer can read, in index order: all of them, or
+/// (with `id` or `slug`) just the one so named.
+async fn category_targets(
+    db: &Db,
+    viewer: &Viewer,
+    id: Option<i64>,
+    slug: Option<&str>,
+) -> sqlx::Result<Vec<CategoryTarget>> {
     let filter = viewer.filter();
     let rows = sqlx::query!(
         r#"
@@ -1255,10 +1263,14 @@ pub async fn readable_categories(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<C
                c.group_names AS "group_names!", c.write_group_names AS "write_group_names!"
         FROM category_targets c
         WHERE category_readable(c.read_level, c.id, $1, $2)
+          AND ($3::bigint IS NULL OR c.id = $3)
+          AND ($4::text IS NULL OR c.slug = $4)
         ORDER BY c.section_position NULLS FIRST, c.section_id NULLS FIRST, c.position, c.id
         "#,
         &filter.visibilities,
         &filter.group_category_ids,
+        id,
+        slug,
     )
     .fetch_all(db.pool())
     .await?;
@@ -1290,10 +1302,7 @@ pub async fn category_target(
     viewer: &Viewer,
     slug: &str,
 ) -> sqlx::Result<Option<CategoryTarget>> {
-    Ok(readable_categories(db, viewer)
-        .await?
-        .into_iter()
-        .find(|c| c.category.slug == slug))
+    Ok(category_targets(db, viewer, None, Some(slug)).await?.pop())
 }
 
 /// A thread or conversation the viewer can read, as somewhere to reply.
@@ -1372,11 +1381,7 @@ pub async fn thread_target(
     };
     let place = match row.category_id {
         Some(category_id) => {
-            let Some(category) = readable_categories(db, viewer)
-                .await?
-                .into_iter()
-                .find(|c| c.category.id == category_id)
-            else {
+            let Some(category) = category_by_id(db, viewer, category_id).await? else {
                 return Ok(None);
             };
             Place::Category(category)
@@ -1512,17 +1517,23 @@ pub async fn first_unread(
     let filter = viewer.filter();
     let row = sqlx::query!(
         r#"
-        SELECT p.id, p.seq, t.slug, t.visibility = 'private' AS "private!"
+        SELECT p.id AS "id!", p.seq AS "seq!", t.slug, t.visibility = 'private' AS "private!"
         FROM threads t
         CROSS JOIN LATERAL (
             SELECT coalesce((SELECT tr.last_read_seq FROM thread_reads tr
                              WHERE tr.thread_id = t.id AND tr.user_id = $4), 0) + 1 AS seq
         ) wanted
         -- The first post from there on, or the last post if there is none:
-        -- the places of posts moved elsewhere have no post.
+        -- the places of posts moved elsewhere have no post. Each is one
+        -- probe of the (thread, number) index, however long the thread.
         JOIN LATERAL (
-            SELECT p.id, p.seq FROM posts p WHERE p.thread_id = t.id
-            ORDER BY p.seq >= wanted.seq DESC, CASE WHEN p.seq >= wanted.seq THEN p.seq END, p.seq DESC
+            (SELECT p.id, p.seq FROM posts p
+             WHERE p.thread_id = t.id AND p.seq >= wanted.seq
+             ORDER BY p.seq LIMIT 1)
+            UNION ALL
+            (SELECT p.id, p.seq FROM posts p
+             WHERE p.thread_id = t.id
+             ORDER BY p.seq DESC LIMIT 1)
             LIMIT 1
         ) p ON true
         WHERE t.id = $1 AND t.deleted_at IS NULL

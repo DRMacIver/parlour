@@ -432,7 +432,8 @@ pub struct CreatedThread {
     pub first_post_id: i64,
 }
 
-/// Creates a thread together with its first post.
+/// Creates a thread together with its first post. The author has read
+/// that post, having written it, so the thread isn't new to them.
 pub async fn create_thread<'c>(
     db: impl Handle<'c>,
     thread: &NewThread,
@@ -466,6 +467,7 @@ pub async fn create_thread<'c>(
         },
     )
     .await?;
+    mark_read(&mut *tx, thread.author_id, thread_id, 1).await?;
     tx.commit().await?;
     Ok(CreatedThread {
         thread_id,

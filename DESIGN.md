@@ -223,6 +223,7 @@ Using a single `threads` table for both categories and DMs is a deliberate choic
   - Anonymous responses: `Cache-Control: public, max-age=0, s-maxage=30, stale-while-revalidate=60`, plus an `ETag` built from the version counters, so a CDN in front works.
   - Everything else: `private, no-store`.
   - We never rely on `Vary: Cookie`.
+  - Every response: `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'`, so no other site can show our pages in a frame (a form here can't be clicked through an invisible frame), and `X-Content-Type-Options: nosniff`.
 - **Logged-in pages are rendered fresh** on every request. They're still cheap: a few indexed queries and a compiled template.
 - **Live updates:** the thread page opens a server-sent events stream for that thread, after a permission check. New posts are broadcast in-process.
 
@@ -261,7 +262,7 @@ enum Viewer { Anonymous, User(UserCtx) }  // UserCtx: id, role, group_ids, suspe
   - silence or suspend for a duration with a reason;
   - delete as spammer, which removes the account and its content;
   - suspend an invite subtree.
-- **Every action is recorded in `mod_actions`.** `/moderation` shows the entries about public content to everyone, in the style of Lobsters.
+- **Every action is recorded in `mod_actions`**, admins' role changes included. `/moderation` shows the entries about public content to everyone, in the style of Lobsters.
 - **Staff-only notes** on users.
 
 ## 9. Search, notifications, email, jobs

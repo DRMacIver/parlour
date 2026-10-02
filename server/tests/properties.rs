@@ -2840,7 +2840,7 @@ impl Access {
         let changed = self
             .block(users::change_role(&self.db, self.users[u].id, role))
             .unwrap();
-        assert_eq!(changed, RoleChange::Done);
+        assert!(matches!(changed, RoleChange::Done { .. }), "{changed:?}");
         self.users[u].staff = role.is_staff();
     }
 

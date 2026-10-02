@@ -561,15 +561,6 @@ pub async fn appealed_by(db: &Db, action_id: i64, user_id: i64) -> sqlx::Result<
     .await
 }
 
-/// The action that imposed the silence or suspension of a member in force
-/// now, for the notice on every page and the link to contest it: the one
-/// whose end is the end of the restriction (a suspension, if both).
-pub async fn current_restriction(db: &Db, user_id: i64) -> sqlx::Result<Option<i64>> {
-    sqlx::query_scalar!("SELECT current_restriction_action($1)", user_id)
-        .fetch_one(db.pool())
-        .await
-}
-
 /// The newest of these actions on a post or thread (`target_kind`), if
 /// any.
 pub async fn latest_action(
@@ -1009,16 +1000,6 @@ pub async fn add_note<'c>(
         body
     )
     .fetch_one(&mut *conn)
-    .await
-}
-
-/// How many staff notes there are about a member.
-pub async fn note_count(db: &Db, user_id: i64) -> sqlx::Result<i64> {
-    sqlx::query_scalar!(
-        r#"SELECT count(*) AS "n!" FROM user_notes WHERE user_id = $1"#,
-        user_id
-    )
-    .fetch_one(db.pool())
     .await
 }
 

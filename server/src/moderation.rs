@@ -1787,6 +1787,7 @@ async fn publish_held(
                 },
             )
             .await?;
+            store::read_own_post(&mut *tx, post_id).await?;
             (post_id, *thread_id, is_public(&thread.audience()))
         }
     };

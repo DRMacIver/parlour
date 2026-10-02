@@ -437,6 +437,33 @@ async fn the_contact_form_works_without_an_account(pool: PgPool) {
     assert!(queue.contains("from a visitor"), "{queue}");
 }
 
+/// The contact form's `?post=` only names posts the visitor can see.
+/// Anything else is not found, so that made-up ids can't fill the
+/// anonymous page cache with one page each.
+#[sqlx::test]
+async fn the_contact_form_only_names_posts_the_visitor_can_see(pool: PgPool) {
+    let s = setup(pool).await;
+    let public = s.f.thread(s.games, s.jonah, "Public", "Body").await;
+    let private = s.f.thread(s.lounge, s.jonah, "Private", "Body").await;
+    s.f.page(&format!("/contact?post={}", public.first_post_id))
+        .await;
+    for post in [private.first_post_id, 999_999_999] {
+        let response = s.f.get(&format!("/contact?post={post}")).await;
+        assert_status(&response, StatusCode::NOT_FOUND);
+    }
+    // A member who can read the post may start a message about it.
+    s.f.page_as(
+        &format!("/contact?post={}", private.first_post_id),
+        &s.ruth_cookie,
+    )
+    .await;
+    assert_eq!(
+        s.f.state.cache().len(),
+        1,
+        "only the public post's page is cached"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Posts
 
@@ -896,7 +923,8 @@ async fn moving_posts_to_a_new_thread_keeps_numbers_and_links(pool: PgPool) {
     );
     // The old thread's count of posts and the first-unread jump still work.
     s.f.exec(&format!(
-        "INSERT INTO thread_reads (user_id, thread_id, last_read_seq) VALUES ({}, {}, 2)",
+        "INSERT INTO thread_reads (user_id, thread_id, last_read_seq) VALUES ({}, {}, 2)
+         ON CONFLICT (user_id, thread_id) DO UPDATE SET last_read_seq = 2",
         s.ruth, t.thread_id
     ))
     .await;
@@ -1483,6 +1511,9 @@ async fn new_members_first_posts_are_held_for_approval(pool: PgPool) {
     )
     .await;
     assert!(s.f.page("/c/games").await.contains("Hi from Leeds!"));
+    // Their own thread isn't new to them.
+    let list = s.f.page_as("/c/games", &cookie).await;
+    assert!(!list.contains(" new<"), "{list}");
     let notes = s.f.page_as("/notifications", &cookie).await;
     assert!(notes.contains("approved your post"), "{notes}");
     let log = s.f.page("/moderation").await;

@@ -215,16 +215,6 @@ pub async fn list(db: &Db) -> sqlx::Result<Vec<GroupSummary>> {
     .await
 }
 
-/// The names of these groups, by name, leaving out any that don't exist.
-pub async fn names(db: &Db, ids: &[i64]) -> sqlx::Result<Vec<String>> {
-    sqlx::query_scalar!(
-        "SELECT name FROM groups WHERE id = ANY($1) ORDER BY lower(name), id",
-        ids
-    )
-    .fetch_all(db.pool())
-    .await
-}
-
 /// Those of these ids that are groups.
 pub async fn existing(db: &Db, ids: &[i64]) -> sqlx::Result<Vec<i64>> {
     sqlx::query_scalar!("SELECT id FROM groups WHERE id = ANY($1) ORDER BY id", ids)

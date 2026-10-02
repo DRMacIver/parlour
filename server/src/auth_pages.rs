@@ -585,6 +585,18 @@ pub async fn reset_password(
             },
         )?));
     }
+    // Hashing is deliberately slow, so anyone can't make the server do it
+    // by posting made-up tokens: the token is checked first (and once
+    // more, using it up, below).
+    if !login_tokens::is_current(state.db(), &token, Purpose::Reset).await? {
+        return expired_link(
+            &state,
+            &viewer,
+            "reset link",
+            ("/reset", "Ask for a new one"),
+        )
+        .await;
+    }
     let hash = accounts::hash_password(&form.password).await;
     let mut tx = state.db().begin().await?;
     let Some(used) = login_tokens::consume(&mut tx, &token, Purpose::Reset).await? else {

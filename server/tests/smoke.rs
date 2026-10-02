@@ -33,6 +33,40 @@ async fn healthz_reports_ok_when_database_is_reachable(pool: PgPool) {
     assert_eq!(response.body, "ok");
 }
 
+/// Every response says it may not be framed by other sites (so a form on
+/// a page here can't be clicked through an invisible frame) and that its
+/// content type is to be believed.
+#[sqlx::test]
+async fn responses_carry_security_headers(pool: PgPool) {
+    for path in ["/", "/no-such-page", "/healthz", "/static/parlour.css"] {
+        let response = get(pool.clone(), path).await;
+        assert_eq!(
+            response
+                .headers
+                .get("x-frame-options")
+                .map(|v| v.to_str().unwrap()),
+            Some("DENY"),
+            "{path}"
+        );
+        assert_eq!(
+            response
+                .headers
+                .get("content-security-policy")
+                .map(|v| v.to_str().unwrap()),
+            Some("frame-ancestors 'none'"),
+            "{path}"
+        );
+        assert_eq!(
+            response
+                .headers
+                .get("x-content-type-options")
+                .map(|v| v.to_str().unwrap()),
+            Some("nosniff"),
+            "{path}"
+        );
+    }
+}
+
 #[sqlx::test]
 async fn index_uses_default_site_name_on_fresh_install(pool: PgPool) {
     let response = get(pool, "/").await;

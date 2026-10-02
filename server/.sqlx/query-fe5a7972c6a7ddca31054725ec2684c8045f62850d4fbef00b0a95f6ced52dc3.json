@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.id AS \"id!\", c.slug AS \"slug!\", c.name AS \"name!\", c.description AS \"description!\",\n               c.position AS \"position!\", c.section_id AS \"section_id?\", c.section_name AS \"section_name?\",\n               c.read_level AS \"read_level!\", c.write_level AS \"write_level!\",\n               c.read_groups AS \"read_groups!\", c.write_groups AS \"write_groups!\",\n               c.group_names AS \"group_names!\", c.write_group_names AS \"write_group_names!\"\n        FROM category_targets c\n        WHERE category_readable(c.read_level, c.id, $1, $2)\n        ORDER BY c.section_position NULLS FIRST, c.section_id NULLS FIRST, c.position, c.id\n        ",
+  "query": "\n        SELECT c.id AS \"id!\", c.slug AS \"slug!\", c.name AS \"name!\", c.description AS \"description!\",\n               c.position AS \"position!\", c.section_id AS \"section_id?\", c.section_name AS \"section_name?\",\n               c.read_level AS \"read_level!\", c.write_level AS \"write_level!\",\n               c.read_groups AS \"read_groups!\", c.write_groups AS \"write_groups!\",\n               c.group_names AS \"group_names!\", c.write_group_names AS \"write_group_names!\"\n        FROM category_targets c\n        WHERE category_readable(c.read_level, c.id, $1, $2)\n          AND ($3::bigint IS NULL OR c.id = $3)\n          AND ($4::text IS NULL OR c.slug = $4)\n        ORDER BY c.section_position NULLS FIRST, c.section_id NULLS FIRST, c.position, c.id\n        ",
   "describe": {
     "columns": [
       {
@@ -150,7 +150,9 @@
     "parameters": {
       "Left": [
         "TextArray",
-        "Int8Array"
+        "Int8Array",
+        "Int8",
+        "Text"
       ]
     },
     "nullable": [
@@ -169,5 +171,5 @@
       true
     ]
   },
-  "hash": "2f90f7a6639c08e554f6d1b2e1f0c7dec148abf425a5e77e20a0343d491ab7cd"
+  "hash": "fe5a7972c6a7ddca31054725ec2684c8045f62850d4fbef00b0a95f6ced52dc3"
 }

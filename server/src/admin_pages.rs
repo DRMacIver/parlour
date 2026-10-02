@@ -497,8 +497,8 @@ pub async fn change_role(
     let Some(role) = Role::parse(&form.role) else {
         return refuse("Choose a role from the list.").await;
     };
-    match users::change_role(state.db(), id, role).await? {
-        RoleChange::Done => {}
+    let from = match users::change_role(state.db(), id, role).await? {
+        RoleChange::Done { from } => from,
         RoleChange::NoSuchMember => return web::not_found(&state, &viewer).await,
         RoleChange::LastAdmin => {
             return refuse(
@@ -506,6 +506,27 @@ pub async fn change_role(
             )
             .await;
         }
+    };
+    // Like everything staff do to members, it goes in the moderation log
+    // (DESIGN.md §8); roles are public, so the entry is too.
+    if from != role {
+        crate::mod_records::record(
+            state.db(),
+            &crate::mod_records::NewAction {
+                actor_id: user.id,
+                action: "change_role",
+                target_kind: "user",
+                target_id: id,
+                user_id: Some(id),
+                thread_id: None,
+                post_id: None,
+                reason: "",
+                public: true,
+                details: serde_json::json!({ "from": from.as_str(), "to": role.as_str() }),
+            },
+        )
+        .await?;
+        state.changed(Change::ModLogged).await?;
     }
     // Profiles and the invite tree show staff badges.
     state.changed(Change::UserChanged { user_id: id }).await?;

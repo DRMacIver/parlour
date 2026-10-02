@@ -810,6 +810,8 @@ async fn non_canonical_urls_redirect_to_the_canonical_one(pool: PgPool) {
         ("/c/games?page=%32".to_owned(), "/c/games?page=2".to_owned()),
         ("/c/game%73".to_owned(), "/c/games".to_owned()),
         ("/c/games?".to_owned(), "/c/games".to_owned()),
+        ("/terms?x=1".to_owned(), "/terms".to_owned()),
+        ("/privacy?utm_source=x".to_owned(), "/privacy".to_owned()),
         (format!("/t/0{id}/spirit-island"), thread.clone()),
         (
             format!("/t/0{id}/spirit-island?page=2"),

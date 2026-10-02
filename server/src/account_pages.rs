@@ -148,15 +148,26 @@ struct SitePageTemplate {
     html: String,
 }
 
+/// A page that is the same for everyone, so it is cached: like the reading
+/// pages it has one URL, and other spellings of it redirect there rather
+/// than each taking a place in the cache.
 async fn site_page(
     state: &AppState,
     viewer: &Viewer,
+    uri: &axum::http::Uri,
     which: SitePage,
 ) -> Result<Response, AppError> {
+    let (path, title) = match which {
+        SitePage::Terms => ("/terms", "Terms of use"),
+        SitePage::Privacy => ("/privacy", "Privacy"),
+    };
+    if let Some(redirect) = web::redirect_unless_canonical(uri, path) {
+        return Ok(redirect);
+    }
     let pages = settings::site_pages(state.db()).await?;
-    let (title, html) = match which {
-        SitePage::Terms => ("Terms of use", pages.terms_html),
-        SitePage::Privacy => ("Privacy", pages.privacy_html),
+    let html = match which {
+        SitePage::Terms => pages.terms_html,
+        SitePage::Privacy => pages.privacy_html,
     };
     cacheable(
         &SitePageTemplate {
@@ -168,12 +179,20 @@ async fn site_page(
     )
 }
 
-pub async fn terms(State(state): State<AppState>, viewer: Viewer) -> Result<Response, AppError> {
-    site_page(&state, &viewer, SitePage::Terms).await
+pub async fn terms(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    uri: axum::http::Uri,
+) -> Result<Response, AppError> {
+    site_page(&state, &viewer, &uri, SitePage::Terms).await
 }
 
-pub async fn privacy(State(state): State<AppState>, viewer: Viewer) -> Result<Response, AppError> {
-    site_page(&state, &viewer, SitePage::Privacy).await
+pub async fn privacy(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    uri: axum::http::Uri,
+) -> Result<Response, AppError> {
+    site_page(&state, &viewer, &uri, SitePage::Privacy).await
 }
 
 #[derive(Template)]

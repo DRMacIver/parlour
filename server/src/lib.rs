@@ -518,7 +518,31 @@ pub fn app(state: AppState) -> Router {
         .route("/static/islands/{*path}", get(islands::serve))
         .route("/static/{*path}", get(assets::serve))
         .merge(pages)
+        .layer(middleware::from_fn(security_headers))
         .with_state(state)
+}
+
+/// Headers every response carries: no other site may show a page of this
+/// one in a frame (so nobody can be tricked into clicking a form here
+/// through an invisible frame on their site), and browsers are to believe
+/// the content type given rather than sniff one.
+async fn security_headers(
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    use axum::http::HeaderValue;
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static("frame-ancestors 'none'"),
+    );
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    response
 }
 
 async fn healthz(axum::extract::State(state): axum::extract::State<AppState>) -> impl IntoResponse {
