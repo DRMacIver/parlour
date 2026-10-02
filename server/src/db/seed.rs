@@ -1553,7 +1553,10 @@ impl Seeder<'_> {
         let nell = self.extra_member("nell", "Nell", "ana", 120).await?;
         let otto = self.extra_member("otto", "Otto", "nell", 110).await?;
         let lines = [
-            (nell, "What’s everyone listening to while they paint or read?"),
+            (
+                nell,
+                "What’s everyone listening to while they paint or read?",
+            ),
             (otto, "The Sea of Thieves soundtrack, unironically."),
             (nell, "Ha. I’ve been on Nils Frahm all week."),
             (otto, "Good painting music: nothing with words in it."),

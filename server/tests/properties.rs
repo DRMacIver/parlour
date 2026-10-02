@@ -1069,7 +1069,8 @@ impl World {
         let in_thread: Vec<usize> = (0..self.posts.len())
             .filter(|&p| self.posts[p].thread == thread)
             .collect();
-        let reply_to = if tc.draw(gs::booleans()) {
+        // A thread whose posts were all moved away has none to reply to.
+        let reply_to = if !in_thread.is_empty() && tc.draw(gs::booleans()) {
             Some(tc.draw(gs::sampled_from(in_thread)))
         } else {
             None
