@@ -76,11 +76,13 @@ impl CategoriesTemplate {
             .unwrap_or_else(|| "Everyone".to_owned())
     }
 
-    fn posting(&self, category: &CategoryTarget) -> &'static str {
+    fn posting(&self, category: &CategoryTarget) -> String {
         match category.write_level.as_str() {
-            "members" => "Anyone who can read",
-            "groups" => "Groups",
-            _ => "Staff only",
+            "members" => "Anyone who can read".to_owned(),
+            "groups" => {
+                format::access_label("groups", &category.write_group_names).unwrap_or_default()
+            }
+            _ => "Staff only".to_owned(),
         }
     }
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT (SELECT count(*) FROM users) + (SELECT count(*) FROM categories) AS \"n!\"",
+  "query": "SELECT (SELECT count(*) FROM users) + (SELECT count(*) FROM categories)\n                  + (SELECT count(*) FROM groups) AS \"n!\"",
   "describe": {
     "columns": [
       {
@@ -17,5 +17,5 @@
       null
     ]
   },
-  "hash": "a0a40b9e100362d371346f103b7131a130d7925b8b072786cf57950f6f5d0625"
+  "hash": "2a1b99b654a9cb95d6129b6f1d8ec0b9c2efef6c28a16e7de9b48690b96619f6"
 }

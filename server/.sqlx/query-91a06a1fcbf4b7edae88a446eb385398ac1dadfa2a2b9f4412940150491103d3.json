@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO category_groups (category_id, group_id, access)\n             VALUES ($1, $2, 'read'), ($1, $2, 'write')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "91a06a1fcbf4b7edae88a446eb385398ac1dadfa2a2b9f4412940150491103d3"
+}

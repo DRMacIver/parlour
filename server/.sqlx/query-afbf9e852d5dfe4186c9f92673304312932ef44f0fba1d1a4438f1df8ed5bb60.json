@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.id, c.slug, c.name, c.description, c.position, c.section_id, c.read_level, c.write_level,\n               s.name AS \"section_name?\",\n               array(SELECT cg.group_id FROM category_groups cg\n                     WHERE cg.category_id = c.id AND cg.access = 'read' ORDER BY 1) AS \"read_groups!\",\n               array(SELECT cg.group_id FROM category_groups cg\n                     WHERE cg.category_id = c.id AND cg.access = 'write' ORDER BY 1) AS \"write_groups!\",\n               array(SELECT g.name FROM category_groups cg JOIN groups g ON g.id = cg.group_id\n                     WHERE cg.category_id = c.id AND cg.access = 'read' AND c.read_level = 'groups'\n                     ORDER BY lower(g.name), g.id) AS \"group_names!\"\n        FROM categories c LEFT JOIN sections s ON s.id = c.section_id\n        WHERE category_readable(c.read_level, c.id, $1, $2)\n        ORDER BY s.position NULLS FIRST, s.id NULLS FIRST, c.position, c.id\n        ",
+  "query": "\n        SELECT c.id, c.slug, c.name, c.description, c.position, c.section_id, c.read_level, c.write_level,\n               s.name AS \"section_name?\",\n               array(SELECT cg.group_id FROM category_groups cg\n                     WHERE cg.category_id = c.id AND cg.access = 'read' ORDER BY 1) AS \"read_groups!\",\n               array(SELECT cg.group_id FROM category_groups cg\n                     WHERE cg.category_id = c.id AND cg.access = 'write' ORDER BY 1) AS \"write_groups!\",\n               array(SELECT g.name FROM category_groups cg JOIN groups g ON g.id = cg.group_id\n                     WHERE cg.category_id = c.id AND cg.access = 'write' AND c.write_level = 'groups'\n                     ORDER BY lower(g.name), g.id) AS \"write_group_names!\",\n               array(SELECT g.name FROM category_groups cg JOIN groups g ON g.id = cg.group_id\n                     WHERE cg.category_id = c.id AND cg.access = 'read' AND c.read_level = 'groups'\n                     ORDER BY lower(g.name), g.id) AS \"group_names!\"\n        FROM categories c LEFT JOIN sections s ON s.id = c.section_id\n        WHERE category_readable(c.read_level, c.id, $1, $2)\n        ORDER BY s.position NULLS FIRST, s.id NULLS FIRST, c.position, c.id\n        ",
   "describe": {
     "columns": [
       {
@@ -116,6 +116,12 @@
       },
       {
         "ordinal": 11,
+        "name": "write_group_names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
         "name": "group_names!",
         "type_info": "TextArray",
         "origin": "Expression"
@@ -139,8 +145,9 @@
       false,
       null,
       null,
+      null,
       null
     ]
   },
-  "hash": "f36f8fda544ff7bb0f128fdbe6352b9a6e0de1c83cf5789403dec1cca33e7913"
+  "hash": "afbf9e852d5dfe4186c9f92673304312932ef44f0fba1d1a4438f1df8ed5bb60"
 }

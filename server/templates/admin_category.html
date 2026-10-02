@@ -59,7 +59,6 @@
       <legend>Who can start threads and reply</legend>
       <label class="choice"><input type="radio" name="write_level" value="members"{% if form.write_level == "members" %} checked{% endif %}> Every member who can read it</label>
       <label class="choice"><input type="radio" name="write_level" value="groups"{% if form.write_level == "groups" %} checked{% endif %}> Only the groups ticked below</label>
-      <label class="choice"><input type="radio" name="write_level" value="staff"{% if form.write_level == "staff" %} checked{% endif %}> Only moderators and admins</label>
       {% if !groups.is_empty() %}
       <div class="choice-group" role="group" aria-label="Groups that can post">
       {% for group in groups %}
@@ -67,6 +66,8 @@
       {% endfor %}
       </div>
       {% endif %}
+      <label class="choice"><input type="radio" name="write_level" value="staff"{% if form.write_level == "staff" %} checked{% endif %}> Only moderators and admins</label>
+      <span class="field-hint">Nobody can post where they can’t read, and moderators and admins can post everywhere.</span>
     </fieldset>
     <div class="form-actions">
       <button class="button" type="submit">{% if id.is_some() %}Save{% else %}Create category{% endif %}</button>

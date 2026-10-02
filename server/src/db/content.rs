@@ -1016,6 +1016,8 @@ pub struct CategoryTarget {
     pub write_groups: Vec<i64>,
     /// The names of the groups that may read a group-restricted category.
     pub group_names: Vec<String>,
+    /// The names of the groups that may post, with the `groups` write level.
+    pub write_group_names: Vec<String>,
 }
 
 impl CategoryTarget {
@@ -1101,6 +1103,9 @@ pub async fn readable_categories(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<C
                array(SELECT cg.group_id FROM category_groups cg
                      WHERE cg.category_id = c.id AND cg.access = 'write' ORDER BY 1) AS "write_groups!",
                array(SELECT g.name FROM category_groups cg JOIN groups g ON g.id = cg.group_id
+                     WHERE cg.category_id = c.id AND cg.access = 'write' AND c.write_level = 'groups'
+                     ORDER BY lower(g.name), g.id) AS "write_group_names!",
+               array(SELECT g.name FROM category_groups cg JOIN groups g ON g.id = cg.group_id
                      WHERE cg.category_id = c.id AND cg.access = 'read' AND c.read_level = 'groups'
                      ORDER BY lower(g.name), g.id) AS "group_names!"
         FROM categories c LEFT JOIN sections s ON s.id = c.section_id
@@ -1129,6 +1134,7 @@ pub async fn readable_categories(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<C
             read_groups: row.read_groups,
             write_groups: row.write_groups,
             group_names: row.group_names,
+            write_group_names: row.write_group_names,
         })
         .collect())
 }
