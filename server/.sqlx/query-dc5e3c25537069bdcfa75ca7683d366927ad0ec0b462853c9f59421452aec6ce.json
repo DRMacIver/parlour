@@ -1,0 +1,89 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.id, c.slug, c.name, c.read_level, c.write_level, s.name AS \"section_name?\"\n        FROM categories c LEFT JOIN sections s ON s.id = c.section_id\n        WHERE category_readable(c.read_level, c.id, $1, $2)\n        ORDER BY s.position NULLS FIRST, s.id NULLS FIRST, c.position, c.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "categories",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "categories",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "categories",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "read_level",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "categories",
+            "name": "read_level"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "write_level",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "categories",
+            "name": "write_level"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "section_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sections",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "dc5e3c25537069bdcfa75ca7683d366927ad0ec0b462853c9f59421452aec6ce"
+}

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{% block title %}Edit history of № {{ history.post.seq }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+{%- let post = history.post -%}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/c/{{ post.thread.category.category.slug }}">{{ post.thread.category.category.name }}</a> › <a href="{{ crate::format::thread_href(post.thread.thread.id, post.thread.thread.slug) }}">{{ post.thread.thread.title }}</a></nav>
+<h1 class="page-title">Edit history</h1>
+<p class="lede"><a href="/p/{{ post.post_id }}">№ {{ post.seq }}</a> by <a href="/u/{{ post.author.username }}">{{ post.author.display_name }}</a> · {{ crate::format::plural(history.versions.len() as i64, "version", "versions") }} · Edits made within 5 minutes of posting count as part of the original.</p>
+<div class="with-sidebar revisions">
+  <section class="panel" aria-labelledby="version-heading">
+    <h2 class="panel-bar" id="version-heading">Version {{ selected }}{% if !note.is_empty() %} · {{ note }}{% endif %}</h2>
+    {% if redacted %}
+    <p class="empty">This version was redacted by a moderator. The entry stays in the history so you can see an edit happened, but its text has been removed for everyone.</p>
+    {% else %}
+    <div class="diff">{% for segment in segments %}{% match segment %}{% when Segment::Same(text) %}{{ text }}{% when Segment::Added(text) %}<ins>{{ text }}</ins>{% when Segment::Removed(text) %}<del>{{ text }}</del>{% endmatch %}{% endfor %}</div>
+    {% if compared_with.is_some() %}<p class="panel-foot diff-key"><del>removed</del> <ins>added</ins> · shown as Markdown source</p>{% endif %}
+    {% endif %}
+  </section>
+  <section class="panel" aria-labelledby="versions-heading">
+    <h2 class="panel-bar" id="versions-heading">Versions</h2>
+    <ol class="version-list" reversed>
+    {% for version in history.versions.iter().rev() %}
+      <li>
+        {% if version.number == selected %}<strong aria-current="page">Version {{ version.number }}</strong>{% else %}<a href="{{ self.version_href(version.number) }}">Version {{ version.number }}</a>{% endif %}
+        {% if version.number == history.versions.len() as i64 %}<span class="badge">Current</span>{% endif %}
+        {% if version.markdown.is_none() %}<span class="badge">Redacted</span>{% endif %}
+        <span class="row-meta">{% call m::time(version.at) %}{% endcall %} · {% if version.number == 1 %}posted{% else %}edited{% endif %} by {{ version.editor.display_name }}</span>
+      </li>
+    {% endfor %}
+    </ol>
+  </section>
+</div>
+{% endblock %}

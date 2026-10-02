@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{%- import "_forms.html" as f -%}
+{% block title %}{{ heading }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a>{% for crumb in crumbs %} › <a href="{{ crumb.href }}">{{ crumb.label }}</a>{% endfor %}</nav>
+<h1 class="page-title">{{ heading }}</h1>
+{% call f::errors(errors) %}{% endcall %}
+{% if let Some(source) = source %}
+<figure class="embed">
+  <figcaption class="embed-caption">
+    <span class="embed-label">Quoting</span>
+    <span>№ {{ source.seq }} in <a href="{{ crate::format::thread_href(source.thread.thread.id, source.thread.thread.slug) }}">{{ source.thread.thread.title }}</a></span>
+  </figcaption>
+  <div class="embed-body">
+    {% call m::avatar(source.author, "avatar-small") %}{% endcall %}
+    <div class="embed-content">
+      <div class="embed-byline"><strong>{{ source.author.display_name }}</strong> · {% call m::time(source.created_at) %}{% endcall %}</div>
+      {% if let Some(text) = source.body %}<div class="post-body">{{ text.html|safe }}</div>{% endif %}
+    </div>
+  </div>
+</figure>
+<p class="form-note composer-note">The quoted post stays where it is and appears at the top of the new thread. You can only quote it into categories at least as private as its own, so that nobody can read it through your thread who couldn’t read it where it is.</p>
+{% endif %}
+{% if let Some(html) = preview %}
+<section class="panel preview" aria-labelledby="preview-heading">
+  <h2 class="panel-bar" id="preview-heading">Preview</h2>
+  <div class="post-body">{{ html|safe }}</div>
+</section>
+{% endif %}
+<form class="panel composer" method="post" action="{{ action }}">
+  <h2 class="panel-bar">{{ form_label }}</h2>
+  <div class="form">
+    {% if let Some(title) = title %}
+    <div class="field">
+      <label for="title">Title</label>
+      <input type="text" id="title" name="title" value="{{ title }}" maxlength="150" required>
+    </div>
+    {% endif %}
+    {% if !categories.is_empty() %}
+    <div class="field">
+      <label for="category">Category</label>
+      <select id="category" name="category">
+      {% for c in categories %}
+        <option value="{{ c.slug }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>
+      {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    {% if let Some(r) = reply_to %}
+    <label class="choice"><input type="checkbox" name="reply_to" value="{{ r.post_id }}" checked> In reply to № {{ r.seq }} by @{{ r.username }}</label>
+    {% endif %}
+    <div class="field">
+      <label for="body">{{ body_label }}</label>
+      <textarea id="body" name="body" rows="12" required>{{ body }}</textarea>
+      <span class="field-hint">Markdown: *italic*, **bold**, &gt; quote, `code`, [link](https://…), tables and ~~strikethrough~~. Mention someone with @username.</span>
+    </div>
+    <div class="form-actions">
+      <button class="button" type="submit">{{ submit }}</button>
+      <button class="button button-quiet" type="submit" name="preview" value="1">Preview</button>
+      <a href="{{ cancel }}">Cancel</a>
+    </div>
+  </div>
+</form>
+{% endblock %}

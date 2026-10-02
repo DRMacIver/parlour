@@ -1,0 +1,69 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT r.emoji, u.id, u.username, u.display_name\n        FROM reactions r JOIN users u ON u.id = r.user_id\n        WHERE r.post_id = $1\n        ORDER BY r.created_at, u.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "emoji",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reactions",
+            "name": "emoji"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "username",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "99ed31f22ed366c6e008aaa2816ff5c3b8c32fae5f23bc15dcb60763fbf71b04"
+}

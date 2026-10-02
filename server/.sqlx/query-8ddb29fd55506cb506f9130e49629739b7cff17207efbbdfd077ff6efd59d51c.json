@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "LOCK TABLE reaction_types IN SHARE ROW EXCLUSIVE MODE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "8ddb29fd55506cb506f9130e49629739b7cff17207efbbdfd077ff6efd59d51c"
+}

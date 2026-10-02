@@ -35,14 +35,14 @@ pub fn slugify(title: &str) -> String {
     if slug.is_empty() {
         slug.push_str("thread");
     }
-    // `/t/{id}/unread` is a route of its own.
+    // `/t/{id}/unread` and `/t/{id}/reply` are routes of their own.
     if RESERVED_SLUGS.contains(&slug.as_str()) {
         slug.push_str("-thread");
     }
     slug
 }
 
-const RESERVED_SLUGS: &[&str] = &["unread"];
+const RESERVED_SLUGS: &[&str] = &["unread", "reply"];
 
 #[derive(Clone, Debug, Default)]
 pub struct NewUser {
@@ -233,11 +233,314 @@ async fn insert_post(tx: &mut sqlx::PgConnection, post: &NewPost) -> sqlx::Resul
         post.author_id,
         post.reply_to_post_id,
         post.body_md,
-        markdown::render(&post.body_md),
+        render_post(&mut *tx, &post.body_md).await?.html,
         created_at,
     )
     .fetch_one(&mut *tx)
     .await
+}
+
+/// Renders a post body as it will be saved, linking mentions of members
+/// who exist now.
+pub async fn render_post(
+    conn: &mut sqlx::PgConnection,
+    body_md: &str,
+) -> sqlx::Result<markdown::Rendered> {
+    let candidates = markdown::mention_candidates(body_md);
+    let known: Vec<String> = if candidates.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_scalar!(
+            r#"SELECT username::text AS "username!" FROM users
+               WHERE lower(username::text) = ANY($1) AND deleted_at IS NULL"#,
+            &candidates
+        )
+        .fetch_all(&mut *conn)
+        .await?
+    };
+    Ok(markdown::render_with_mentions(body_md, |name| {
+        known
+            .iter()
+            .find(|known| known.eq_ignore_ascii_case(name))
+            .cloned()
+    }))
+}
+
+/// Edits made this soon after posting replace the original rather than
+/// adding to the post's history (DESIGN.md §3.3).
+pub const EDIT_GRACE_MINUTES: i32 = 5;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edited {
+    /// The text was the same, so nothing changed.
+    Unchanged,
+    /// The original was replaced, within the grace period.
+    Replaced,
+    /// The previous version was kept as revision `rev`.
+    Revised { rev: i32 },
+}
+
+/// Replaces a post's text, keeping the version it replaces in
+/// `post_revisions` unless the post is still in its grace period and has
+/// never been edited since. Doesn't check permissions.
+pub async fn edit_post<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    post_id: i64,
+    editor_id: i64,
+    body_md: &str,
+) -> sqlx::Result<Edited> {
+    let mut tx = db.begin().await?;
+    let post = sqlx::query!(
+        r#"SELECT body_md, body_html, author_id, created_at, edited_at, edited_by,
+                  created_at > now() - make_interval(mins => $2) AS "in_grace!"
+           FROM posts WHERE id = $1 FOR UPDATE"#,
+        post_id,
+        EDIT_GRACE_MINUTES,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if post.body_md == body_md {
+        return Ok(Edited::Unchanged);
+    }
+    let html = render_post(&mut tx, body_md).await?.html;
+    let outcome = if post.in_grace && post.edited_at.is_none() && editor_id == post.author_id {
+        sqlx::query!(
+            "UPDATE posts SET body_md = $2, body_html = $3 WHERE id = $1",
+            post_id,
+            body_md,
+            html
+        )
+        .execute(&mut *tx)
+        .await?;
+        Edited::Replaced
+    } else {
+        let rev = sqlx::query_scalar!(
+            r#"INSERT INTO post_revisions (post_id, rev, body_md, body_html, editor_id, created_at)
+               SELECT $1, coalesce(max(rev), 0) + 1, $2, $3, $4, $5 FROM post_revisions WHERE post_id = $1
+               RETURNING rev"#,
+            post_id,
+            post.body_md,
+            post.body_html,
+            post.edited_by.unwrap_or(post.author_id),
+            post.edited_at.unwrap_or(post.created_at),
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query!(
+            r#"UPDATE posts SET body_md = $2, body_html = $3, edited_at = now(),
+                      edited_by = CASE WHEN author_id = $4 THEN NULL ELSE $4 END
+               WHERE id = $1"#,
+            post_id,
+            body_md,
+            html,
+            editor_id,
+        )
+        .execute(&mut *tx)
+        .await?;
+        Edited::Revised { rev }
+    };
+    tx.commit().await?;
+    Ok(outcome)
+}
+
+/// Deletes a post, leaving a tombstone. Its number, history and reactions
+/// stay in the database but are no longer shown.
+pub async fn delete_post<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    post_id: i64,
+) -> sqlx::Result<bool> {
+    let mut conn = db.acquire().await?;
+    let done = sqlx::query!(
+        "UPDATE posts SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
+        post_id
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Adds a reaction; adding one twice does nothing. Returns whether it was
+/// added.
+pub async fn add_reaction<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    post_id: i64,
+    user_id: i64,
+    emoji: &str,
+) -> sqlx::Result<bool> {
+    let mut conn = db.acquire().await?;
+    let done = sqlx::query!(
+        "INSERT INTO reactions (post_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        post_id,
+        user_id,
+        emoji
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Removes a reaction, returning whether there was one.
+pub async fn remove_reaction<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    post_id: i64,
+    user_id: i64,
+    emoji: &str,
+) -> sqlx::Result<bool> {
+    let mut conn = db.acquire().await?;
+    let done = sqlx::query!(
+        "DELETE FROM reactions WHERE post_id = $1 AND user_id = $2 AND emoji = $3",
+        post_id,
+        user_id,
+        emoji
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Moves a member's read marker in a thread forward to `seq`. It never
+/// moves back.
+pub async fn mark_read<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    user_id: i64,
+    thread_id: i64,
+    seq: i64,
+) -> sqlx::Result<()> {
+    let mut conn = db.acquire().await?;
+    let seq = i32::try_from(seq.max(0)).unwrap_or(i32::MAX);
+    sqlx::query!(
+        r#"INSERT INTO thread_reads (user_id, thread_id, last_read_seq) VALUES ($1, $2, $3)
+           ON CONFLICT (user_id, thread_id)
+           DO UPDATE SET last_read_seq = greatest(thread_reads.last_read_seq, excluded.last_read_seq)
+           WHERE thread_reads.last_read_seq < excluded.last_read_seq"#,
+        user_id,
+        thread_id,
+        seq
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// Marks every thread in a category, as listed in `thread_ids`, as read up
+/// to its last post.
+pub async fn mark_threads_read<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    user_id: i64,
+    thread_ids: &[i64],
+) -> sqlx::Result<()> {
+    let mut conn = db.acquire().await?;
+    sqlx::query!(
+        r#"INSERT INTO thread_reads (user_id, thread_id, last_read_seq)
+           SELECT $1, t.id, t.last_seq FROM threads t WHERE t.id = ANY($2)
+           ON CONFLICT (user_id, thread_id)
+           DO UPDATE SET last_read_seq = greatest(thread_reads.last_read_seq, excluded.last_read_seq)
+           WHERE thread_reads.last_read_seq < excluded.last_read_seq"#,
+        user_id,
+        thread_ids
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// Whether text can be offered as a reaction: a short run of symbols,
+/// such as an emoji, with no letters, digits, spaces or markup.
+pub fn valid_reaction(emoji: &str) -> bool {
+    !emoji.is_empty()
+        && emoji.chars().count() <= 16
+        && emoji.chars().all(|c| {
+            !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control() && !"<>&\"'`".contains(c)
+        })
+}
+
+/// Changes the reaction types, as the admin asked: `add` a new one, `enable`
+/// or `disable` one, move it `up` or `down`, or `delete` one nobody has
+/// used. At most `max` can be enabled at once. Returns the problem, if any,
+/// to show the admin.
+pub async fn change_reaction_type<'c>(
+    db: impl Acquire<'c, Database = Postgres>,
+    action: &str,
+    emoji: &str,
+    max: usize,
+) -> sqlx::Result<Result<(), String>> {
+    let mut tx = db.begin().await?;
+    // One change at a time, so that the limit and positions hold.
+    sqlx::query!("LOCK TABLE reaction_types IN SHARE ROW EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await?;
+    let types = sqlx::query!("SELECT emoji, enabled FROM reaction_types ORDER BY position, emoji")
+        .fetch_all(&mut *tx)
+        .await?;
+    let enabled = types.iter().filter(|t| t.enabled).count();
+    let index = types.iter().position(|t| t.emoji == emoji);
+    let full = format!("At most {max} reactions can be in use at once. Turn one off first.");
+    let problem = match (action, index) {
+        ("add", Some(_)) => Some("That reaction is already in the list.".to_owned()),
+        ("add", None) if !valid_reaction(emoji) => {
+            Some("A reaction should be an emoji or a symbol of a few characters, with no letters or spaces.".to_owned())
+        }
+        ("add", None) if enabled >= max => Some(full),
+        ("add", None) => {
+            sqlx::query!(
+                "INSERT INTO reaction_types (emoji, position)
+                 SELECT $1, coalesce(max(position), 0) + 1 FROM reaction_types",
+                emoji
+            )
+            .execute(&mut *tx)
+            .await?;
+            None
+        }
+        ("enable", Some(i)) if !types[i].enabled && enabled >= max => Some(full),
+        ("enable" | "disable", Some(_)) => {
+            sqlx::query!(
+                "UPDATE reaction_types SET enabled = $2 WHERE emoji = $1",
+                emoji,
+                action == "enable"
+            )
+            .execute(&mut *tx)
+            .await?;
+            None
+        }
+        ("up" | "down", Some(i)) => {
+            let other = if action == "up" { i.checked_sub(1) } else { Some(i + 1) };
+            if let Some(other) = other.filter(|&o| o < types.len()) {
+                let mut order: Vec<&str> = types.iter().map(|t| t.emoji.as_str()).collect();
+                order.swap(i, other);
+                for (position, emoji) in order.iter().enumerate() {
+                    sqlx::query!(
+                        "UPDATE reaction_types SET position = $2 WHERE emoji = $1",
+                        emoji,
+                        position as i32 + 1
+                    )
+                    .execute(&mut *tx)
+                    .await?;
+                }
+            }
+            None
+        }
+        ("delete", Some(_)) => {
+            let used = sqlx::query_scalar!(
+                r#"SELECT EXISTS (SELECT 1 FROM reactions WHERE emoji = $1) AS "used!""#,
+                emoji
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+            if used {
+                Some("Members have used that reaction, so it can only be turned off.".to_owned())
+            } else {
+                sqlx::query!("DELETE FROM reaction_types WHERE emoji = $1", emoji)
+                    .execute(&mut *tx)
+                    .await?;
+                None
+            }
+        }
+        _ => Some("Choose a reaction from the list.".to_owned()),
+    };
+    if problem.is_none() {
+        tx.commit().await?;
+    }
+    Ok(problem.map_or(Ok(()), Err))
 }
 
 #[cfg(test)]
@@ -259,6 +562,7 @@ mod tests {
         assert_eq!(slugify("  ?? "), "thread");
         assert_eq!(slugify("Ünïcødé"), "n-c-d");
         assert_eq!(slugify("Unread!"), "unread-thread");
+        assert_eq!(slugify("Reply"), "reply-thread");
     }
 
     #[hegel::test(test_cases = 500)]
@@ -267,6 +571,7 @@ mod tests {
         let slug = slugify(&title);
         assert!(!slug.is_empty() && slug.len() <= 67, "{slug:?}");
         assert_ne!(slug, "unread");
+        assert_ne!(slug, "reply");
         assert!(
             !slug.starts_with('-') && !slug.ends_with('-') && !slug.contains("--"),
             "{slug:?}"

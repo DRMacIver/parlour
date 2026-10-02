@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{%- import "_admin_nav.html" as an -%}
+{% block title %}Reactions · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Reactions</h1>
+{% call an::admin_nav("reactions") %}{% endcall %}
+<p class="lede">The emoji members can react to posts with, in the order they’re offered. Up to {{ max }} can be in use at once. Turning one off hides it, and the reactions made with it, until it is turned back on.</p>
+{% call f::errors(errors) %}{% endcall %}
+<section class="panel" aria-labelledby="types-heading">
+  <h2 class="panel-bar" id="types-heading">Reactions</h2>
+  <ul class="member-list reaction-types">
+  {% for t in types %}
+    <li>
+      <span class="reaction-emoji">{{ t.emoji }}</span>
+      {% if !t.enabled %}<span class="badge">Off</span>{% endif %}
+      <span class="spacer"></span>
+      <form class="form-inline role-form" method="post" action="/admin/reactions">
+        <input type="hidden" name="emoji" value="{{ t.emoji }}">
+        {% if !loop.first %}<button class="button button-small button-quiet" type="submit" name="action" value="up" aria-label="Move {{ t.emoji }} earlier">↑</button>{% endif %}
+        {% if !loop.last %}<button class="button button-small button-quiet" type="submit" name="action" value="down" aria-label="Move {{ t.emoji }} later">↓</button>{% endif %}
+        {% if t.enabled %}<button class="button button-small button-quiet" type="submit" name="action" value="disable">Turn off</button>{% else %}<button class="button button-small" type="submit" name="action" value="enable">Turn on</button>
+        <button class="button button-small button-quiet" type="submit" name="action" value="delete">Delete</button>{% endif %}
+      </form>
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+<form class="panel" method="post" action="/admin/reactions">
+  <h2 class="panel-bar">Add a reaction</h2>
+  <div class="form">
+    <div class="field">
+      <label for="emoji">Emoji</label>
+      <input type="text" id="emoji" name="emoji" maxlength="16" required>
+    </div>
+    <div class="form-actions"><button class="button" type="submit" name="action" value="add">Add</button></div>
+  </div>
+</form>
+{% endblock %}

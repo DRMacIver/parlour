@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO thread_reads (user_id, thread_id, last_read_seq) VALUES ($1, $2, $3)\n           ON CONFLICT (user_id, thread_id)\n           DO UPDATE SET last_read_seq = greatest(thread_reads.last_read_seq, excluded.last_read_seq)\n           WHERE thread_reads.last_read_seq < excluded.last_read_seq",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a0d39e4831f3a4c659592617adab614e528dc9667f993454c7990d55408ef53e"
+}

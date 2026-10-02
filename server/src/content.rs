@@ -14,6 +14,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
 use crate::cache::Tag;
+use crate::permissions::{Audience, WriteLevel};
 use crate::viewer::Viewer;
 
 pub const POSTS_PER_PAGE: i64 = 50;
@@ -237,6 +238,9 @@ pub struct ThreadRow {
     pub locked: bool,
     /// The thread this one was quote-forked from, if the viewer can see it.
     pub forked_from: Option<ThreadRef>,
+    /// For a logged-in viewer, how many posts they haven't read yet: those
+    /// after their read marker, or every post if they've never opened it.
+    pub unread: Option<i64>,
 }
 
 pub struct CategoryPage {
@@ -359,8 +363,11 @@ async fn thread_rows(
                lp.id AS "last_post_id?", lu.id AS "last_user_id?", lu.username AS "last_username?",
                lu.display_name AS "last_display_name?",
                src.id AS "source_thread_id?", src.title AS "source_title?", src.slug AS "source_slug?",
-               src.visible AS "source_visible?"
+               src.visible AS "source_visible?",
+               CASE WHEN $6::bigint IS NULL THEN NULL
+                    ELSE t.last_seq - coalesce(tr.last_read_seq, 0) END AS unread
         FROM threads t
+        LEFT JOIN thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $6
         JOIN categories c ON c.id = t.category_id
         JOIN users a ON a.id = t.author_id
         LEFT JOIN LATERAL (
@@ -388,6 +395,7 @@ async fn thread_rows(
         category_id,
         per_page,
         offset,
+        viewer.user_id(),
     )
     .fetch_all(db)
     .await?;
@@ -435,6 +443,7 @@ async fn thread_rows(
                 pinned: row.pinned,
                 locked: row.locked,
                 forked_from,
+                unread: row.unread.map(i64::from),
             }
         })
         .collect())
@@ -454,9 +463,16 @@ pub struct ThreadPage {
     pub last_seq: i64,
     pub pinned: bool,
     pub locked: bool,
+    /// The category's read and write levels, for deciding who may reply.
+    pub read_level: String,
+    pub write_level: String,
     /// For a quote-fork, the post it quotes.
     pub embed: Option<Embed>,
     pub posts: Vec<PostView>,
+    /// For a logged-in viewer, how far they had read before this page: the
+    /// number of the last post they'd seen, or `None` if they had never
+    /// opened the thread.
+    pub read_marker: Option<i64>,
 }
 
 pub enum Embed {
@@ -486,6 +502,18 @@ pub struct PostView {
     pub reply_to: Option<ReplyTo>,
     /// Quote-forks of this post that the viewer can see.
     pub forks: Vec<ForkLink>,
+    /// Reactions to a live post, in the order the admin set.
+    pub reactions: Vec<ReactionCount>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReactionCount {
+    pub emoji: String,
+    pub count: i64,
+    /// Whether the viewer is one of those who reacted.
+    pub mine: bool,
+    /// The display names of those who reacted, first to react first.
+    pub names: Vec<String>,
 }
 
 pub enum PostBody {
@@ -538,6 +566,9 @@ pub async fn thread_page(
         r#"
         SELECT t.id, t.title, t.slug, t.created_at, t.last_seq, t.pinned, t.locked, t.forked_from_post_id,
                c.id AS category_id, c.slug AS category_slug, c.name AS category_name, s.name AS "section_name?",
+               c.read_level, c.write_level,
+               (SELECT tr.last_read_seq FROM thread_reads tr
+                WHERE tr.thread_id = t.id AND tr.user_id = $4) AS read_marker,
                a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name
         FROM threads t
         JOIN categories c ON c.id = t.category_id
@@ -548,6 +579,7 @@ pub async fn thread_page(
         thread_id,
         &filter.visibilities,
         &filter.group_category_ids,
+        viewer.user_id(),
     )
     .fetch_optional(db)
     .await?
@@ -598,6 +630,12 @@ pub async fn thread_page(
     let authors = author_infos(db, viewer, &author_ids, deps).await?;
     let post_ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
     let mut forks = forks_of(db, viewer, &post_ids, deps).await?;
+    let live_ids: Vec<i64> = rows
+        .iter()
+        .filter(|row| !row.deleted && !row.hidden)
+        .map(|row| row.id)
+        .collect();
+    let mut reactions = reactions_for(db, viewer, &live_ids).await?;
 
     let posts = rows
         .into_iter()
@@ -635,6 +673,7 @@ pub async fn thread_page(
                 } else {
                     Vec::new()
                 },
+                reactions: reactions.remove(&row.id).unwrap_or_default(),
                 body,
                 reply_to,
             }
@@ -662,8 +701,11 @@ pub async fn thread_page(
         last_seq: i64::from(thread.last_seq),
         pinned: thread.pinned,
         locked: thread.locked,
+        read_level: thread.read_level,
+        write_level: thread.write_level,
         embed,
         posts,
+        read_marker: thread.read_marker.map(i64::from),
     }))
 }
 
@@ -712,6 +754,45 @@ async fn author_infos(
             )
         })
         .collect())
+}
+
+/// The reactions to each of these posts, which the caller has checked are
+/// live posts the viewer can see. Only reactions of enabled types count.
+async fn reactions_for(
+    db: &PgPool,
+    viewer: &Viewer,
+    post_ids: &[i64],
+) -> sqlx::Result<HashMap<i64, Vec<ReactionCount>>> {
+    if post_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query!(
+        r#"
+        SELECT r.post_id, r.emoji, count(*) AS "count!",
+               coalesce(bool_or(r.user_id = $2), false) AS "mine!",
+               array_agg(u.display_name ORDER BY r.created_at, u.id) AS "names!"
+        FROM reactions r
+        JOIN reaction_types rt ON rt.emoji = r.emoji AND rt.enabled
+        JOIN users u ON u.id = r.user_id
+        WHERE r.post_id = ANY($1)
+        GROUP BY r.post_id, r.emoji, rt.position
+        ORDER BY r.post_id, rt.position, r.emoji
+        "#,
+        post_ids,
+        viewer.user_id(),
+    )
+    .fetch_all(db)
+    .await?;
+    let mut out: HashMap<i64, Vec<ReactionCount>> = HashMap::new();
+    for row in rows {
+        out.entry(row.post_id).or_default().push(ReactionCount {
+            emoji: row.emoji,
+            count: row.count,
+            mine: row.mine,
+            names: row.names,
+        });
+    }
+    Ok(out)
 }
 
 /// Visible quote-forks of each of these posts.
@@ -902,6 +983,428 @@ pub async fn thread_slug(
     )
     .fetch_optional(db)
     .await
+}
+
+// ---------------------------------------------------------------------------
+// Writing: what a form is about, checked against the viewer
+//
+// These say where something is and who may see it; whether the viewer may
+// write there is for [`crate::permissions`] to decide.
+
+/// A category the viewer can read, as somewhere to post.
+#[derive(Clone, Debug)]
+pub struct CategoryTarget {
+    pub category: CategoryRef,
+    pub section_name: Option<String>,
+    pub read_level: String,
+    pub write_level: String,
+    /// The groups that may read and write in a group-restricted category.
+    /// Groups arrive in M5, which fills these in from `category_groups`.
+    pub read_groups: Vec<i64>,
+    pub write_groups: Vec<i64>,
+}
+
+impl CategoryTarget {
+    pub fn audience(&self) -> Audience {
+        Audience::from_level(&self.read_level, self.read_groups.iter().copied())
+    }
+
+    pub fn write(&self) -> WriteLevel {
+        WriteLevel::from_level(&self.write_level, self.write_groups.iter().copied())
+    }
+}
+
+/// Every category the viewer can read, in index order.
+pub async fn readable_categories(
+    db: &PgPool,
+    viewer: &Viewer,
+) -> sqlx::Result<Vec<CategoryTarget>> {
+    let filter = viewer.filter();
+    let rows = sqlx::query!(
+        r#"
+        SELECT c.id, c.slug, c.name, c.read_level, c.write_level, s.name AS "section_name?"
+        FROM categories c LEFT JOIN sections s ON s.id = c.section_id
+        WHERE category_readable(c.read_level, c.id, $1, $2)
+        ORDER BY s.position NULLS FIRST, s.id NULLS FIRST, c.position, c.id
+        "#,
+        &filter.visibilities,
+        &filter.group_category_ids,
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| CategoryTarget {
+            category: CategoryRef {
+                id: row.id,
+                slug: row.slug,
+                name: row.name,
+            },
+            section_name: row.section_name,
+            read_level: row.read_level,
+            write_level: row.write_level,
+            read_groups: Vec::new(),
+            write_groups: Vec::new(),
+        })
+        .collect())
+}
+
+/// A category the viewer can read, by slug.
+pub async fn category_target(
+    db: &PgPool,
+    viewer: &Viewer,
+    slug: &str,
+) -> sqlx::Result<Option<CategoryTarget>> {
+    Ok(readable_categories(db, viewer)
+        .await?
+        .into_iter()
+        .find(|c| c.category.slug == slug))
+}
+
+/// A thread the viewer can read, as somewhere to reply.
+#[derive(Clone, Debug)]
+pub struct ThreadTarget {
+    pub thread: ThreadRef,
+    pub category: CategoryTarget,
+    pub locked: bool,
+    pub last_seq: i64,
+}
+
+pub async fn thread_target(
+    db: &PgPool,
+    viewer: &Viewer,
+    thread_id: i64,
+) -> sqlx::Result<Option<ThreadTarget>> {
+    let filter = viewer.filter();
+    let Some(row) = sqlx::query!(
+        r#"
+        SELECT t.id, t.title, t.slug, t.locked, t.last_seq, t.category_id AS "category_id!"
+        FROM threads t
+        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.category_id IS NOT NULL
+          AND thread_readable(t.visibility, t.category_id, $2, $3)
+        "#,
+        thread_id,
+        &filter.visibilities,
+        &filter.group_category_ids,
+    )
+    .fetch_optional(db)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let Some(category) = readable_categories(db, viewer)
+        .await?
+        .into_iter()
+        .find(|c| c.category.id == row.category_id)
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ThreadTarget {
+        thread: ThreadRef {
+            id: row.id,
+            title: row.title,
+            slug: row.slug,
+        },
+        category,
+        locked: row.locked,
+        last_seq: i64::from(row.last_seq),
+    }))
+}
+
+/// A post in a thread the viewer can read.
+#[derive(Clone, Debug)]
+pub struct PostTarget {
+    pub post_id: i64,
+    pub seq: i64,
+    pub thread: ThreadTarget,
+    pub author: UserRef,
+    pub created_at: DateTime<Utc>,
+    pub edited_at: Option<DateTime<Utc>>,
+    /// The text, as Markdown and as HTML, unless the post was deleted or
+    /// hidden.
+    pub body: Option<PostText>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PostText {
+    pub markdown: String,
+    pub html: String,
+}
+
+impl PostTarget {
+    pub fn is_live(&self) -> bool {
+        self.body.is_some()
+    }
+}
+
+pub async fn post_target(
+    db: &PgPool,
+    viewer: &Viewer,
+    post_id: i64,
+) -> sqlx::Result<Option<PostTarget>> {
+    let filter = viewer.filter();
+    let Some(row) = sqlx::query!(
+        r#"
+        SELECT p.id, p.seq, p.thread_id, p.created_at, p.edited_at,
+               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.body_md END AS body_md,
+               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.body_html END AS body_html,
+               u.id AS author_id, u.username, u.display_name
+        FROM posts p
+        JOIN threads t ON t.id = p.thread_id
+        JOIN users u ON u.id = p.author_id
+        WHERE p.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $2, $3)
+        "#,
+        post_id,
+        &filter.visibilities,
+        &filter.group_category_ids,
+    )
+    .fetch_optional(db)
+    .await?
+    else {
+        return Ok(None);
+    };
+    let Some(thread) = thread_target(db, viewer, row.thread_id).await? else {
+        return Ok(None);
+    };
+    Ok(Some(PostTarget {
+        post_id: row.id,
+        seq: i64::from(row.seq),
+        thread,
+        author: UserRef {
+            id: row.author_id,
+            username: row.username.to_string(),
+            display_name: row.display_name,
+        },
+        created_at: row.created_at,
+        edited_at: row.edited_at,
+        body: match (row.body_md, row.body_html) {
+            (Some(markdown), Some(html)) => Some(PostText { markdown, html }),
+            _ => None,
+        },
+    }))
+}
+
+/// The ids of the threads in a category that the viewer can see.
+pub async fn visible_thread_ids(
+    db: &PgPool,
+    viewer: &Viewer,
+    category_id: i64,
+) -> sqlx::Result<Vec<i64>> {
+    let filter = viewer.filter();
+    sqlx::query_scalar!(
+        r#"SELECT t.id FROM threads t
+           WHERE t.category_id = $1 AND t.deleted_at IS NULL
+             AND thread_readable(t.visibility, t.category_id, $2, $3)"#,
+        category_id,
+        &filter.visibilities,
+        &filter.group_category_ids,
+    )
+    .fetch_all(db)
+    .await
+}
+
+/// The first post a logged-in viewer hasn't read in a thread they can see:
+/// the one after their read marker, or the last post if they've read them
+/// all. For anyone else, and for threads never opened, the first post.
+pub async fn first_unread(
+    db: &PgPool,
+    viewer: &Viewer,
+    thread_id: i64,
+) -> sqlx::Result<Option<(i64, PostLocation)>> {
+    let filter = viewer.filter();
+    let row = sqlx::query!(
+        r#"
+        SELECT p.id, p.seq, t.slug
+        FROM threads t
+        JOIN posts p ON p.thread_id = t.id
+          AND p.seq = least(t.last_seq,
+                            coalesce((SELECT tr.last_read_seq FROM thread_reads tr
+                                      WHERE tr.thread_id = t.id AND tr.user_id = $4), 0) + 1)
+        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $2, $3)
+        "#,
+        thread_id,
+        &filter.visibilities,
+        &filter.group_category_ids,
+        viewer.user_id(),
+    )
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|row| {
+        (
+            row.id,
+            PostLocation {
+                thread_id,
+                thread_slug: row.slug,
+                seq: i64::from(row.seq),
+            },
+        )
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Edit history
+
+/// One version of a post.
+pub struct Version {
+    /// 1 for the original.
+    pub number: i64,
+    pub at: DateTime<Utc>,
+    pub editor: UserRef,
+    /// `None` if a moderator redacted it.
+    pub markdown: Option<String>,
+}
+
+pub struct PostHistory {
+    pub post: PostTarget,
+    /// Oldest first; the last is the current version.
+    pub versions: Vec<Version>,
+}
+
+/// The versions of a live post the viewer can see. A deleted or hidden
+/// post's history is hidden with it.
+pub async fn post_history(
+    db: &PgPool,
+    viewer: &Viewer,
+    post_id: i64,
+    deps: &mut Deps,
+) -> sqlx::Result<Option<PostHistory>> {
+    let Some(post) = post_target(db, viewer, post_id).await? else {
+        return Ok(None);
+    };
+    deps.add(Tag::Thread(post.thread.thread.id));
+    let Some(text) = &post.body else {
+        return Ok(None);
+    };
+    let rows = sqlx::query!(
+        r#"
+        SELECT r.rev, r.created_at, CASE WHEN r.redacted_at IS NULL THEN r.body_md END AS body_md,
+               u.id AS editor_id, u.username, u.display_name
+        FROM post_revisions r JOIN users u ON u.id = r.editor_id
+        WHERE r.post_id = $1
+        ORDER BY r.rev
+        "#,
+        post_id
+    )
+    .fetch_all(db)
+    .await?;
+    let current_editor = sqlx::query!(
+        r#"SELECT u.id, u.username, u.display_name FROM posts p
+           JOIN users u ON u.id = coalesce(p.edited_by, p.author_id) WHERE p.id = $1"#,
+        post_id
+    )
+    .fetch_one(db)
+    .await?;
+    let mut versions: Vec<Version> = rows
+        .into_iter()
+        .map(|row| Version {
+            number: i64::from(row.rev),
+            at: row.created_at,
+            editor: UserRef {
+                id: row.editor_id,
+                username: row.username.to_string(),
+                display_name: row.display_name,
+            },
+            markdown: row.body_md,
+        })
+        .collect();
+    for version in &versions {
+        deps.add(Tag::User(version.editor.id));
+    }
+    deps.add(Tag::User(current_editor.id));
+    versions.push(Version {
+        number: versions.len() as i64 + 1,
+        at: post.edited_at.unwrap_or(post.created_at),
+        editor: UserRef {
+            id: current_editor.id,
+            username: current_editor.username.to_string(),
+            display_name: current_editor.display_name,
+        },
+        markdown: Some(text.markdown.clone()),
+    });
+    Ok(Some(PostHistory { post, versions }))
+}
+
+// ---------------------------------------------------------------------------
+// Reactions
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReactionType {
+    pub emoji: String,
+    pub position: i32,
+    pub enabled: bool,
+}
+
+/// The reaction types, in order; with `enabled_only`, just those members
+/// can use.
+pub async fn reaction_types(db: &PgPool, enabled_only: bool) -> sqlx::Result<Vec<ReactionType>> {
+    sqlx::query_as!(
+        ReactionType,
+        "SELECT emoji, position, enabled FROM reaction_types
+         WHERE enabled OR NOT $1 ORDER BY position, emoji",
+        enabled_only
+    )
+    .fetch_all(db)
+    .await
+}
+
+/// Who reacted to a post with one emoji.
+pub struct ReactionDetail {
+    pub emoji: String,
+    pub users: Vec<UserRef>,
+    pub mine: bool,
+}
+
+pub struct PostReactions {
+    pub post: PostTarget,
+    /// Every enabled reaction type, whether or not anyone used it.
+    pub reactions: Vec<ReactionDetail>,
+}
+
+/// The reactions to a live post the viewer can see.
+pub async fn post_reactions(
+    db: &PgPool,
+    viewer: &Viewer,
+    post_id: i64,
+    deps: &mut Deps,
+) -> sqlx::Result<Option<PostReactions>> {
+    let Some(post) = post_target(db, viewer, post_id).await? else {
+        return Ok(None);
+    };
+    deps.add(Tag::Thread(post.thread.thread.id));
+    if !post.is_live() {
+        return Ok(None);
+    }
+    let rows = sqlx::query!(
+        r#"
+        SELECT r.emoji, u.id, u.username, u.display_name
+        FROM reactions r JOIN users u ON u.id = r.user_id
+        WHERE r.post_id = $1
+        ORDER BY r.created_at, u.id
+        "#,
+        post_id
+    )
+    .fetch_all(db)
+    .await?;
+    let mut reactions: Vec<ReactionDetail> = reaction_types(db, true)
+        .await?
+        .into_iter()
+        .map(|t| ReactionDetail {
+            emoji: t.emoji,
+            users: Vec::new(),
+            mine: false,
+        })
+        .collect();
+    for row in rows {
+        if let Some(detail) = reactions.iter_mut().find(|d| d.emoji == row.emoji) {
+            detail.mine |= viewer.user_id() == Some(row.id);
+            detail.users.push(UserRef {
+                id: row.id,
+                username: row.username.to_string(),
+                display_name: row.display_name,
+            });
+        }
+    }
+    Ok(Some(PostReactions { post, reactions }))
 }
 
 #[cfg(test)]

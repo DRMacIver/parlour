@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO reaction_types (emoji, position)\n                 SELECT $1, coalesce(max(position), 0) + 1 FROM reaction_types",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "db8265e2da841dc0106af2c915f01b36f921e1140c06d82c6ea92d4ed1aefce9"
+}

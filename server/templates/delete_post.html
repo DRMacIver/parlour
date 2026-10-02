@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{% block title %}Delete № {{ post.seq }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/c/{{ post.thread.category.category.slug }}">{{ post.thread.category.category.name }}</a> › <a href="{{ crate::format::thread_href(post.thread.thread.id, post.thread.thread.slug) }}">{{ post.thread.thread.title }}</a></nav>
+<h1 class="page-title">Delete № {{ post.seq }}?</h1>
+<p>The post will be replaced by a note saying it was deleted, and its edit history will be hidden. This can’t be undone.</p>
+{% if let Some(text) = post.body %}
+<section class="panel"><div class="post-body">{{ text.html|safe }}</div></section>
+{% endif %}
+<form class="form-actions form-actions-page" method="post" action="/p/{{ post.post_id }}/delete">
+  <button class="button" type="submit">Delete post</button>
+  <a href="/p/{{ post.post_id }}">Keep it</a>
+</form>
+</div>
+{% endblock %}

@@ -1,0 +1,96 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT body_md, body_html, author_id, created_at, edited_at, edited_by,\n                  created_at > now() - make_interval(mins => $2) AS \"in_grace!\"\n           FROM posts WHERE id = $1 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "body_md",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "body_md"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "body_html",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "body_html"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "author_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "author_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "edited_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "edited_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "edited_by",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "edited_by"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "in_grace!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "9eb56d56c36bcb4c66b13aa46857961c4b05d99aa3102fcaf7aa1e1cbdec65c6"
+}

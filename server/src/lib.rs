@@ -8,6 +8,7 @@ pub mod client;
 pub mod config;
 pub mod content;
 pub mod csrf;
+pub mod diff;
 pub mod emails;
 mod error;
 pub mod format;
@@ -21,6 +22,7 @@ pub mod markdown;
 pub mod members;
 mod pages;
 pub mod pagination;
+pub mod permissions;
 pub mod ratelimit;
 pub mod seed;
 pub mod sessions;
@@ -30,6 +32,8 @@ pub mod store;
 pub mod tokens;
 pub mod viewer;
 mod web;
+mod write_pages;
+pub mod writing;
 
 use std::sync::{Arc, Mutex};
 
@@ -147,6 +151,33 @@ pub fn app(state: AppState) -> Router {
         .route("/t/{id}/unread", get(pages::thread_unread))
         .route("/t/{id}/{slug}", get(pages::thread))
         .route("/p/{id}", get(pages::permalink))
+        // Writing
+        .route(
+            "/c/{slug}/new",
+            get(write_pages::new_thread_page).post(write_pages::new_thread),
+        )
+        .route("/c/{slug}/read", post(write_pages::mark_category_read))
+        .route(
+            "/t/{id}/reply",
+            get(write_pages::reply_page).post(write_pages::reply),
+        )
+        .route(
+            "/p/{id}/edit",
+            get(write_pages::edit_page).post(write_pages::edit),
+        )
+        .route(
+            "/p/{id}/delete",
+            get(write_pages::delete_page).post(write_pages::delete),
+        )
+        .route("/p/{id}/revisions", get(write_pages::revisions))
+        .route(
+            "/p/{id}/reactions",
+            get(write_pages::reactions_page).post(write_pages::react),
+        )
+        .route(
+            "/p/{id}/fork",
+            get(write_pages::fork_page).post(write_pages::fork),
+        )
         // Accounts
         .route(
             "/login",
@@ -202,6 +233,10 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/admin/settings/test-email", post(admin_pages::test_email))
         .route("/admin/users", get(admin_pages::users_page))
+        .route(
+            "/admin/reactions",
+            get(write_pages::admin_reactions_page).post(write_pages::admin_reactions),
+        )
         .route("/admin/users/{id}/role", post(admin_pages::change_role))
         .route("/setup", get(setup::setup_page).post(setup::create_admin))
         .route(

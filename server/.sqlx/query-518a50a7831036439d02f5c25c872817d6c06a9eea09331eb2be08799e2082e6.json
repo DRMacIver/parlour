@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT r.post_id, r.emoji, count(*) AS \"count!\",\n               coalesce(bool_or(r.user_id = $2), false) AS \"mine!\",\n               array_agg(u.display_name ORDER BY r.created_at, u.id) AS \"names!\"\n        FROM reactions r\n        JOIN reaction_types rt ON rt.emoji = r.emoji AND rt.enabled\n        JOIN users u ON u.id = r.user_id\n        WHERE r.post_id = ANY($1)\n        GROUP BY r.post_id, r.emoji, rt.position\n        ORDER BY r.post_id, rt.position, r.emoji\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "post_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "reactions",
+            "name": "post_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "emoji",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reactions",
+            "name": "emoji"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "mine!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "518a50a7831036439d02f5c25c872817d6c06a9eea09331eb2be08799e2082e6"
+}

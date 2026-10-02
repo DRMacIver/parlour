@@ -10,13 +10,15 @@ use axum::response::{IntoResponse, Redirect, Response};
 use crate::AppState;
 use crate::content::{
     self, CategoryPage, Deps, Embed, IndexSection, LATEST_ON_INDEX, POSTS_PER_PAGE, PostBody,
-    THREADS_PER_PAGE, ThreadPage, ThreadRow, page_count, page_of_seq,
+    ReactionType, THREADS_PER_PAGE, ThreadPage, ThreadRow, page_count, page_of_seq,
 };
 use crate::error::AppError;
 use crate::format;
 use crate::pagination::{PageItem, Pagination, page_href, thread_list_pages};
+use crate::store;
 use crate::viewer::Viewer;
 use crate::web::{self, Layout, Nav, cacheable, redirect_unless_canonical};
+use crate::writing;
 
 /// The `?page=` number the request asks for: 1 if there is none, or `None`
 /// (a 404) if it isn't a positive integer or is given more than once.
@@ -31,7 +33,7 @@ fn requested_page(uri: &Uri) -> Option<i64> {
 }
 
 /// Paths take ids as strings so that a malformed id is a 404, not a 400.
-fn parse_id(id: &str) -> Option<i64> {
+pub(crate) fn parse_id(id: &str) -> Option<i64> {
     id.parse().ok().filter(|&n: &i64| n >= 1)
 }
 
@@ -48,6 +50,11 @@ fn well_formed_slug(slug: &str) -> bool {
 }
 
 impl ThreadRow {
+    /// Posts the viewer hasn't read; 0 for visitors.
+    fn new_posts(&self) -> i64 {
+        self.unread.unwrap_or(0)
+    }
+
     fn reply_count(&self) -> i64 {
         self.post_count - 1
     }
@@ -138,6 +145,9 @@ struct CategoryTemplate {
     threads: Vec<ThreadRow>,
     pagination: Pagination,
     show_category: bool,
+    logged_in: bool,
+    /// Whether the viewer may start a thread here.
+    can_post: bool,
 }
 
 pub async fn category(
@@ -165,6 +175,12 @@ pub async fn category(
     }
     let threads = std::mem::take(&mut category.threads);
     let base = format!("/c/{}", category.category.slug);
+    let can_post = match viewer.user() {
+        None => false,
+        Some(_) => content::category_target(&state.db, &viewer, &slug)
+            .await?
+            .is_some_and(|target| writing::may_post_in(&viewer, &target)),
+    };
     cacheable(
         &CategoryTemplate {
             layout: Layout::load(&state, &viewer, Nav::None).await?,
@@ -172,6 +188,8 @@ pub async fn category(
             threads,
             pagination: Pagination::new(base, page, total),
             show_category: false,
+            logged_in: viewer.user().is_some(),
+            can_post,
         },
         &deps,
     )
@@ -179,15 +197,58 @@ pub async fn category(
 
 // ---------------------------------------------------------------------------
 
+/// What goes at the foot of a thread page.
+enum ReplyBox {
+    /// The quick reply form.
+    Form,
+    /// Why this member can't reply.
+    Note(&'static str),
+    /// An invitation to log in, for visitors.
+    LogIn,
+}
+
 #[derive(Template)]
 #[template(path = "thread.html")]
 struct ThreadTemplate {
     layout: Layout,
     thread: ThreadPage,
     pagination: Pagination,
+    /// The logged-in viewer, if any.
+    viewer_id: Option<i64>,
+    reply_box: ReplyBox,
+    /// Whether the viewer may edit their own posts here (the thread isn't
+    /// locked, or they are staff).
+    can_edit: bool,
+    /// The reactions a member can add.
+    reaction_types: Vec<ReactionType>,
+    /// The post the "new since your last visit" divider goes before.
+    divider_before: Option<i64>,
 }
 
 impl ThreadTemplate {
+    fn logged_in(&self) -> bool {
+        self.viewer_id.is_some()
+    }
+
+    fn divider_is(&self, post_id: &i64) -> bool {
+        self.divider_before == Some(*post_id)
+    }
+
+    fn login_href(&self) -> String {
+        format!(
+            "/login?next={}",
+            web::query_encode(&self.pagination.href(&self.pagination.current))
+        )
+    }
+
+    fn can_reply(&self) -> bool {
+        matches!(self.reply_box, ReplyBox::Form)
+    }
+
+    fn is_mine(&self, author_id: &i64) -> bool {
+        self.viewer_id == Some(*author_id)
+    }
+
     /// Where an "in reply to" link should point: an anchor if the post is
     /// on this page, otherwise its permalink.
     fn reply_href(&self, post_id: &i64, seq: &i64) -> String {
@@ -230,11 +291,43 @@ pub async fn thread(
         return web::not_found(&state, &viewer).await;
     }
     let base = format::thread_href(&id, &thread.thread.slug);
+    let (reply_box, can_edit, reaction_types, divider_before) = match viewer.user() {
+        None => (ReplyBox::LogIn, false, Vec::new(), None),
+        Some(user) => {
+            let target = content::thread_target(&state.db, &viewer, id).await?;
+            let reply_box = match target.as_ref().map(|t| writing::reply_refusal(&viewer, t)) {
+                Some(None) => ReplyBox::Form,
+                Some(Some(reason)) => ReplyBox::Note(reason),
+                None => ReplyBox::Note("You can’t post in this category."),
+            };
+            let divider_before = thread.read_marker.and_then(|marker| {
+                thread
+                    .posts
+                    .iter()
+                    .find(|post| post.seq > marker)
+                    .map(|post| post.id)
+            });
+            if let Some(last) = thread.posts.last() {
+                store::mark_read(&state.db, user.id, id, last.seq).await?;
+            }
+            (
+                reply_box,
+                !thread.locked || viewer.is_staff(),
+                content::reaction_types(&state.db, true).await?,
+                divider_before,
+            )
+        }
+    };
     cacheable(
         &ThreadTemplate {
             layout: Layout::load(&state, &viewer, Nav::None).await?,
             thread,
             pagination: Pagination::new(base, page, total),
+            viewer_id: viewer.user_id(),
+            reply_box,
+            can_edit,
+            reaction_types,
+            divider_before,
         },
         &deps,
     )
@@ -248,14 +341,29 @@ pub async fn thread_without_slug(
     redirect_to_thread(&state, &viewer, &id, Redirect::permanent).await
 }
 
-/// Will jump to the first unread post once read markers exist (M4); for now
-/// it goes to the start of the thread.
+/// Jumps to the first post a member hasn't read (DESIGN.md §3.5). Visitors
+/// go to the start of the thread.
 pub async fn thread_unread(
     State(state): State<AppState>,
     viewer: Viewer,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    redirect_to_thread(&state, &viewer, &id, Redirect::temporary).await
+    if viewer.user().is_none() {
+        return redirect_to_thread(&state, &viewer, &id, Redirect::temporary).await;
+    }
+    let Some(id) = parse_id(&id) else {
+        return web::not_found(&state, &viewer).await;
+    };
+    match content::first_unread(&state.db, &viewer, id).await? {
+        Some((post_id, location)) => {
+            let href = page_href(
+                &format::thread_href(&location.thread_id, &location.thread_slug),
+                page_of_seq(location.seq),
+            );
+            Ok(Redirect::temporary(&format!("{href}#p{post_id}")).into_response())
+        }
+        None => web::not_found(&state, &viewer).await,
+    }
 }
 
 async fn redirect_to_thread(

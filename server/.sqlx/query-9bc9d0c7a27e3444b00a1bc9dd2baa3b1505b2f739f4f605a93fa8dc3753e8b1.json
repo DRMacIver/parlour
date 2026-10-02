@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE posts SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9bc9d0c7a27e3444b00a1bc9dd2baa3b1505b2f739f4f605a93fa8dc3753e8b1"
+}

@@ -408,8 +408,8 @@ async fn replies_link_to_the_post_they_reply_to(pool: PgPool) {
         reply.contains(&format!("href=\"#p{}\"", t.first_post_id)),
         "{reply}"
     );
-    assert!(reply.contains("Jonah"), "{reply}");
-    assert!(reply.contains("№ 1"), "{reply}");
+    assert!(reply.contains(">@jonah ↑</a>"), "{reply}");
+    assert!(reply.contains("title=\"№ 1\""), "{reply}");
     assert!(reply.contains("<blockquote>"), "{reply}");
 
     let page2 = f.page(&format!("{base}?page=2")).await;
@@ -431,7 +431,10 @@ async fn replies_link_to_the_post_they_reply_to(pool: PgPool) {
     .await;
     let page1 = f.page(&base).await;
     let reply = post_html(&page1, same_page);
-    assert!(reply.contains("№ 1") && !reply.contains("Jonah"), "{reply}");
+    assert!(
+        reply.contains(">№ 1 ↑</a>") && !reply.to_lowercase().contains("jonah"),
+        "{reply}"
+    );
 }
 
 #[sqlx::test]

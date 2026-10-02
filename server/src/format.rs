@@ -71,6 +71,22 @@ pub fn is_viewer(viewer_id: &Option<i64>, id: &i64) -> bool {
     *viewer_id == Some(*id)
 }
 
+/// The people who reacted, for a tooltip: up to 20 names, then a count of
+/// the rest.
+pub fn names(names: &[String]) -> String {
+    const SHOWN: usize = 20;
+    let mut text = names
+        .iter()
+        .take(SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if names.len() > SHOWN {
+        text.push_str(&format!(" and {} more", names.len() - SHOWN));
+    }
+    text
+}
+
 pub fn thread_href(id: &i64, slug: &str) -> String {
     format!("/t/{id}/{slug}")
 }

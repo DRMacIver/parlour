@@ -33,6 +33,12 @@ pub enum Action {
     VerifyEmail,
     /// Emailing an address the link to finish joining with an invite link.
     JoinEmail,
+    /// Starting a thread or replying.
+    Post,
+    /// Editing a post.
+    Edit,
+    /// Adding or removing a reaction.
+    React,
 }
 
 /// Whose allowance a request uses up.
@@ -85,6 +91,10 @@ pub fn rule(action: Action, scope: Scope) -> Rule {
         (Action::Redeem, _) => Rule::new(10, 300),
         (Action::Setup, _) => Rule::new(10, 60),
         (Action::VerifyEmail | Action::JoinEmail, _) => Rule::new(3, 600),
+        // A burst for a lively conversation, then one post every 20 seconds.
+        (Action::Post, _) => Rule::new(10, 20),
+        (Action::Edit, _) => Rule::new(20, 10),
+        (Action::React, _) => Rule::new(40, 2),
     }
 }
 

@@ -120,6 +120,8 @@ pub async fn lookup(db: &PgPool, token: &str) -> sqlx::Result<Option<UserCtx>> {
         email_verified: row.verified,
         role: Role::parse(&row.role).unwrap_or(Role::User),
         created_at: row.created_at,
+        // Group memberships are loaded here once groups exist (M5).
+        group_ids: Vec::new(),
     }))
 }
 

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO thread_reads (user_id, thread_id, last_read_seq)\n           SELECT $1, t.id, t.last_seq FROM threads t WHERE t.id = ANY($2)\n           ON CONFLICT (user_id, thread_id)\n           DO UPDATE SET last_read_seq = greatest(thread_reads.last_read_seq, excluded.last_read_seq)\n           WHERE thread_reads.last_read_seq < excluded.last_read_seq",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f49bcd9bf56fdbe61f3cd00800963fbb74fd4c30e0cf5539be579237ae1c4b79"
+}

@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT emoji, position, enabled FROM reaction_types\n         WHERE enabled OR NOT $1 ORDER BY position, emoji",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "emoji",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "reaction_types",
+            "name": "emoji"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "position",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "reaction_types",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "enabled",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "reaction_types",
+            "name": "enabled"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "33a0fc0db2a0a5aad62343427ad7e78d51919ad16b26b93fcbafae73168cf08f"
+}

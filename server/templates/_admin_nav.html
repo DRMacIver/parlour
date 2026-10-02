@@ -2,5 +2,6 @@
 <nav class="subnav" aria-label="Admin">
   <a href="/admin/settings"{% if current == "settings" %} aria-current="page"{% endif %}>Site settings</a>
   <a href="/admin/users"{% if current == "users" %} aria-current="page"{% endif %}>Members and roles</a>
+  <a href="/admin/reactions"{% if current == "reactions" %} aria-current="page"{% endif %}>Reactions</a>
 </nav>
 {% endmacro %}

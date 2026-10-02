@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE posts SET body_md = $2, body_html = $3, edited_at = now(),\n                      edited_by = CASE WHEN author_id = $4 THEN NULL ELSE $4 END\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e836c3a6b8517ad0ea175e084a9f7e30649a17e010db7ea0c5e627fa156e403c"
+}

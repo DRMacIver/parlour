@@ -14,6 +14,8 @@ pub enum Change {
     PostCreated { post_id: i64 },
     /// A post's text changed.
     PostEdited { post_id: i64 },
+    /// Someone added or took back a reaction to a post.
+    ReactionChanged { post_id: i64 },
     /// A post was deleted, hidden, or restored.
     PostRemoved { post_id: i64 },
     /// A thread was renamed, pinned, locked, deleted, restored or moved. For
@@ -55,6 +57,11 @@ pub async fn tags_for(db: &PgPool, change: Change) -> sqlx::Result<Vec<Tag>> {
                 tags.push(Tag::Thread(post.thread_id));
             }
             tags.extend(forks_of(db, post_id).await?);
+        }
+        Change::ReactionChanged { post_id } => {
+            if let Some(post) = post_context(db, post_id).await? {
+                tags.push(Tag::Thread(post.thread_id));
+            }
         }
         Change::ThreadChanged {
             thread_id,

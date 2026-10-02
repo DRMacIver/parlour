@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{% block title %}Reactions to № {{ reactions.post.seq }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+{%- let post = reactions.post -%}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/c/{{ post.thread.category.category.slug }}">{{ post.thread.category.category.name }}</a> › <a href="{{ crate::format::thread_href(post.thread.thread.id, post.thread.thread.slug) }}">{{ post.thread.thread.title }}</a></nav>
+<h1 class="page-title">Reactions</h1>
+<p class="lede">To <a href="/p/{{ post.post_id }}">№ {{ post.seq }}</a> by {{ post.author.display_name }}</p>
+<section class="panel" aria-labelledby="reactions-heading">
+  <h2 class="panel-bar" id="reactions-heading">Who reacted</h2>
+  <ul class="reaction-detail">
+  {% for r in reactions.reactions %}
+    <li>
+      <span class="reaction-emoji">{{ r.emoji }}</span>
+      <span class="reaction-who">{% if r.users.is_empty() %}<span class="row-meta">Nobody yet</span>{% else %}{% for u in r.users %}{% if !loop.first %}, {% endif %}<a href="/u/{{ u.username }}">{{ u.display_name }}</a>{% endfor %}{% endif %}</span>
+      {% if logged_in %}
+      <form class="form-inline" method="post" action="/p/{{ post.post_id }}/reactions">
+        <input type="hidden" name="emoji" value="{{ r.emoji }}">
+        {% if r.mine %}<button class="button button-small button-quiet" type="submit" name="action" value="remove">Take back {{ r.emoji }}</button>{% else %}<button class="button button-small" type="submit" name="action" value="add">React {{ r.emoji }}</button>{% endif %}
+      </form>
+      {% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+{% endblock %}

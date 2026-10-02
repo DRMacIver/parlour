@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM reaction_types WHERE emoji = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3f8a86026c989849a2f46ad6ab7d4f2ee7eb0dc543691876a2da7884e75cab64"
+}

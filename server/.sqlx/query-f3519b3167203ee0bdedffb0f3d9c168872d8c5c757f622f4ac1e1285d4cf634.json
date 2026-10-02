@@ -1,0 +1,90 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT t.id, t.title, t.slug, t.locked, t.last_seq, t.category_id AS \"category_id!\"\n        FROM threads t\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.category_id IS NOT NULL\n          AND thread_readable(t.visibility, t.category_id, $2, $3)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "locked",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "locked"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "last_seq",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "last_seq"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "category_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "category_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "f3519b3167203ee0bdedffb0f3d9c168872d8c5c757f622f4ac1e1285d4cf634"
+}

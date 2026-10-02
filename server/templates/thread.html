@@ -9,9 +9,12 @@
   · {{ crate::format::plural(thread.last_seq, "post", "posts") }}
   {% if thread.pinned %}· <span class="flag">Pinned</span>{% endif %}
   {% if thread.locked %}· <span class="flag">Locked</span>{% endif %}
+  {% if let Some(Embed::Available(source)) = thread.embed %}· started from a post in <a href="{{ crate::format::thread_href(source.thread.id, source.thread.slug) }}">{{ source.thread.title }}</a>{% endif %}
 </p>
-{% if pagination.is_multi_page() %}
+{% if pagination.is_multi_page() || self.logged_in() %}
 <div class="toolbar">
+  {% if self.can_reply() %}<a class="button" href="#reply">Post reply</a>{% endif %}
+  {% if self.logged_in() %}<a href="/t/{{ thread.thread.id }}/unread">First unread</a>{% endif %}
   <span class="spacer"></span>
   {% call m::pagination(pagination, "Pages") %}{% endcall %}
 </div>
@@ -30,7 +33,7 @@
   <div class="embed-body">
     {% call m::avatar(source.author, "avatar-small") %}{% endcall %}
     <div class="embed-content">
-      <div class="embed-byline"><strong>{{ source.author.display_name }}</strong>{% if let Some(title) = source.author_title %} · {{ title }}{% endif %} · № {{ source.seq }} · {% call m::time(source.created_at) %}{% endcall %}{% if source.edited_at.is_some() %} · edited{% endif %}</div>
+      <div class="embed-byline"><strong>{{ source.author.display_name }}</strong>{% if let Some(title) = source.author_title %} · {{ title }}{% endif %} · № {{ source.seq }} · {% call m::time(source.created_at) %}{% endcall %}{% if source.edited_at.is_some() %} · <a href="/p/{{ source.post_id }}/revisions">edited</a>{% endif %}</div>
       <div class="post-body">{{ source.body_html|safe }}</div>
     </div>
   </div>
@@ -46,6 +49,7 @@
 <div class="posts">
   <div class="posts-head" aria-hidden="true"><span>Author</span><span>Message</span></div>
   {% for post in thread.posts %}
+  {% if self.divider_is(post.id) %}<div class="unread-divider" role="separator" id="unread">New since your last visit</div>{% endif %}
   {% match post.body %}
   {% when PostBody::Live { author, body_html, edited_at } %}
   <article class="post" id="p{{ post.id }}">
@@ -66,14 +70,46 @@
         <a class="post-number" href="#p{{ post.id }}" title="Link to this post">№ {{ post.seq }}</a>
         {% call m::time(post.created_at) %}{% endcall %}
         {% if let Some(reply) = post.reply_to %}
-        <span class="reply-to">in reply to <a href="{{ self.reply_href(reply.post_id, reply.seq) }}">{% if let Some(who) = reply.author %}{{ who.display_name }}, {% endif %}№ {{ reply.seq }} ↑</a></span>
+        <span class="reply-to">in reply to <a href="{{ self.reply_href(reply.post_id, reply.seq) }}" title="№ {{ reply.seq }}">{% if let Some(who) = reply.author %}@{{ who.username }}{% else %}№ {{ reply.seq }}{% endif %} ↑</a></span>
         {% endif %}
-        {% if let Some(edited) = edited_at %}<span class="edited">edited {% call m::time(edited) %}{% endcall %}</span>{% endif %}
+        {% if let Some(edited) = edited_at %}<a class="edited" href="/p/{{ post.id }}/revisions">edited {% call m::time(edited) %}{% endcall %}</a>{% endif %}
+        {% if self.logged_in() %}
+        <span class="spacer"></span>
+        <span class="post-actions">
+          {%- if self.can_reply() %}<a href="/t/{{ thread.thread.id }}/reply?to={{ post.id }}">reply</a> · <a href="/t/{{ thread.thread.id }}/reply?quote={{ post.id }}">quote</a> · {% endif -%}
+          <a href="/p/{{ post.id }}/fork">new thread</a>
+          {%- if self.is_mine(author.user.id) %}{% if can_edit %} · <a href="/p/{{ post.id }}/edit">edit</a>{% endif %} · <a href="/p/{{ post.id }}/delete">delete</a>{% endif -%}
+        </span>
+        {% endif %}
       </header>
       <div class="post-body">{{ body_html|safe }}</div>
       {% for fork in post.forks %}
       <p class="fork-link">Continued in <a href="{{ crate::format::thread_href(fork.thread.id, fork.thread.slug) }}">{{ fork.thread.title }}</a> ({{ crate::format::plural(fork.post_count, "post", "posts") }}, by {{ fork.author.display_name }})</p>
       {% endfor %}
+      {% if !post.reactions.is_empty() || self.logged_in() %}
+      <div class="reactions">
+        {% for r in post.reactions %}
+        {% if self.logged_in() %}
+        <form class="reaction-form" method="post" action="/p/{{ post.id }}/reactions">
+          <input type="hidden" name="emoji" value="{{ r.emoji }}">
+          <button class="reaction{% if r.mine %} reaction-mine{% endif %}" type="submit" name="action" value="{% if r.mine %}remove{% else %}add{% endif %}" aria-pressed="{{ r.mine }}" title="{{ crate::format::names(r.names) }}"><span aria-hidden="true">{{ r.emoji }}</span> <span class="reaction-count">{{ r.count }}</span><span class="visually-hidden"> reactions; {% if r.mine %}take yours back{% else %}add yours{% endif %}</span></button>
+        </form>
+        {% else %}
+        <a class="reaction" href="/p/{{ post.id }}/reactions" title="{{ crate::format::names(r.names) }}"><span aria-hidden="true">{{ r.emoji }}</span> <span class="reaction-count">{{ r.count }}</span><span class="visually-hidden"> {{ r.emoji }} reactions</span></a>
+        {% endif %}
+        {% endfor %}
+        {% if self.logged_in() && !reaction_types.is_empty() %}
+        <details class="react-menu">
+          <summary>react</summary>
+          <form class="react-choices" method="post" action="/p/{{ post.id }}/reactions">
+            <input type="hidden" name="action" value="add">
+            {% for t in reaction_types %}<button class="reaction" type="submit" name="emoji" value="{{ t.emoji }}" aria-label="React with {{ t.emoji }}">{{ t.emoji }}</button>{% endfor %}
+          </form>
+        </details>
+        <a class="reaction-who" href="/p/{{ post.id }}/reactions">who reacted</a>
+        {% endif %}
+      </div>
+      {% endif %}
     </div>
   </article>
   {% when PostBody::Deleted %}
@@ -98,4 +134,27 @@
   {% call m::pagination(pagination, "Pages, again") %}{% endcall %}
 </div>
 {% endif %}
+
+{% match reply_box %}
+{% when ReplyBox::Form %}
+<form class="panel quick-reply" id="reply" method="post" action="/t/{{ thread.thread.id }}/reply">
+  <h2 class="panel-bar">Quick reply</h2>
+  <div class="form">
+    <label class="visually-hidden" for="reply-body">Your reply</label>
+    <textarea id="reply-body" name="body" rows="5" required></textarea>
+    <div class="form-actions">
+      <button class="button" type="submit">Post reply</button>
+      <button class="button button-quiet" type="submit" name="preview" value="1">Preview</button>
+      <span class="field-hint">Markdown supported</span>
+    </div>
+  </div>
+</form>
+{% when ReplyBox::Note(reason) %}
+<p class="notice quick-reply">{{ reason }}</p>
+{% when ReplyBox::LogIn %}
+<section class="panel quick-reply" aria-labelledby="join-heading">
+  <h2 class="panel-bar" id="join-heading">Want to join in?</h2>
+  <p class="panel-text">{{ layout.site_name }} is invite-only. If you know a member, ask them for an invite. Members can <a href="{{ self.login_href() }}">log in</a> to reply.</p>
+</section>
+{% endmatch %}
 {% endblock %}

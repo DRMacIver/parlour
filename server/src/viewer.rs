@@ -42,6 +42,9 @@ pub struct UserCtx {
     pub email_verified: bool,
     pub role: Role,
     pub created_at: DateTime<Utc>,
+    /// The groups this member belongs to. Groups arrive in M5; until then
+    /// this is always empty.
+    pub group_ids: Vec<i64>,
 }
 
 /// The bind parameters for the visibility condition in SQL.
@@ -138,6 +141,7 @@ mod tests {
             email_verified: true,
             role,
             created_at: Utc::now(),
+            group_ids: Vec::new(),
         })
     }
 

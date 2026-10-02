@@ -15,6 +15,7 @@
           {% if row.pinned && !show_category %}<span class="flag">Pinned</span>{% endif %}
           {% if row.locked %}<span class="flag">Locked</span>{% endif %}
           <a href="{{ crate::format::thread_href(row.thread.id, row.thread.slug) }}">{{ row.thread.title }}</a>
+          {% if row.new_posts() > 0 %}<a class="unread" href="/t/{{ row.thread.id }}/unread">{{ row.new_posts() }} new</a>{% endif %}
         </div>
         <div class="row-meta">
           <span>by {{ row.author.display_name }}, {% call m::time(row.created_at) %}{% endcall %}</span>
