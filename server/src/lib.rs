@@ -27,6 +27,7 @@ mod pages;
 pub mod pagination;
 pub mod permissions;
 pub mod ratelimit;
+mod search_pages;
 pub mod setup;
 pub mod tokens;
 pub mod viewer;
@@ -184,6 +185,7 @@ pub fn app(state: AppState) -> Router {
         .route("/t/{id}/unread", get(pages::thread_unread))
         .route("/t/{id}/{slug}", get(pages::thread))
         .route("/p/{id}", get(pages::permalink))
+        .route("/search", get(search_pages::search_page))
         // Writing
         .route(
             "/c/{slug}/new",

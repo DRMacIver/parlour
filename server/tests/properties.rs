@@ -2198,6 +2198,21 @@ impl Access {
                 );
             }
         }
+        // Messages are found by searching only by the people in the
+        // conversation now: not by staff it was reported to, nor by
+        // anyone suspended.
+        let found = self.search(viewer, "psst or message");
+        let expected = Self::ids(
+            &self.messages,
+            |m| {
+                let message = &self.messages[m];
+                self.in_conversation(who, message.conversation)
+                    && !message.deleted
+                    && (!message.hidden || self.sees_hidden(who))
+            },
+            |m| m.id,
+        );
+        assert_eq!(found, expected, "{who:?}: messages found by search");
     }
 
     /// Whether the viewer may start threads in a category: they read it,
@@ -2548,8 +2563,37 @@ impl Access {
             assert_eq!(count, expected, "{who:?}: posts by {u}");
         }
 
+        // Search finds exactly the posts the viewer is shown where they
+        // are: every post's text is "Text", or "Opening" for a thread's
+        // first post.
+        let found = self.search(&viewer, "text or opening");
+        let expected = Self::ids(
+            &self.posts,
+            |p| self.reads_thread(who, self.posts[p].thread) && self.shown_post(who, p),
+            |p| p.id,
+        );
+        assert_eq!(found, expected, "{who:?}: search");
+
         self.check_writing(who, &viewer);
         self.check_conversations(who, &viewer);
+    }
+
+    /// The ids of every post a search finds for the viewer.
+    fn search(&self, viewer: &Viewer, words: &str) -> BTreeSet<i64> {
+        let query = content::search::SearchQuery {
+            text: words.into(),
+            ..Default::default()
+        };
+        match self
+            .block(content::search::search(&self.db, viewer, &query, 0, 10_000))
+            .unwrap()
+        {
+            content::search::SearchOutcome::Hits { hits, more } => {
+                assert!(!more);
+                hits.iter().map(|h| h.post_id).collect()
+            }
+            content::search::SearchOutcome::NoTerms => panic!("{words:?} has terms"),
+        }
     }
 }
 

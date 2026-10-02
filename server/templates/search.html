@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{%- import "_forms.html" as f -%}
+{% block title %}{% if searched %}{{ query.text }} · Search{% else %}Search{% endif %} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Search</h1>
+{% call f::error(error) %}{% endcall %}
+<form class="panel search-form" method="get" action="/search" role="search">
+  <h2 class="panel-bar">Search the forum</h2>
+  <div class="form">
+    <div class="field">
+      <label for="search-q">Words to find</label>
+      <input type="search" id="search-q" name="q" value="{{ query.text }}" maxlength="200" required>
+      <span class="field-hint">Put a phrase in “quotes”, use <em>or</em> between alternatives, and -word to leave a word out.</span>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="search-in">In</label>
+        <select id="search-in" name="in">
+          <option value="">Everywhere you can read</option>
+          {% for c in categories %}<option value="{{ c.category.slug }}"{% if self.category_selected(c.category.slug) %} selected{% endif %}>{{ c.category.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="search-by">By</label>
+        <input type="text" id="search-by" name="by" value="{{ query.author.as_deref().unwrap_or_default() }}" maxlength="64" placeholder="username">
+      </div>
+      <div class="field">
+        <label for="search-sort">Order</label>
+        <select id="search-sort" name="sort">
+          <option value="">Best match first</option>
+          <option value="new"{% if query.newest_first %} selected{% endif %}>Newest first</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Search</button></div>
+  </div>
+</form>
+{% if searched && error.is_none() %}
+<section class="panel" aria-labelledby="results-heading">
+  <h2 class="panel-bar" id="results-heading">{% if page > 1 %}Results, page {{ page }}{% else %}Results{% endif %}</h2>
+  {% if no_terms %}
+  <p class="empty">Those words are too common to search for. Try some less common ones.</p>
+  {% else if hits.is_empty() %}
+  <p class="empty">Nothing{% if page > 1 %} more{% endif %} found. Check the spelling, or try fewer or different words.</p>
+  {% else %}
+  <ol class="search-results">
+    {% for hit in hits %}
+    <li class="search-hit" id="hit-{{ hit.post_id }}">
+      <div class="search-hit-head">
+        <a class="search-hit-title" href="/p/{{ hit.post_id }}">{{ hit.thread_title }}</a>
+        <span class="row-meta">№ {{ hit.seq }} · {% if hit.in_conversation() %}conversation with {{ hit.place_name() }}{% else %}in <a href="{{ hit.place_href() }}">{{ hit.place_name() }}</a>{% endif %}</span>
+        {% if hit.hidden %}<span class="flag flag-hidden">Hidden from members</span>{% endif %}
+      </div>
+      <p class="search-snippet">{{ hit.snippet_html|safe }}</p>
+      <p class="row-meta">{% call m::avatar(hit.author, "avatar-tiny") %}{% endcall %}<a href="/u/{{ hit.author.username }}">{{ hit.author.display_name }}</a> · {% call m::time(hit.created_at) %}{% endcall %}</p>
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+  {% if prev.is_some() || next.is_some() %}
+  <nav class="pagination search-pages" aria-label="More results">
+    {% if let Some(href) = prev %}<a href="{{ href }}" rel="prev">‹ Previous</a>{% endif %}
+    <strong aria-current="page">{{ page }}</strong>
+    {% if let Some(href) = next %}<a href="{{ href }}" rel="next">Next ›</a>{% endif %}
+  </nav>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

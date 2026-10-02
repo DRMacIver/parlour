@@ -11,6 +11,7 @@
 pub mod messages;
 pub mod moderation;
 pub mod notifications;
+pub mod search;
 
 use std::collections::{BTreeSet, HashMap};
 

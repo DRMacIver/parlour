@@ -28,6 +28,7 @@ pub enum Nav {
     Admin,
     Moderation,
     Login,
+    Search,
     None,
 }
 

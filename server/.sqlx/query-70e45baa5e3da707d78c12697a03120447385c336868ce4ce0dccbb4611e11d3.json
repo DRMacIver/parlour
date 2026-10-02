@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT numnode(websearch_to_tsquery('english', $1)) > 0 AS \"terms!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "terms!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "70e45baa5e3da707d78c12697a03120447385c336868ce4ce0dccbb4611e11d3"
+}

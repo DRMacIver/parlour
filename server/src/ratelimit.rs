@@ -53,6 +53,8 @@ pub enum Action {
     Report,
     /// Sending the contact form, which needs no account.
     Contact,
+    /// Searching.
+    Search,
 }
 
 /// Whose allowance a request uses up.
@@ -121,6 +123,8 @@ pub fn rule(action: Action, scope: Scope) -> Rule {
         (Action::Report, _) => Rule::new(10, 120),
         // Anyone can send the contact form, so it is kept slow.
         (Action::Contact, _) => Rule::new(3, 1200),
+        // A few searches in quick succession, then one every three seconds.
+        (Action::Search, _) => Rule::new(20, 3),
     }
 }
 
