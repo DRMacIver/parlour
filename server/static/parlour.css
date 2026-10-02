@@ -577,7 +577,10 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
   border: 1px solid var(--rule);
   color: var(--ink-muted);
   line-height: 1.4;
-  white-space: nowrap;
+  /* Group names can be long, and there can be several: let the label wrap
+     inside its rule rather than push the page sideways. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
   vertical-align: 0.15em;
 }
 .page-title .flag-access { font-size: 15px; vertical-align: middle; }
