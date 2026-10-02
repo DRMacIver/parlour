@@ -79,6 +79,36 @@ pub fn is_blank(source: &str) -> bool {
         })
 }
 
+/// A post's text without its Markdown, on one line: what a reader sees,
+/// for search snippets. Code and raw HTML are kept as typed (as they are
+/// shown), an image by its description, and blocks are separated by a
+/// space.
+pub fn plain_text(source: &str) -> String {
+    use comrak::arena_tree::NodeEdge;
+    let arena = comrak::Arena::new();
+    let root = comrak::parse_document(&arena, source, &options());
+    let mut text = String::with_capacity(source.len());
+    for edge in root.traverse() {
+        match edge {
+            NodeEdge::Start(node) => match &node.data.borrow().value {
+                NodeValue::Text(t) => text.push_str(t),
+                NodeValue::Code(code) => text.push_str(&code.literal),
+                NodeValue::HtmlInline(html) => text.push_str(html),
+                NodeValue::CodeBlock(block) => text.push_str(&block.literal),
+                NodeValue::HtmlBlock(block) => text.push_str(&block.literal),
+                NodeValue::SoftBreak | NodeValue::LineBreak => text.push(' '),
+                _ => {}
+            },
+            NodeEdge::End(node) => {
+                if node.data.borrow().value.block() {
+                    text.push(' ');
+                }
+            }
+        }
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Turns raw HTML into text, so that it is shown as typed: an HTML block
 /// becomes a paragraph, and inline HTML becomes text (where mentions are
 /// found like anywhere else).
@@ -305,11 +335,44 @@ static SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_NESTING, find_mentions, is_blank, mention_candidates, nesting_depth, render,
-        render_with_mentions,
+        MAX_NESTING, find_mentions, is_blank, mention_candidates, nesting_depth, plain_text,
+        render, render_with_mentions,
     };
     use hegel::TestCase;
     use hegel::generators::{self as gs, Generator, PrintableGenerator};
+
+    #[test]
+    fn plain_text_leaves_out_markdown() {
+        assert_eq!(plain_text("> First **post**"), "First post");
+        assert_eq!(
+            plain_text(
+                "# Title\n\n* [a link](https://example.com)\n* `code` and ![alt](x.png)\n\n```\nlet x;\n```"
+            ),
+            "Title a link code and alt let x;"
+        );
+        assert_eq!(plain_text("<b>bold</b> text"), "<b>bold</b> text");
+        assert_eq!(plain_text("| a | b |\n|---|---|\n| c | d |"), "a b c d");
+    }
+
+    /// Plain words come through unchanged, and the result is always one
+    /// line with single spaces.
+    #[hegel::test]
+    fn plain_text_keeps_words_and_is_one_line(tc: TestCase) {
+        let words: Vec<String> = tc.draw(
+            gs::vecs(
+                gs::text()
+                    .alphabet("abcdefghijklmnopqrstuvwxyz")
+                    .min_size(1)
+                    .max_size(8),
+            )
+            .max_size(10),
+        );
+        assert_eq!(plain_text(&words.join(" ")), words.join(" "));
+        let source = tc.draw(gs::text().max_size(80));
+        let text = plain_text(&source);
+        assert!(!text.contains(['\n', '\r', '\t']), "{text:?}");
+        assert!(!text.contains("  ") && text.trim() == text, "{text:?}");
+    }
 
     #[test]
     fn renders_commonmark() {

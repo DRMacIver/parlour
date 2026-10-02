@@ -48,8 +48,8 @@
     {% for hit in hits %}
     <li class="search-hit" id="hit-{{ hit.post_id }}">
       <div class="search-hit-head">
-        <a class="search-hit-title" href="/p/{{ hit.post_id }}">{{ hit.thread_title }}</a>
-        <span class="row-meta">№ {{ hit.seq }} · {% if hit.in_conversation() %}conversation with {{ hit.place_name() }}{% else %}in <a href="{{ hit.place_href() }}">{{ hit.place_name() }}</a>{% endif %}</span>
+        <a class="search-hit-title" href="/p/{{ hit.post_id }}">{{ hit.title() }}</a>
+        <span class="row-meta">№ {{ hit.seq }} · {% if let Some(with) = hit.conversation_with() %}{% if with.is_empty() %}conversation with nobody else{% else %}conversation with {{ with }}{% endif %}{% else %}in <a href="{{ hit.place_href() }}">{{ hit.place_name() }}</a>{% endif %}</span>
         {% if hit.hidden %}<span class="flag flag-hidden">Hidden from members</span>{% endif %}
       </div>
       <p class="search-snippet">{{ hit.snippet_html|safe }}</p>

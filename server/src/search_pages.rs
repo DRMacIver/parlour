@@ -186,11 +186,26 @@ impl SearchHit {
     fn place_name(&self) -> &str {
         match &self.place {
             HitPlace::Category { name, .. } => name,
-            HitPlace::Conversation { name } => name,
+            HitPlace::Conversation { name, .. } => name,
         }
     }
 
-    fn in_conversation(&self) -> bool {
-        matches!(self.place, HitPlace::Conversation { .. })
+    /// What the result is headed with: its thread's title, or for a
+    /// conversation, its name for this viewer (which a conversation
+    /// without a title needs).
+    fn title(&self) -> &str {
+        match &self.place {
+            HitPlace::Category { .. } => &self.thread_title,
+            HitPlace::Conversation { name, .. } => name,
+        }
+    }
+
+    /// For a conversation, who else is in it ("" if nobody); `None`
+    /// otherwise.
+    fn conversation_with(&self) -> Option<&str> {
+        match &self.place {
+            HitPlace::Category { .. } => None,
+            HitPlace::Conversation { with, .. } => Some(with),
+        }
     }
 }

@@ -221,6 +221,61 @@ async fn conversations_are_found_only_by_the_people_in_them(pool: PgPool) {
     assert!(hits(&page).is_empty());
 }
 
+/// A conversation found is named for the people in it, whatever its
+/// title, and one without a title still has a link to the post.
+#[sqlx::test]
+async fn conversations_found_say_who_they_are_with(pool: PgPool) {
+    let s = setup(pool).await;
+    for (title, body) in [
+        ("Secret plans", "The teapot plan."),
+        ("", "Another teapot."),
+    ] {
+        store::create_conversation(
+            &s.f.db,
+            &NewConversation {
+                author_id: s.ruth,
+                title: title.into(),
+                recipient_ids: vec![s.jonah],
+                body_md: body.into(),
+                created_at: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let page = s.f.page_as("/search?q=teapot", &s.ruth_cookie).await;
+    assert_eq!(hits(&page).len(), 2);
+    assert!(!page.contains("conversation with Secret plans"), "{page}");
+    assert_eq!(
+        page.matches("conversation with Jonah<").count(),
+        2,
+        "{page}"
+    );
+    assert!(page.contains(">Secret plans</a>"), "{page}");
+    assert!(!page.contains("\"></a>"), "{page}");
+}
+
+/// Snippets show a post's text, not its Markdown.
+#[sqlx::test]
+async fn snippets_leave_out_markdown(pool: PgPool) {
+    let s = setup(pool).await;
+    s.f.thread(
+        s.public,
+        s.ruth,
+        "Quoting",
+        "> First **walrus**\n\nAnd a [link](https://example.com) and `code`.",
+    )
+    .await;
+    let page = s.f.page_as("/search?q=walrus", &s.ruth_cookie).await;
+    assert_eq!(hits(&page).len(), 1);
+    assert!(
+        page.contains("First <mark>walrus</mark> And a link and code"),
+        "{page}"
+    );
+    assert!(!page.contains("**"), "{page}");
+    assert!(!page.contains("&gt; First"), "{page}");
+}
+
 #[sqlx::test]
 async fn snippets_are_plain_text(pool: PgPool) {
     let s = setup(pool).await;

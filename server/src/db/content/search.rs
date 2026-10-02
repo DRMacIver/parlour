@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 
 use crate::content::{UserRef, messages};
 use crate::db::Db;
+use crate::markdown;
 use crate::viewer::Viewer;
 
 /// The longest query searched for, in characters.
@@ -39,7 +40,10 @@ pub enum HitPlace {
     },
     /// A conversation, named for this viewer.
     Conversation {
+        /// Its title, or without one, who it is with.
         name: String,
+        /// The others in it, as "Ruth and Jonah" (empty if nobody else).
+        with: String,
     },
 }
 
@@ -129,11 +133,8 @@ pub async fn search(
                page.category_slug AS "category_slug?", page.category_name AS "category_name?",
                page.author_id AS "author_id!", page.author_username AS "author_username!",
                page.author_display_name AS "author_display_name!",
-               ts_headline('english', translate(page.body_md, $11, ''), q.q,
-                           'StartSel=' || $12 || ', StopSel=' || $13
-                           || ', MaxWords=40, MinWords=20, MaxFragments=2, FragmentDelimiter=" … "')
-                   AS "snippet!"
-        FROM page CROSS JOIN q
+               page.body_md AS "body_md!"
+        FROM page
         ORDER BY CASE WHEN $8 THEN page.created_at END DESC,
                  page.rank DESC, page.created_at DESC, page.id DESC
         "#,
@@ -147,21 +148,39 @@ pub async fn search(
         query.newest_first,
         per_page + 1,
         offset,
-        format!("{START}{STOP}"),
+    )
+    .fetch_all(db.pool())
+    .await?;
+    let more = rows.len() as i64 > per_page;
+    let rows: Vec<_> = rows.into_iter().take(per_page as usize).collect();
+    // Snippets are of what a reader sees, not of the Markdown.
+    let texts: Vec<String> = rows
+        .iter()
+        .map(|row| markdown::plain_text(&row.body_md).replace([START, STOP], ""))
+        .collect();
+    let snippets = sqlx::query_scalar!(
+        r#"SELECT ts_headline('english', u.text, websearch_to_tsquery('english', $1),
+                              'StartSel=' || $3 || ', StopSel=' || $4
+                              || ', MaxWords=40, MinWords=20, MaxFragments=2, FragmentDelimiter=" … "')
+                  AS "snippet!"
+           FROM unnest($2::text[]) WITH ORDINALITY AS u(text, n)
+           ORDER BY u.n"#,
+        query.text,
+        &texts,
         START.to_string(),
         STOP.to_string(),
     )
     .fetch_all(db.pool())
     .await?;
-    let more = rows.len() as i64 > per_page;
     let mut hits = Vec::with_capacity(rows.len());
-    for row in rows.into_iter().take(per_page as usize) {
+    for (row, snippet) in rows.into_iter().zip(snippets) {
         let place = match (row.category_slug, row.category_name) {
             (Some(slug), Some(name)) => HitPlace::Category { slug, name },
             _ => {
                 let conversation = messages::conversation_target(db, row.thread_id).await?;
                 HitPlace::Conversation {
                     name: conversation.name(&row.title, viewer.user_id()),
+                    with: conversation.others_names(viewer.user_id()),
                 }
             }
         };
@@ -178,7 +197,7 @@ pub async fn search(
             },
             created_at: row.created_at,
             hidden: row.hidden,
-            snippet_html: snippet_html(&row.snippet),
+            snippet_html: snippet_html(&snippet),
         });
     }
     Ok(SearchOutcome::Hits { hits, more })

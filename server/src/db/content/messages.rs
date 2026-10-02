@@ -58,16 +58,23 @@ impl ConversationTarget {
         if !title.is_empty() {
             return title.to_owned();
         }
+        let names = self.others_names(me);
+        if names.is_empty() {
+            "Just you".to_owned()
+        } else {
+            names
+        }
+    }
+
+    /// The names of the others in it, as "Ruth and Jonah": empty if there
+    /// is nobody else.
+    pub fn others_names(&self, me: Option<i64>) -> String {
         let names: Vec<String> = self
             .others(me)
             .iter()
             .map(|p| p.user.display_name.clone())
             .collect();
-        if names.is_empty() {
-            "Just you".to_owned()
-        } else {
-            and_list(&names)
-        }
+        and_list(&names)
     }
 
     /// Who is in it, as "Ruth, Jonah and you".
