@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use anyhow::Context;
 use parlour::config::Config;
-use parlour::{AppState, MIGRATOR, app, jobs, seed, setup};
+use parlour::{AppState, MIGRATOR, jobs, seed, setup};
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 
@@ -101,12 +101,8 @@ async fn serve(db: sqlx::PgPool, config: Config) -> anyhow::Result<()> {
     parlour::moderation::schedule_forgetting(&state).await?;
     jobs::spawn_workers(&state, 2);
     tracing::info!(%bind, base_url = state.config().base_url, "parlour listening");
-    axum::serve(
-        listener,
-        app(state).into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await?;
+    parlour::serve(listener, state, shutdown_signal()).await?;
+    tracing::info!("parlour stopped");
     Ok(())
 }
 

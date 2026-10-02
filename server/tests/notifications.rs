@@ -1190,3 +1190,56 @@ async fn live_streams_are_limited(pool: PgPool) {
             .is_ok()
     );
 }
+
+/// Shutting down ends the open streams, so that the server stops at once
+/// rather than waiting for every reader to leave (a deploy or `docker
+/// stop` would otherwise wait out its timeout and kill running jobs).
+#[sqlx::test]
+async fn shutting_down_ends_open_streams(pool: PgPool) {
+    use std::net::SocketAddr;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let s = setup(pool).await;
+    let (thread, _) = new_thread(&s.f, &s.ruth_cookie, "games", "Brass", "Hi").await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address: SocketAddr = listener.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(parlour::serve(listener, s.f.state.clone(), async move {
+        stopped.await.ok();
+    }));
+
+    let mut connections = Vec::new();
+    for (path, cookie) in [
+        (format!("/events/t/{thread}"), None),
+        ("/events/notifications".to_owned(), Some(&s.jonah_cookie)),
+    ] {
+        let mut connection = tokio::net::TcpStream::connect(address).await.unwrap();
+        let cookie = cookie
+            .map(|c| format!("Cookie: {c}\r\n"))
+            .unwrap_or_default();
+        connection
+            .write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n{cookie}\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut start = [0u8; 12];
+        connection.read_exact(&mut start).await.unwrap();
+        assert_eq!(&start, b"HTTP/1.1 200");
+        connections.push(connection);
+    }
+
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("the server should stop while streams are open")
+        .unwrap()
+        .unwrap();
+    // The streams end cleanly rather than being cut off.
+    for mut connection in connections {
+        let mut rest = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), connection.read_to_end(&mut rest))
+            .await
+            .expect("the stream should end")
+            .unwrap();
+        assert!(String::from_utf8_lossy(&rest).ends_with("0\r\n\r\n"));
+    }
+}

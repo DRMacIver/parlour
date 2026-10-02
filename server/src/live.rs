@@ -33,7 +33,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_util::stream::{self, Stream};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 use crate::AppState;
 use crate::client::ClientIp;
@@ -64,11 +64,13 @@ pub const MAX_STREAMS_PER_ADDRESS: usize = 32;
 /// How many streams one member may have open at once, wherever from.
 pub const MAX_STREAMS_PER_MEMBER: usize = 24;
 
-/// The broadcast channel, and the count of open streams.
+/// The broadcast channel, the count of open streams, and whether the
+/// server is shutting down.
 #[derive(Clone)]
 pub struct Live {
     sender: broadcast::Sender<Event>,
     open: Arc<Mutex<HashMap<String, usize>>>,
+    closed: Arc<watch::Sender<bool>>,
 }
 
 impl Default for Live {
@@ -79,6 +81,7 @@ impl Default for Live {
         Live {
             sender,
             open: Arc::default(),
+            closed: Arc::new(watch::Sender::new(false)),
         }
     }
 }
@@ -89,8 +92,16 @@ impl Live {
         let _ = self.sender.send(event);
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.sender.subscribe()
+    pub fn subscribe(&self) -> Subscription {
+        Subscription {
+            events: self.sender.subscribe(),
+            closed: self.closed.subscribe(),
+        }
+    }
+
+    /// Ends every open stream, and any opened later, for shutting down.
+    pub fn close(&self) {
+        self.closed.send_replace(true);
     }
 
     /// Whether any stream is open, so publishers can skip work for nobody.
@@ -191,21 +202,45 @@ fn sse(stream: impl Stream<Item = Result<SseEvent, Infallible>> + Send + 'static
         .into_response()
 }
 
+/// A stream's view of the channel: the events, and whether the server is
+/// shutting down.
+pub struct Subscription {
+    events: broadcast::Receiver<Event>,
+    closed: watch::Receiver<bool>,
+}
+
+impl Subscription {
+    /// Waits for the next event, or `None` once the server is shutting
+    /// down.
+    pub async fn recv(&mut self) -> Option<Event> {
+        let closed = self.closed.wait_for(|closed| *closed);
+        tokio::select! {
+            biased;
+            _ = closed => None,
+            event = recv(&mut self.events) => event,
+        }
+    }
+}
+
+async fn recv(events: &mut broadcast::Receiver<Event>) -> Option<Event> {
+    loop {
+        match events.recv().await {
+            Ok(event) => return Some(event),
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => return None,
+        }
+    }
+}
+
 /// Waits for the next event that `wanted` picks out. `None` when the
-/// channel has closed.
+/// channel has closed or the server is shutting down.
 async fn next_event<T>(
-    receiver: &mut broadcast::Receiver<Event>,
+    receiver: &mut Subscription,
     wanted: impl Fn(Event) -> Option<T>,
 ) -> Option<T> {
     loop {
-        match receiver.recv().await {
-            Ok(event) => {
-                if let Some(found) = wanted(event) {
-                    return Some(found);
-                }
-            }
-            Err(broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(broadcast::error::RecvError::Closed) => return None,
+        if let Some(found) = wanted(receiver.recv().await?) {
+            return Some(found);
         }
     }
 }

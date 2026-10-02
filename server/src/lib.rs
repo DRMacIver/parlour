@@ -67,6 +67,26 @@ use crate::mail::Mailer;
 use crate::ratelimit::RateLimiter;
 use crate::viewer::Viewer;
 
+/// Serves the app on `listener` until `shutdown` completes, then stops
+/// taking new connections and waits for the requests in progress. Open
+/// live streams end as soon as shutdown starts, so they don't hold it up.
+pub async fn serve(
+    listener: tokio::net::TcpListener,
+    state: AppState,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    let live = state.live().clone();
+    axum::serve(
+        listener,
+        app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        shutdown.await;
+        live.close();
+    })
+    .await
+}
+
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 /// How much memory the anonymous page cache may use by default.
