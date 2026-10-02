@@ -5,7 +5,7 @@
 // page must fit the screen and need no JavaScript.
 
 import { expect, test, type Page } from "@playwright/test";
-import { expectFits, logIn, ownAddress } from "./helpers.js";
+import { expectFits, logIn, ownAddress, preview } from "./helpers.js";
 
 test.beforeEach(async ({ page }) => {
   await ownAddress(page);
@@ -32,7 +32,7 @@ test("members message each other and are notified", async ({ page }) => {
   await page.fill("#to", recipient);
   await page.fill("#title", title);
   await page.fill("#body", "Are you **in**?");
-  await page.locator("button[name=preview]").click();
+  await preview(page);
   await expect(page.locator(".preview strong")).toHaveText("in");
   await expectFits(page);
   await page.locator("form[action='/messages/new'] button[type=submit]:not([name])").click();

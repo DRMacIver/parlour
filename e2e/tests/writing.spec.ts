@@ -4,7 +4,7 @@
 // category read. Every page must fit the screen and need no JavaScript.
 
 import { expect, test, type Page } from "@playwright/test";
-import { expectFits, logIn, member, ownAddress } from "./helpers.js";
+import { expectFits, logIn, member, ownAddress, preview, withJs } from "./helpers.js";
 
 test.beforeEach(async ({ page }) => {
   await ownAddress(page);
@@ -27,7 +27,7 @@ test("a member starts a thread, replies, quotes, edits, reacts and deletes", asy
   await expectFits(page);
   await page.fill("#title", title);
   await page.fill("#body", "We played **Heat** with five.\n\n| Game | Players |\n|---|---|\n| Heat | 5 |");
-  await page.locator("button[name=preview]").click();
+  await preview(page);
   await expect(page.locator(".preview strong")).toHaveText("Heat");
   await expect(page.locator(".preview table")).toBeVisible();
   await expectFits(page);
@@ -52,14 +52,20 @@ test("a member starts a thread, replies, quotes, edits, reacts and deletes", asy
   await expect(lastPost(page)).toContainText("ten minutes to teach");
   await expect(lastPost(page).locator(".post-number")).toHaveText("№ 2");
 
-  // Quoting the first post records what the reply is to.
+  // Quoting the first post records what the reply is to: in the quick
+  // reply with the composer island, or on the reply page without it.
   await page.locator("article.post").first().locator(".post-actions a", { hasText: /^quote$/ }).click();
-  await expect(page.locator("#body")).toHaveValue(new RegExp(`^> @${username} wrote:\\n> We played`));
-  await expect(page.locator("input[name=reply_to]")).toBeChecked();
+  const box = withJs() ? "#reply-body" : "#body";
+  await expect(page.locator(box)).toHaveValue(new RegExp(`^> @${username} wrote:\\n> We played`));
+  if (withJs()) {
+    await expect(page.locator(".composer-reply-to")).toContainText("In reply to № 1");
+  } else {
+    await expect(page.locator("input[name=reply_to]")).toBeChecked();
+  }
   await expectFits(page);
-  const quoted = await page.locator("#body").inputValue();
-  await page.fill("#body", `${quoted}Agreed.`);
-  await page.locator(".composer button[type=submit]:not([name])").click();
+  const quoted = await page.locator(box).inputValue();
+  await page.fill(box, `${quoted}Agreed.`);
+  await page.locator(withJs() ? "#reply button[type=submit]:not([name])" : ".composer button[type=submit]:not([name])").click();
   const quoting = lastPost(page);
   await expect(quoting.locator("blockquote")).toBeVisible();
   await expect(quoting.locator(".reply-to")).toContainText(`@${username}`);
@@ -98,13 +104,16 @@ test("a member quotes a post into a new thread", async ({ page }) => {
   const source = page.locator("article.post").first();
   const sourceText = (await source.locator(".post-body p").first().textContent())!;
   await source.locator(".post-actions a", { hasText: "Quote in new thread" }).click();
-  await expectFits(page);
-  await expect(page.locator(".embed .post-body")).toContainText(sourceText);
   const title = `A tangent (${test.info().project.name} ${Date.now()})`;
-  await page.fill("#title", title);
-  await page.selectOption("#category", "board-games");
-  await page.fill("#body", "This deserves its own thread.");
-  await page.locator(".composer button[type=submit]:not([name])").click();
+  // A dialog on the page with the islands, or a page of its own without.
+  const prefix = withJs() ? "#fork-" : "#";
+  const form = withJs() ? page.locator("dialog[open]") : page.locator("main");
+  await expectFits(page);
+  await expect(form.locator(".embed .post-body")).toContainText(sourceText);
+  await page.fill(`${prefix}title`, title);
+  await page.selectOption(`${prefix}category`, "board-games");
+  await page.fill(`${prefix}body`, "This deserves its own thread.");
+  await form.locator(".composer button[type=submit]:not([name])").click();
   await expect(page.locator("h1")).toHaveText(title);
   await expect(page.locator("figure.embed .post-body")).toContainText(sourceText);
   await expectFits(page);

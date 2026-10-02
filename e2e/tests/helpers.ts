@@ -38,14 +38,38 @@ export async function ownAddress(page: Page) {
   await page.context().setExtraHTTPHeaders({ "x-forwarded-for": `10.${n()}.${n()}.${n()}` });
 }
 
-/** The page fits the viewport with no sideways scrolling, and has no scripts. */
+/**
+ * The page fits the viewport with no sideways scrolling, and has no
+ * scripts but the islands: none at all for visitors, and for members only
+ * the islands' module and their JSON props (DESIGN.md §5).
+ */
 export async function expectFits(page: Page) {
   const { scrollWidth, clientWidth } = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
   }));
   expect(scrollWidth, "page is wider than the viewport").toBeLessThanOrEqual(clientWidth);
-  expect(await page.locator("script").count()).toBe(0);
+  const scripts = await page.locator("script").evaluateAll((elements) =>
+    elements.map((e) => {
+      const script = e as HTMLScriptElement;
+      return {
+        island: script.type === "module" && new URL(script.src, location.href).pathname.startsWith("/static/islands/"),
+        props: script.type === "application/json" && script.hasAttribute("data-island-props"),
+      };
+    }),
+  );
+  if ((await page.locator(".nav-user").count()) === 0) {
+    expect(scripts, "visitors' pages have no scripts").toEqual([]);
+  } else {
+    for (const script of scripts) {
+      expect(script.island || script.props, "only island scripts").toBe(true);
+    }
+  }
+}
+
+/** Whether this test runs with JavaScript (and so with the islands). */
+export function withJs(): boolean {
+  return test.info().project.use.javaScriptEnabled !== false;
 }
 
 export async function logIn(page: Page, username: string) {
@@ -54,4 +78,16 @@ export async function logIn(page: Page, username: string) {
   await page.fill("#password", PASSWORD);
   await page.locator("form[action='/login'] button[type=submit]").click();
   await expect(page.locator(".nav-user")).toHaveText(username);
+}
+
+/**
+ * Previews what is in the composer: in place with the composer island, or
+ * by sending the form without it. Either way the preview is in `.preview`.
+ */
+export async function preview(page: Page) {
+  if (withJs()) {
+    await page.locator(".composer-tab", { hasText: "Preview" }).click();
+  } else {
+    await page.locator("button[name=preview]").click();
+  }
 }

@@ -1,0 +1,129 @@
+# Continuous integration (DESIGN.md §12): formatting, lints and every test
+# against a real Postgres, the islands' build and tests, and the browser
+# tests with and without JavaScript.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_VERSION: "26"
+
+jobs:
+  server:
+    name: Server (fmt, clippy, tests)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: parlour
+          POSTGRES_PASSWORD: parlour
+          POSTGRES_DB: parlour
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U parlour"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://parlour:parlour@localhost:5432/parlour?sslmode=disable
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # The server embeds the islands' build, so build them first.
+      - name: Islands
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+          npm test
+      - name: Formatting
+        working-directory: server
+        run: cargo fmt --check
+      - name: Offline query data is current
+        working-directory: server
+        run: |
+          cargo install sqlx-cli --no-default-features --features rustls,postgres --locked
+          sqlx migrate run
+          cargo sqlx prepare --check -- --all-targets
+      - name: Clippy
+        working-directory: server
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        working-directory: server
+        run: cargo test
+
+  browser:
+    name: Browser tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: parlour
+          POSTGRES_PASSWORD: parlour
+          POSTGRES_DB: parlour
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U parlour"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mailpit:
+        image: axllent/mailpit:v1.31.3
+        ports:
+          - 1025:1025
+          - 8025:8025
+    env:
+      E2E_POSTGRES_URL: postgres://parlour:parlour@localhost:5432
+      E2E_MAILPIT_URL: http://127.0.0.1:8025
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            e2e/package-lock.json
+      - name: Install
+        run: |
+          (cd web && npm ci)
+          (cd e2e && npm ci && npx playwright install --with-deps chromium)
+      # server.mjs builds the islands and the server, seeds a database and
+      # starts the forums the tests use.
+      - name: Playwright
+        working-directory: e2e
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: e2e/test-results
+          retention-days: 7

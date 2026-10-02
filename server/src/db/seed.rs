@@ -1547,32 +1547,70 @@ impl Seeder<'_> {
         Ok(())
     }
 
-    /// Nell and Otto, two established members who keep to one thread of
-    /// their own (and so are free for the browser tests to log in as).
+    /// Nell and Otto, and Iris and Jude: established members who keep to
+    /// threads of their own (and so are free for the browser tests to log
+    /// in as).
     async fn quiet_corner(&mut self, general: i64) -> sqlx::Result<()> {
         let nell = self.extra_member("nell", "Nell", "ana", 120).await?;
         let otto = self.extra_member("otto", "Otto", "nell", 110).await?;
-        let lines = [
-            (
-                nell,
-                "What’s everyone listening to while they paint or read?",
-            ),
-            (otto, "The Sea of Thieves soundtrack, unironically."),
-            (nell, "Ha. I’ve been on Nils Frahm all week."),
-            (otto, "Good painting music: nothing with words in it."),
-            (nell, "Agreed. Podcasts are fatal for brushwork."),
-            (otto, "And for rules explanations, as Bea will tell you."),
-            (nell, "Next week: film scores only."),
-            (otto, "Deal. I’ll bring the Arrival soundtrack."),
-            (nell, "And I’ll bring biscuits."),
-            (otto, "Then it’s a date."),
-        ];
-        let start = self.now - Duration::days(60);
+        self.conversation_thread(
+            general,
+            "Quiet corner: what are you listening to?",
+            60,
+            &[
+                (
+                    nell,
+                    "What’s everyone listening to while they paint or read?",
+                ),
+                (otto, "The Sea of Thieves soundtrack, unironically."),
+                (nell, "Ha. I’ve been on Nils Frahm all week."),
+                (otto, "Good painting music: nothing with words in it."),
+                (nell, "Agreed. Podcasts are fatal for brushwork."),
+                (otto, "And for rules explanations, as Bea will tell you."),
+                (nell, "Next week: film scores only."),
+                (otto, "Deal. I’ll bring the Arrival soundtrack."),
+                (nell, "And I’ll bring biscuits."),
+                (otto, "Then it’s a date."),
+            ],
+        )
+        .await?;
+        let iris = self.extra_member("iris", "Iris", "otto", 100).await?;
+        let jude = self.extra_member("jude", "Jude", "iris", 95).await?;
+        self.conversation_thread(
+            general,
+            "Tea or coffee at the table?",
+            50,
+            &[
+                (iris, "Settle this: tea or coffee during a long game?"),
+                (jude, "Tea. Coffee rings on the board are a crime."),
+                (iris, "Coasters exist, Jude."),
+                (jude, "So do sleeves, and look how that argument went."),
+                (iris, "Fair. Tea it is, but strong."),
+                (jude, "Builder’s tea, two sugars, no exceptions."),
+                (iris, "Absolutely no exceptions? Not even for Earl Grey?"),
+                (jude, "Earl Grey is for reading, not for games."),
+                (iris, "I’ll bring both and see who notices."),
+                (jude, "Everyone will notice. That’s the point."),
+            ],
+        )
+        .await
+    }
+
+    /// A thread in which two members talk, starting `days_ago`, one post
+    /// every five hours.
+    async fn conversation_thread(
+        &mut self,
+        category_id: i64,
+        title: &str,
+        days_ago: i64,
+        lines: &[(i64, &str)],
+    ) -> sqlx::Result<()> {
+        let start = self.now - Duration::days(days_ago);
         let created = store::create_thread(
             &mut *self.db,
             &NewThread {
-                category_id: general,
-                title: "Quiet corner: what are you listening to?".into(),
+                category_id,
+                title: title.into(),
                 author_id: lines[0].0,
                 body_md: lines[0].1.into(),
                 forked_from_post_id: None,
