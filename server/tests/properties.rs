@@ -19,6 +19,11 @@
 //!   viewer may not see it on is a leak. This is checked for anonymous
 //!   visitors, a logged-in member and a moderator; while the logged-in viewers browse, anonymous pages must
 //!   still show only public content, so nothing leaks through the cache.
+//!   Logged-in viewers are also shown the writing pages, which display the
+//!   text being quoted, forked, edited or deleted: new threads, replies
+//!   quoting posts in their own and other threads, forks, edits and
+//!   deletions. The member writes posts of their own, so that leaving a
+//!   group can strand them in a category they no longer read.
 
 mod common;
 
@@ -167,8 +172,9 @@ impl World {
                 .unwrap();
             world.users.push(id);
         }
-        // Viewers who log in. They write nothing, so they don't appear on
-        // any page.
+        // Viewers who log in. The member writes too, so that the pages for
+        // editing and deleting their own posts are checked as well; the
+        // moderator writes nothing.
         for (name, role) in [("viewer", "user"), ("watcher", "moderator")] {
             let id = world
                 .block(store::create_user(
@@ -186,6 +192,7 @@ impl World {
             if role == "user" {
                 world.member_cookie = cookie;
                 world.member_id = id;
+                world.users.push(id);
             } else {
                 world.staff_cookie = cookie;
             }
@@ -335,7 +342,7 @@ impl World {
 
     fn paths(&self, who: Who) -> Vec<String> {
         let mut paths = vec!["/".to_owned(), "/users/tree".to_owned()];
-        for name in ["ruth", "jonah", "maya"] {
+        for name in ["ruth", "jonah", "maya", "viewer"] {
             paths.push(format!("/u/{name}"));
         }
         let visible_threads = (0..self.threads.len())
@@ -366,6 +373,39 @@ impl World {
             paths.push(format!("/p/{}/revisions", p.id));
             paths.push(format!("/p/{}/revisions?v=1", p.id));
             paths.push(format!("/p/{}/reactions", p.id));
+        }
+        if who != Who::Anonymous {
+            paths.extend(self.writing_paths());
+        }
+        paths
+    }
+
+    /// The pages for writing, which show logged-in viewers the text they
+    /// quote, fork or edit. Visitors are only asked to log in.
+    fn writing_paths(&self) -> Vec<String> {
+        let mut paths = Vec::new();
+        for c in &self.categories {
+            paths.push(format!("/c/{}/new", c.slug));
+        }
+        for t in &self.threads {
+            paths.push(format!("/t/{}/reply", t.id));
+        }
+        for p in &self.posts {
+            let thread = self.threads[p.thread].id;
+            paths.push(format!("/p/{}/fork", p.id));
+            paths.push(format!("/p/{}/edit", p.id));
+            paths.push(format!("/p/{}/delete", p.id));
+            paths.push(format!("/t/{thread}/reply?quote={}", p.id));
+            paths.push(format!("/t/{thread}/reply?to={}", p.id));
+            // Quoting a post into another thread is refused, but must not
+            // show the post on the way.
+            if p.seq == 1 {
+                for other in &self.threads {
+                    if other.id != thread {
+                        paths.push(format!("/t/{}/reply?quote={}", other.id, p.id));
+                    }
+                }
+            }
         }
         paths
     }
@@ -911,9 +951,10 @@ async fn staff_see_every_category(pool: PgPool) {
 // The access layer itself (DESIGN.md §6)
 //
 // A second state machine builds random forums out of groups, memberships,
-// roles, categories with read levels and read groups, threads, posts,
+// roles, categories with read and write levels and groups, threads, posts,
 // quote-forks, moves and deletions, and asks the `content` module directly
-// what each viewer gets. Every answer is checked, in both directions,
+// what each viewer gets, where they may post, and where they may quote
+// each post they can read. Every answer is checked, in both directions,
 // against `Access::reads_category` and friends below, which are written from
 // DESIGN.md §3.1 and know nothing of the SQL.
 
