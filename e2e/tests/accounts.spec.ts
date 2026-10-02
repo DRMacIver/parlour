@@ -65,7 +65,7 @@ test("a member logs in and their pages fit the screen", async ({ page }) => {
   await expect(page.locator(".topnav a[href='/login']")).toBeVisible();
 });
 
-test("an admin sees the site settings and members", async ({ page }) => {
+test("an admin sees the site settings, members and reactions", async ({ page }) => {
   await logIn(page, "sam");
   await page.goto("/admin/settings");
   await expect(page.locator("#site_name")).toHaveValue("The Tuesday Club");
@@ -73,6 +73,10 @@ test("an admin sees the site settings and members", async ({ page }) => {
   await page.locator(".subnav a[href='/admin/users']").click();
   await expect(page.locator("h1")).toHaveText("Members and roles");
   await expect(page.locator("form[action$='/role']").first()).toBeVisible();
+  await expectFits(page);
+  await page.locator(".subnav a[href='/admin/reactions']").click();
+  await expect(page.locator("h1")).toHaveText("Reactions");
+  await expect(page.locator(".reaction-types button[value=disable]").first()).toBeVisible();
   await expectFits(page);
 });
 

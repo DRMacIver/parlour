@@ -53,7 +53,7 @@ test("a member starts a thread, replies, quotes, edits, reacts and deletes", asy
   await expect(lastPost(page).locator(".post-number")).toHaveText("№ 2");
 
   // Quoting the first post records what the reply is to.
-  await page.locator("article.post").first().locator(".post-actions a", { hasText: "quote" }).click();
+  await page.locator("article.post").first().locator(".post-actions a", { hasText: /^quote$/ }).click();
   await expect(page.locator("#body")).toHaveValue(new RegExp(`^> @${username} wrote:\\n> We played`));
   await expect(page.locator("input[name=reply_to]")).toBeChecked();
   await expectFits(page);

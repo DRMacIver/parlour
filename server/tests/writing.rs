@@ -1567,3 +1567,120 @@ async fn text_is_kept_when_a_thread_goes_while_writing(pool: PgPool) {
     assert_status(&response, StatusCode::NOT_FOUND);
     assert_text_kept(&response, "Into the void");
 }
+
+/// Changing the reactions on offer clears visitors' cached copies of the
+/// pages that show reactions.
+#[sqlx::test]
+async fn changing_reaction_types_clears_cached_pages(pool: PgPool) {
+    let s = setup(pool).await;
+    let admin = s.f.member("sam", "admin", None).await;
+    let admin_cookie = s.f.session(admin).await;
+    let t = s.f.thread(s.games, s.ruth, "Heat", "Great game").await;
+    let post = t.first_post_id;
+    for emoji in ["😂", "😮"] {
+        let response =
+            s.f.submit(
+                &format!("/p/{post}/reactions"),
+                &[("emoji", emoji)],
+                Some(&s.jonah_cookie),
+            )
+            .await;
+        assert_status(&response, StatusCode::SEE_OTHER);
+    }
+    let thread = "/t/1/heat".to_owned();
+    let who = format!("/p/{post}/reactions");
+    let shown = |page: &str| -> Vec<&'static str> {
+        let mut found: Vec<(usize, &'static str)> = ["😂", "😮"]
+            .into_iter()
+            .filter_map(|e| page.find(e).map(|at| (at, e)))
+            .collect();
+        found.sort();
+        found.into_iter().map(|(_, e)| e).collect()
+    };
+    let admin_change = async |action: &str, emoji: &str| {
+        let response =
+            s.f.submit(
+                "/admin/reactions",
+                &[("action", action), ("emoji", emoji)],
+                Some(&admin_cookie),
+            )
+            .await;
+        assert_status(&response, StatusCode::SEE_OTHER);
+    };
+    // Cached for visitors.
+    for path in [&thread, &who] {
+        assert_eq!(shown(&s.f.page(path).await), vec!["😂", "😮"], "{path}");
+        assert_eq!(shown(&s.f.page(path).await), vec!["😂", "😮"], "{path}");
+    }
+    admin_change("disable", "😮").await;
+    for path in [&thread, &who] {
+        assert_eq!(shown(&s.f.page(path).await), vec!["😂"], "{path}");
+    }
+    admin_change("enable", "😮").await;
+    for path in [&thread, &who] {
+        assert_eq!(shown(&s.f.page(path).await), vec!["😂", "😮"], "{path}");
+    }
+    admin_change("up", "😮").await;
+    for path in [&thread, &who] {
+        assert_eq!(shown(&s.f.page(path).await), vec!["😮", "😂"], "{path}");
+    }
+}
+
+#[sqlx::test]
+async fn editing_and_reacting_are_rate_limited(pool: PgPool) {
+    let s = setup(pool).await;
+    let t = s.f.thread(s.games, s.ruth, "Busy", "x").await;
+    let mine = s.f.post(t.thread_id, s.jonah, "mine").await;
+    let mut refused = false;
+    for i in 0..100 {
+        let body = format!("edit {i}");
+        let response =
+            s.f.submit(
+                &format!("/p/{mine}/edit"),
+                &[("body", &body)],
+                Some(&s.jonah_cookie),
+            )
+            .await;
+        if response.status == StatusCode::TOO_MANY_REQUESTS {
+            refused = true;
+            assert!(response.body.contains(&body), "the text is kept");
+            break;
+        }
+        assert_status(&response, StatusCode::SEE_OTHER);
+    }
+    assert!(refused, "edits are limited");
+    let mut refused = false;
+    for i in 0..200 {
+        let action = if i % 2 == 0 { "add" } else { "remove" };
+        let response =
+            s.f.submit(
+                &format!("/p/{}/reactions", t.first_post_id),
+                &[("emoji", "👍"), ("action", action)],
+                Some(&s.jonah_cookie),
+            )
+            .await;
+        if response.status == StatusCode::TOO_MANY_REQUESTS {
+            refused = true;
+            break;
+        }
+        assert_status(&response, StatusCode::SEE_OTHER);
+    }
+    assert!(refused, "reactions are limited");
+    // Others can still edit and react.
+    let response =
+        s.f.submit(
+            &format!("/p/{}/edit", t.first_post_id),
+            &[("body", "ruth's edit")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+    let response =
+        s.f.submit(
+            &format!("/p/{}/reactions", t.first_post_id),
+            &[("emoji", "👍")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+}
