@@ -1,15 +1,19 @@
 //! Property-based tests over random forum histories (DESIGN.md §6, §12).
 //!
 //! A state machine creates categories, threads, posts and quote-forks, then
-//! edits, deletes, hides, moves and renames them, changes category levels,
-//! and reports each change as a write handler would. Throughout:
+//! edits (inside and after the grace period, so that some edits keep
+//! history), reacts to, deletes, hides, moves and renames them, changes
+//! category levels, and reports each change as a write handler would.
+//! Throughout:
 //!
 //! - every page served through the anonymous cache is identical to the same
 //!   page rendered fresh, so invalidation never leaves a stale page behind;
 //! - no page contains text from anything its viewer may not read, judged
 //!   by a reference permission function written separately here, and
 //!   every post the viewer may read can be found on the page its number
-//!   says. This is checked for anonymous visitors, a logged-in member and a
+//!   says, with its earlier versions on its history page. A deleted or
+//!   hidden post's history is shown to nobody, and text replaced within the
+//!   grace period is gone for good. This is checked for anonymous visitors, a logged-in member and a
 //!   moderator; while the logged-in viewers browse, anonymous pages must
 //!   still show only public content, so nothing leaks through the cache.
 
@@ -26,7 +30,7 @@ use parlour::changes::Change;
 use parlour::content::{POSTS_PER_PAGE, THREADS_PER_PAGE, page_count, page_of_seq};
 use parlour::pagination::page_href;
 use parlour::store::{self, NewCategory, NewPost, NewThread, NewUser};
-use parlour::{AppState, markdown};
+use parlour::AppState;
 use sqlx::PgPool;
 use tokio::runtime::Handle;
 
@@ -69,9 +73,14 @@ struct PostModel {
     id: i64,
     thread: usize,
     seq: i64,
+    author: i64,
     body_token: String,
     deleted: bool,
     hidden: bool,
+    /// Tokens of earlier versions kept in the post's history.
+    history: Vec<String>,
+    /// Whether the grace period for edits is over (or an edit was kept).
+    settled: bool,
 }
 
 /// The forum, served twice: through the page cache and without it.
@@ -232,9 +241,12 @@ impl World {
             id,
             thread,
             seq: self.threads[thread].last_seq,
+            author,
             body_token: token,
             deleted: false,
             hidden: false,
+            history: Vec::new(),
+            settled: false,
         });
         self.changed(Change::PostCreated { post_id: id });
     }
@@ -277,6 +289,7 @@ impl World {
         for (i, p) in self.posts.iter().enumerate() {
             if self.post_readable(i, who) {
                 tokens.insert(p.body_token.as_str());
+                tokens.extend(p.history.iter().map(String::as_str));
             }
         }
         tokens
@@ -320,6 +333,9 @@ impl World {
         }
         for p in &self.posts {
             paths.push(format!("/p/{}", p.id));
+            paths.push(format!("/p/{}/revisions", p.id));
+            paths.push(format!("/p/{}/revisions?v=1", p.id));
+            paths.push(format!("/p/{}/reactions", p.id));
         }
         paths
     }
@@ -424,6 +440,7 @@ impl World {
                 format!("/t/{}/{}?page={page}#p{}", t.id, self.slug_of(t), p.id)
             };
             assert_eq!(permalink.location(), expected);
+            let history = self.get_as(who, &format!("/p/{}/revisions", p.id));
             if self.post_readable(i, who) {
                 let body = self.get_as(who, expected.split('#').next().unwrap()).body;
                 assert!(
@@ -431,6 +448,24 @@ impl World {
                     "post {} missing from {expected}",
                     p.id
                 );
+                assert_eq!(history.status, StatusCode::OK);
+                assert!(history.body.contains(&p.body_token));
+                assert!(history.body.contains(&format!(
+                    "{} version",
+                    p.history.len() + 1
+                )));
+                for (n, token) in p.history.iter().enumerate() {
+                    let version = self.get_as(who, &format!("/p/{}/revisions?v={}", p.id, n + 1));
+                    assert!(
+                        version.body.contains(token),
+                        "version {} of post {} lacks {token}",
+                        n + 1,
+                        p.id
+                    );
+                }
+            } else {
+                // Deleted and hidden posts take their history with them.
+                assert_eq!(history.status, StatusCode::NOT_FOUND, "post {}", p.id);
             }
         }
         for (i, c) in self.categories.iter().enumerate() {
@@ -485,9 +520,12 @@ impl World {
             id: created.first_post_id,
             thread: self.threads.len() - 1,
             seq: 1,
+            author,
             body_token,
             deleted: false,
             hidden: false,
+            history: Vec::new(),
+            settled: false,
         });
         self.changed(Change::PostCreated {
             post_id: created.first_post_id,
@@ -525,20 +563,59 @@ impl World {
     fn edit_post(&mut self, tc: TestCase) {
         tc.assume(!self.posts.is_empty());
         let post = tc.draw(gs::integers::<usize>().max_value(self.posts.len() - 1));
+        // Either within the grace period after posting, or long after.
+        if !self.posts[post].settled && tc.draw(gs::booleans()) {
+            self.exec(format!(
+                "UPDATE posts SET created_at = created_at - interval '1 hour' WHERE id = {}",
+                self.posts[post].id
+            ));
+            self.posts[post].settled = true;
+            // Only for this test: the post's time shows on pages, so they
+            // must be cleared like after an edit.
+            self.changed(Change::PostEdited {
+                post_id: self.posts[post].id,
+            });
+        }
         let token = self.token();
         let body = format!("Edited {token}");
-        sqlx::query!(
-            "UPDATE posts SET body_md = $2, body_html = $3, edited_at = now() WHERE id = $1",
-            self.posts[post].id,
-            body,
-            markdown::render(&body)
-        )
-        .execute(self.db())
-        .await_blocking(self);
-        self.posts[post].body_token = token;
+        let edited = self
+            .block(store::edit_post(
+                self.db(),
+                self.posts[post].id,
+                self.posts[post].author,
+                &body,
+            ))
+            .unwrap();
+        let p = &mut self.posts[post];
+        let old = std::mem::replace(&mut p.body_token, token);
+        if p.settled {
+            assert!(matches!(edited, store::Edited::Revised { .. }));
+            p.history.push(old);
+        } else {
+            // Replaced within the grace period: the old text is gone.
+            assert_eq!(edited, store::Edited::Replaced);
+        }
         self.changed(Change::PostEdited {
             post_id: self.posts[post].id,
         });
+    }
+
+    #[rule]
+    fn react(&mut self, tc: TestCase) {
+        tc.assume(!self.posts.is_empty());
+        let post = tc.draw(gs::integers::<usize>().max_value(self.posts.len() - 1));
+        let user = tc.draw(gs::sampled_from(self.users.clone()));
+        let emoji = tc.draw(gs::sampled_from(vec!["👍", "❤️", "😂"]));
+        let id = self.posts[post].id;
+        let changed = if tc.draw(gs::booleans()) {
+            self.block(store::add_reaction(self.db(), id, user, emoji))
+        } else {
+            self.block(store::remove_reaction(self.db(), id, user, emoji))
+        }
+        .unwrap();
+        if changed {
+            self.changed(Change::ReactionChanged { post_id: id });
+        }
     }
 
     #[rule]
@@ -690,19 +767,6 @@ impl World {
     #[invariant]
     fn pages_are_right(&self, _: TestCase) {
         self.check();
-    }
-}
-
-/// Lets a rule await a query from synchronous state-machine code.
-trait AwaitBlocking {
-    type Output;
-    fn await_blocking(self, world: &World) -> Self::Output;
-}
-
-impl<F: Future<Output = Result<T, sqlx::Error>>, T> AwaitBlocking for F {
-    type Output = T;
-    fn await_blocking(self, world: &World) -> T {
-        world.block(self).unwrap()
     }
 }
 

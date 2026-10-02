@@ -115,6 +115,53 @@ async fn seed_includes_the_interesting_cases(pool: PgPool) {
         count("SELECT count(*) FROM users WHERE status_line IS NOT NULL").await >= 5,
         "post-info fields"
     );
+    assert!(
+        count("SELECT count(*) FROM post_revisions").await >= 3,
+        "edit history"
+    );
+    // Every post marked as edited has an earlier version to show.
+    assert_eq!(
+        count(
+            "SELECT count(*) FROM posts p WHERE p.edited_at IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM post_revisions r WHERE r.post_id = p.id)"
+        )
+        .await,
+        0,
+        "edited posts without history"
+    );
+    assert!(
+        count("SELECT count(DISTINCT post_id) FROM reactions").await >= 100,
+        "reactions"
+    );
+    assert!(
+        count("SELECT count(DISTINCT emoji) FROM reactions").await >= 4,
+        "kinds of reaction"
+    );
+    // Nobody reacts to deleted or hidden posts.
+    assert_eq!(
+        count(
+            "SELECT count(*) FROM reactions r JOIN posts p ON p.id = r.post_id
+             WHERE p.deleted_at IS NOT NULL OR p.hidden_at IS NOT NULL"
+        )
+        .await,
+        0
+    );
+    assert!(
+        count("SELECT count(*) FROM thread_reads").await >= 100,
+        "read markers"
+    );
+    // Read markers never run past the end of a thread, and members only
+    // have them for threads they can read.
+    assert_eq!(
+        count(
+            "SELECT count(*) FROM thread_reads r JOIN threads t ON t.id = r.thread_id
+             JOIN users u ON u.id = r.user_id
+             WHERE r.last_read_seq > t.last_seq
+                OR (t.visibility = 'groups' AND u.role = 'user')"
+        )
+        .await,
+        0
+    );
 }
 
 #[sqlx::test]

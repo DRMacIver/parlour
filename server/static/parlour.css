@@ -651,6 +651,138 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
 .steps li::before { content: counter(step) ". "; }
 .steps [aria-current="step"] { color: var(--accent); font-weight: 700; }
 
+/* -------------------------------------------------------------- Writing */
+
+/* Post actions: small-capital text links at the right of the post info. */
+.post-actions {
+  font-style: normal;
+  font-variant: small-caps;
+  letter-spacing: 0.1em;
+}
+.post-info .edited { color: var(--ink-muted); }
+
+/* "New since your last visit": a red double rule across the thread. */
+.unread-divider {
+  border-top: 3px double var(--accent);
+  border-bottom: 3px double var(--accent);
+  padding: 3px 14px;
+  color: var(--accent);
+  font-size: var(--font-size-label);
+  font-variant: small-caps;
+  letter-spacing: 0.14em;
+  text-align: center;
+}
+.posts-head + .unread-divider { border-top-width: 0; }
+
+/* Unread counts in thread lists. */
+.unread {
+  color: var(--accent);
+  font-size: var(--font-size-small);
+  font-weight: 400;
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+/* Reactions under a post: counts, then the "react" menu. */
+.reactions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 0 16px 12px;
+  font-size: 15px;
+  color: var(--ink-muted);
+}
+.reaction-form { display: inline; margin: 0; }
+.reaction {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 4px;
+  border: none;
+  border-bottom: 1px solid transparent;
+  background: none;
+  color: var(--ink-muted);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+a.reaction { cursor: pointer; }
+.reaction:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.reaction:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.reaction-mine { color: var(--ink); border-bottom-color: var(--accent); }
+.reaction-count { font-variant-numeric: tabular-nums; }
+.react-menu { position: relative; }
+.react-menu summary, .reaction-who {
+  cursor: pointer;
+  font-variant: small-caps;
+  letter-spacing: 0.1em;
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  list-style: none;
+}
+.react-menu summary::-webkit-details-marker { display: none; }
+.react-menu summary:hover, .reaction-who:hover { color: var(--accent); }
+.react-menu[open] summary { color: var(--accent); }
+.react-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding: 4px;
+  border: 1px solid var(--ink);
+  background: var(--panel);
+}
+.react-choices .reaction { font-size: 20px; padding: 0 6px; color: var(--ink); }
+
+/* The quick reply box, the composer and its preview. */
+.quick-reply { margin-top: 16px; }
+p.quick-reply { font-style: italic; }
+.quick-reply textarea, .composer textarea {
+  width: 100%;
+  min-height: 7em;
+  padding: 8px 10px;
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  resize: vertical;
+}
+.composer textarea { min-height: 16em; font-family: var(--font-body); }
+.quick-reply textarea:focus-visible, .composer textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.composer, .preview { margin-bottom: 16px; }
+.preview .post-body { padding: 12px 14px 4px; }
+.composer-note { margin: 0 0 16px; }
+.toolbar .button { min-height: 32px; }
+
+/* Edit history. */
+.diff {
+  margin: 0;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+  max-width: 76ch;
+}
+.diff ins, .diff-key ins { background: color-mix(in srgb, var(--ink) 10%, transparent); text-decoration: underline; text-decoration-thickness: 2px; }
+.diff del, .diff-key del { color: var(--accent); text-decoration: line-through; }
+.version-list { list-style: none; margin: 0; padding: 0; }
+.version-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 8px 14px; border-top: 1px solid var(--rule); }
+.version-list li:first-child { border-top: none; }
+.version-list strong { color: var(--accent); }
+.version-list .row-meta { flex-basis: 100%; }
+
+/* Who reacted to a post. */
+.reaction-detail { list-style: none; margin: 0; padding: 0; }
+.reaction-detail li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 14px; border-top: 1px solid var(--rule); }
+.reaction-detail li:first-child { border-top: none; }
+.reaction-emoji { font-size: 22px; min-width: 1.5em; }
+.reaction-names { flex: 1 1 200px; }
+.reaction-types .reaction-emoji { font-size: 22px; }
+
 /* -------------------------------------------------------- Narrow screens */
 
 @media (max-width: 900px) {
@@ -695,6 +827,7 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
   .post-info { padding: 6px 12px; }
   .post-body { padding: 10px 12px 2px; }
   .fork-link { padding: 0 12px 10px; }
+  .reactions { padding: 0 12px 10px; }
   .post-tombstone { padding: 8px 12px; }
 
   .embed-body { padding: 10px 12px 2px; }

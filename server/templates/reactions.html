@@ -12,7 +12,7 @@
   {% for r in reactions.reactions %}
     <li>
       <span class="reaction-emoji">{{ r.emoji }}</span>
-      <span class="reaction-who">{% if r.users.is_empty() %}<span class="row-meta">Nobody yet</span>{% else %}{% for u in r.users %}{% if !loop.first %}, {% endif %}<a href="/u/{{ u.username }}">{{ u.display_name }}</a>{% endfor %}{% endif %}</span>
+      <span class="reaction-names">{% if r.users.is_empty() %}<span class="row-meta">Nobody yet</span>{% else %}{% for u in r.users %}{% if !loop.first %}, {% endif %}<a href="/u/{{ u.username }}">{{ u.display_name }}</a>{% endfor %}{% endif %}</span>
       {% if logged_in %}
       <form class="form-inline" method="post" action="/p/{{ post.post_id }}/reactions">
         <input type="hidden" name="emoji" value="{{ r.emoji }}">

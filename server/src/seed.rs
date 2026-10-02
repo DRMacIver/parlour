@@ -751,6 +751,8 @@ impl Seeder<'_> {
         )
         .await?;
         let september = self.september_thread(games).await?;
+        let september_id = september.created.thread_id;
+        let maya_post = september.forkable;
         self.solo_fork(games, september).await?;
         for spec in [
             thread(
@@ -890,6 +892,91 @@ impl Seeder<'_> {
         )
         .await?;
 
+        self.reactions(maya_post).await?;
+        self.read_markers(september_id).await?;
+        Ok(())
+    }
+
+    /// Reactions on about a third of the posts, and the ones in the
+    /// mockups on Maya's post in the September thread.
+    async fn reactions(&mut self, maya_post: Option<i64>) -> sqlx::Result<()> {
+        const EMOJI: &[&str] = &["👍", "👍", "👍", "❤️", "❤️", "😂", "😮", "🙏", "😢"];
+        if let Some(post) = maya_post {
+            for name in ["ollie", "jonah", "ruth", "kit", "dev"] {
+                sqlx::query!(
+                    "INSERT INTO reactions (post_id, user_id, emoji, created_at)
+                     SELECT $1, $2, '😂', created_at + interval '20 minutes' FROM posts WHERE id = $1",
+                    post,
+                    self.user(name)
+                )
+                .execute(&mut *self.db)
+                .await?;
+            }
+        }
+        let posts = sqlx::query!(
+            r#"SELECT p.id, p.author_id, p.created_at, t.visibility
+               FROM posts p JOIN threads t ON t.id = p.thread_id
+               WHERE p.deleted_at IS NULL AND p.hidden_at IS NULL AND p.id IS DISTINCT FROM $1
+               ORDER BY p.id"#,
+            maya_post
+        )
+        .fetch_all(&mut *self.db)
+        .await?;
+        for post in posts {
+            if !self.rng.chance(35) {
+                continue;
+            }
+            for _ in 0..1 + self.rng.below(5) {
+                let spec = self.rng.pick(USERS);
+                let user = self.user(spec.username);
+                // Only those who can read the post react to it.
+                if user == post.author_id || (post.visibility == "groups" && spec.role == "user") {
+                    continue;
+                }
+                let emoji = *self.rng.pick(EMOJI);
+                let at = post.created_at + Duration::minutes(5 + self.rng.below(600) as i64);
+                sqlx::query!(
+                    "INSERT INTO reactions (post_id, user_id, emoji, created_at) VALUES ($1, $2, $3, $4)
+                     ON CONFLICT DO NOTHING",
+                    post.id,
+                    user,
+                    emoji,
+                    at.min(self.now)
+                )
+                .execute(&mut *self.db)
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// How far each member has read: most threads they can see are read
+    /// up to within a few posts of the end. Priya last read the September
+    /// thread just before Maya's post, as in the mockups.
+    async fn read_markers(&mut self, september: i64) -> sqlx::Result<()> {
+        let threads = sqlx::query!(
+            "SELECT id, last_seq, visibility FROM threads WHERE deleted_at IS NULL ORDER BY id"
+        )
+        .fetch_all(&mut *self.db)
+        .await?;
+        for spec in USERS {
+            let user = self.user(spec.username);
+            for thread in &threads {
+                if thread.visibility == "groups" && spec.role == "user" {
+                    continue;
+                }
+                let seq = if spec.username == "priya" && thread.id == september {
+                    thread.last_seq - 4
+                } else if self.rng.chance(70) {
+                    thread.last_seq - self.rng.below(4) as i32
+                } else {
+                    continue;
+                };
+                if seq >= 1 {
+                    store::mark_read(&mut *self.db, user, thread.id, i64::from(seq)).await?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1082,6 +1169,25 @@ impl Seeder<'_> {
         let maya_post = self
             .post(&mut thread, "maya", "Mostly solo this week: three games of Arkham Horror LCG and one very long game of Mage Knight.\n\nI’m starting to think solo play is its own hobby that happens to share equipment with this one.".into(), None, day(self, 3))
             .await?;
+        // Edited twice after the grace period, as in the mockups.
+        let maya = self.user("maya");
+        for (rev, minutes, body) in [
+            (1, 0, "Mostly solo this week: three games of Arkham Horror LCG and one game of Mage Knight.\n\nI think solo play is its own hobby."),
+            (2, 6, "Mostly solo this week: three games of Arkham Horror LCG and one game of Mage Knight.\n\nI think solo play is its own hobby that happens to share equipment with this one."),
+        ] {
+            sqlx::query!(
+                "INSERT INTO post_revisions (post_id, rev, body_md, body_html, editor_id, created_at)
+                 SELECT $1, $2, $3, $4, $5, created_at + make_interval(mins => $6) FROM posts WHERE id = $1",
+                maya_post,
+                rev,
+                body,
+                markdown::render(body),
+                maya,
+                minutes
+            )
+            .execute(&mut *self.db)
+            .await?;
+        }
         sqlx::query!(
             "UPDATE posts SET edited_at = created_at + interval '8 minutes' WHERE id = $1",
             maya_post
@@ -1161,6 +1267,13 @@ impl Seeder<'_> {
         // And one post was edited after the fact.
         let edited = thread.posts[2].0;
         let body = "Edited to add: I take it back, solo games count. Mostly.";
+        sqlx::query!(
+            "INSERT INTO post_revisions (post_id, rev, body_md, body_html, editor_id, created_at)
+             SELECT id, 1, body_md, body_html, author_id, created_at FROM posts WHERE id = $1",
+            edited
+        )
+        .execute(&mut *self.db)
+        .await?;
         sqlx::query!(
             "UPDATE posts SET body_md = $2, body_html = $3, edited_at = created_at + interval '2 hours' WHERE id = $1",
             edited,

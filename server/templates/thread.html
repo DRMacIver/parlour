@@ -106,7 +106,7 @@
             {% for t in reaction_types %}<button class="reaction" type="submit" name="emoji" value="{{ t.emoji }}" aria-label="React with {{ t.emoji }}">{{ t.emoji }}</button>{% endfor %}
           </form>
         </details>
-        <a class="reaction-who" href="/p/{{ post.id }}/reactions">who reacted</a>
+        {% if !post.reactions.is_empty() %}<a class="reaction-who" href="/p/{{ post.id }}/reactions">who reacted</a>{% endif %}
         {% endif %}
       </div>
       {% endif %}
