@@ -398,6 +398,75 @@ async fn leaving_a_conversation(pool: PgPool) {
     );
 }
 
+/// Leaving sticks: nobody left in the conversation can pull you back in.
+#[sqlx::test]
+async fn people_who_left_cannot_be_added_back(pool: PgPool) {
+    let s = setup(pool).await;
+    let id = start(&s.f, &s.ruth_cookie, "jonah, maya", "Brass", "Hello all").await;
+    s.f.submit(&format!("/messages/{id}/leave"), &[], Some(&s.maya_cookie))
+        .await;
+    let response =
+        s.f.submit(
+            &format!("/messages/{id}/people"),
+            &[("username", "maya")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::BAD_REQUEST);
+    assert!(
+        response.body.contains("left this conversation"),
+        "{}",
+        response.body
+    );
+    assert_status(
+        &s.f.get_as(&format!("/messages/{id}"), Some(&s.maya_cookie))
+            .await,
+        StatusCode::NOT_FOUND,
+    );
+}
+
+/// Nobody can be added to a conversation with someone they have blocked,
+/// or who has blocked them, whoever does the adding.
+#[sqlx::test]
+async fn nobody_is_added_alongside_someone_blocking_them(pool: PgPool) {
+    let s = setup(pool).await;
+    let kit = s.f.member("kit", "user", None).await;
+    let kit_cookie = s.f.session(kit).await;
+    // Kit has blocked Maya; Ruth, who hasn't blocked anyone, tries to add
+    // Kit to a conversation Maya is in.
+    s.f.submit("/u/maya/block", &[], Some(&kit_cookie)).await;
+    let id = start(&s.f, &s.ruth_cookie, "jonah, maya", "Brass", "Hello all").await;
+    let response =
+        s.f.submit(
+            &format!("/messages/{id}/people"),
+            &[("username", "kit")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::BAD_REQUEST);
+    assert!(response.body.contains("block"), "{}", response.body);
+    // The other way round: Maya is blocked by Kit, so Maya can't be added
+    // to a conversation Kit is in.
+    let other = start(&s.f, &s.ruth_cookie, "jonah, kit", "Other", "Hello").await;
+    let response =
+        s.f.submit(
+            &format!("/messages/{other}/people"),
+            &[("username", "maya")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::BAD_REQUEST);
+    // Unrelated people can still be added.
+    let response =
+        s.f.submit(
+            &format!("/messages/{other}/people"),
+            &[("username", "sam")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+}
+
 #[sqlx::test]
 async fn adding_someone_to_a_group_conversation(pool: PgPool) {
     let s = setup(pool).await;
@@ -548,6 +617,61 @@ async fn new_members_cannot_start_conversations(pool: PgPool) {
     let new_admin = s.f.member("boss", "admin", None).await;
     let boss = s.f.session(new_admin).await;
     start(&s.f, &boss, "jonah", "", "Welcome").await;
+}
+
+/// Regression: a new member in a group conversation could pull anyone
+/// into it, and so message people they couldn't start a conversation with.
+#[sqlx::test]
+async fn new_members_cannot_add_people_to_conversations(pool: PgPool) {
+    let s = setup(pool).await;
+    let kit = s.f.member("kit", "user", None).await;
+    let group = start(&s.f, &s.ruth_cookie, "jonah, maya", "Brass", "Hi").await;
+    set_messages(&s.f, MessageSettings::default()).await;
+    // Ruth (older, with posts) may still add people; Jonah (new) may not.
+    s.f.exec(&format!(
+        "UPDATE users SET created_at = now() - interval '4 days' WHERE id = {}",
+        s.ruth
+    ))
+    .await;
+    let t = s.f.thread(s.games, s.ruth, "Hello", "One").await;
+    for n in 0..4 {
+        s.f.post(t.thread_id, s.ruth, &format!("Post {n}")).await;
+    }
+    let response =
+        s.f.submit(
+            &format!("/messages/{group}/people"),
+            &[("username", "kit")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+    assert!(response.body.contains("New members"), "{}", response.body);
+    assert_eq!(
+        count(
+            &s.f,
+            &format!(
+                "SELECT count(*) FROM private_thread_participants WHERE thread_id = {group} AND user_id = {kit}"
+            )
+        )
+        .await,
+        0
+    );
+    // The conversation page doesn't offer Jonah the form.
+    let page =
+        s.f.page_as(&format!("/messages/{group}"), &s.jonah_cookie)
+            .await;
+    assert!(
+        !page.contains(&format!("action=\"/messages/{group}/people\"")),
+        "{page}"
+    );
+    let response =
+        s.f.submit(
+            &format!("/messages/{group}/people"),
+            &[("username", "kit")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::SEE_OTHER);
 }
 
 #[sqlx::test]

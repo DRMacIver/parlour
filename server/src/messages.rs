@@ -9,8 +9,11 @@
 //!   people they've interacted with, or nobody;
 //! - members can block each other: neither can then write to the other in
 //!   a new conversation or one between the two of them, nor add the other
-//!   to one; the blocker doesn't see the other's posts (they are folded
-//!   away) or hear about them.
+//!   to one, and nobody can add either to a conversation the other is in;
+//!   the blocker doesn't see the other's posts (they are folded away) or
+//!   hear about them;
+//! - adding someone to a group conversation takes what starting one does
+//!   (new members can't), and someone who left can't be added back.
 //!
 //! Staff are never blocked or turned away: a member can't block a
 //! moderator or admin, and staff may write to anyone.
@@ -273,6 +276,11 @@ pub async fn add_person(
     if let Some(why) = send_refusal(state, viewer, &thread).await? {
         return Ok(Err(Refused::NotAllowed(why)));
     }
+    // Adding someone starts them talking with everyone there, so it takes
+    // what starting a conversation takes.
+    if let Some(why) = start_refusal(state, user).await? {
+        return Ok(Err(Refused::NotAllowedBecause(why)));
+    }
     let rules = settings::message_settings(state.db()).await?;
     let names = parse_recipients(username);
     let mut problems = Vec::new();
@@ -291,8 +299,22 @@ pub async fn add_person(
                 &mut problems,
             )
             .await?;
-            if found.iter().any(|r| conversation.includes(r.user.id)) {
-                problems.push("They’re already in this conversation.".to_owned());
+            for person in &found {
+                let name = &person.user.username;
+                if conversation.includes(person.user.id) {
+                    problems.push("They’re already in this conversation.".to_owned());
+                } else if social::left_conversation(state.db(), thread_id, person.user.id).await? {
+                    // Leaving sticks: nobody can pull them back in.
+                    problems.push(format!(
+                        "{name} left this conversation, so they can’t be added back."
+                    ));
+                } else if social::blocked_in_conversation(state.db(), thread_id, person.user.id)
+                    .await?
+                {
+                    problems.push(format!(
+                        "{name} can’t be added: there’s a block between them and someone here."
+                    ));
+                }
             }
             found
         }

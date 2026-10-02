@@ -192,6 +192,37 @@ pub async fn has_blocked(db: &Db, user_id: i64, other: i64) -> sqlx::Result<bool
     .await
 }
 
+/// Whether `user_id` was in a conversation and left it.
+pub async fn left_conversation(db: &Db, thread_id: i64, user_id: i64) -> sqlx::Result<bool> {
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM private_thread_participants
+                          WHERE thread_id = $1 AND user_id = $2 AND left_at IS NOT NULL) AS "left!""#,
+        thread_id,
+        user_id
+    )
+    .fetch_one(db.pool())
+    .await
+}
+
+/// Whether a block stands between `user_id` and anyone in a conversation
+/// now, either way. Blocks on staff don't count: staff can't be blocked.
+pub async fn blocked_in_conversation(db: &Db, thread_id: i64, user_id: i64) -> sqlx::Result<bool> {
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM private_thread_participants p
+               JOIN users them ON them.id = p.user_id
+               JOIN users me ON me.id = $2
+               JOIN blocks b ON (b.user_id = me.id AND b.blocked_user_id = them.id AND them.role = 'user')
+                             OR (b.user_id = them.id AND b.blocked_user_id = me.id AND me.role = 'user')
+               WHERE p.thread_id = $1 AND p.left_at IS NULL AND p.user_id <> $2
+           ) AS "blocked!""#,
+        thread_id,
+        user_id
+    )
+    .fetch_one(db.pool())
+    .await
+}
+
 /// The members `user_id` has blocked, by name.
 pub async fn blocked_members(db: &Db, user_id: i64) -> sqlx::Result<Vec<UserRef>> {
     let rows = sqlx::query!(

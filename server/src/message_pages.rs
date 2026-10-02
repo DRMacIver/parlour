@@ -228,9 +228,10 @@ async fn render_conversation(
         store::mark_read(state.db(), user.id, id, last.seq).await?;
         notify::seen_thread(state, user.id, id, last.seq).await?;
     }
-    let target = content::thread_target(state.db(), viewer, id)
-        .await?
-        .expect("a conversation the viewer can read");
+    // They may have left in the meantime (in another tab, say).
+    let Some(target) = content::thread_target(state.db(), viewer, id).await? else {
+        return web::not_found(state, viewer).await;
+    };
     let refusal = messages::send_refusal(state, viewer, &target).await?;
     let others = conversation.conversation.others(Some(user.id));
     let blockable = match others.as_slice() {

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM private_thread_participants\n                          WHERE thread_id = $1 AND user_id = $2 AND left_at IS NOT NULL) AS \"left!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "left!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7d4a7cf64582c6cf47dc5125949ed1d14b4642dea24b2f981b23f5380aa16306"
+}

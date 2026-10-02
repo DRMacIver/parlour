@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM private_thread_participants p\n               JOIN users them ON them.id = p.user_id\n               JOIN users me ON me.id = $2\n               JOIN blocks b ON (b.user_id = me.id AND b.blocked_user_id = them.id AND them.role = 'user')\n                             OR (b.user_id = them.id AND b.blocked_user_id = me.id AND me.role = 'user')\n               WHERE p.thread_id = $1 AND p.left_at IS NULL AND p.user_id <> $2\n           ) AS \"blocked!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "blocked!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a7c5e1adcc563c12906a1c890f468ffc8ab69b47198f63e14e87fabfdad0d427"
+}

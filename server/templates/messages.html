@@ -46,7 +46,7 @@
       <p class="row-meta">{{ shown.page.conversation.people(viewer_id.clone()) }}</p>
     </div>
     <div class="conversation-actions">
-      {% if shown.page.conversation.is_group() && shown.refusal.is_none() %}
+      {% if shown.page.conversation.is_group() && shown.refusal.is_none() && ctx.start_refusal.is_none() %}
       <form class="form-inline add-person" method="post" action="/messages/{{ shown.page.thread.id }}/people">
         <label class="visually-hidden" for="add-username">Username to add</label>
         <input id="add-username" name="username" type="text" placeholder="username" autocomplete="off" required>
