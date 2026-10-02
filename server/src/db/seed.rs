@@ -1548,9 +1548,10 @@ impl Seeder<'_> {
         Ok(())
     }
 
-    /// Nell and Otto, and Iris and Jude: established members who keep to
-    /// threads of their own (and so are free for the browser tests to log
-    /// in as).
+    /// Nell and Otto, Iris and Jude, Rosa and Theo, Uma and Vic, and Wes
+    /// and Xan: established members who keep to threads of their own (and
+    /// so are free for the browser tests to log in as); and Yara, an admin
+    /// for the same reason.
     async fn quiet_corner(&mut self, general: i64) -> sqlx::Result<()> {
         let nell = self.extra_member("nell", "Nell", "ana", 120).await?;
         let otto = self.extra_member("otto", "Otto", "nell", 110).await?;
@@ -1594,7 +1595,76 @@ impl Seeder<'_> {
                 (jude, "Everyone will notice. That’s the point."),
             ],
         )
-        .await
+        .await?;
+        let rosa = self.extra_member("rosa", "Rosa", "jude", 90).await?;
+        let theo = self.extra_member("theo", "Theo", "rosa", 85).await?;
+        self.conversation_thread(
+            general,
+            "Card sleeves: worth it?",
+            45,
+            &[
+                (
+                    rosa,
+                    "Do you sleeve everything, or only the games you love?",
+                ),
+                (theo, "Only the ones with cards I shuffle every turn."),
+                (rosa, "So Dominion yes, Wingspan no?"),
+                (theo, "Exactly. Wingspan’s cards barely move."),
+                (rosa, "My Wingspan cards disagree. Coffee happened."),
+                (theo, "Then Jude was right about the tea."),
+                (rosa, "Don’t tell Jude. Ever."),
+                (theo, "Your secret is safe, mostly."),
+                (rosa, "I’m sleeving the lot this weekend."),
+                (theo, "Bring the spare sleeves on Tuesday."),
+            ],
+        )
+        .await?;
+        let uma = self.extra_member("uma", "Uma", "theo", 80).await?;
+        let vic = self.extra_member("vic", "Vic", "uma", 75).await?;
+        self.conversation_thread(
+            general,
+            "Best table for a small flat?",
+            40,
+            &[
+                (uma, "Any tips for a games table that fits a small flat?"),
+                (vic, "A folding topper on the dining table works for me."),
+                (uma, "Does it wobble?"),
+                (vic, "Only during Jenga, which is fair."),
+                (uma, "Where do you keep it?"),
+                (vic, "Behind the sofa, next to the shame pile."),
+                (uma, "Everyone has a shame pile."),
+                (vic, "Mine has its own shame pile now."),
+                (uma, "I’ll look for a topper, then."),
+                (vic, "Measure the doorway first. Trust me."),
+            ],
+        )
+        .await?;
+        let wes = self.extra_member("wes", "Wes", "vic", 70).await?;
+        let xan = self.extra_member("xan", "Xan", "wes", 65).await?;
+        self.conversation_thread(
+            general,
+            "Rainy day games for two?",
+            35,
+            &[
+                (wes, "What do you two play when it’s just the pair of you?"),
+                (xan, "Jaipur, every time. It’s quick and it bites."),
+                (wes, "We’ve worn out our copy of Patchwork."),
+                (xan, "Try 7 Wonders Duel next."),
+                (wes, "Is the teach long?"),
+                (xan, "Ten minutes, and one more game after that."),
+                (wes, "Sold. I’ll borrow it on Tuesday."),
+                (xan, "Bring it back with all the coins, please."),
+                (wes, "No promises about the coins."),
+                (xan, "Then I’m counting them in front of you."),
+            ],
+        )
+        .await?;
+        // A second admin, so that the browser tests don't all log in as Sam.
+        let yara = self.extra_member("yara", "Yara", "sam", 500).await?;
+        sqlx::query!("UPDATE users SET role = 'admin' WHERE id = $1", yara)
+            .execute(&mut *self.db)
+            .await?;
+        Ok(())
     }
 
     /// A thread in which two members talk, starting `days_ago`, one post

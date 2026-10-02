@@ -5,8 +5,8 @@ const setup = /setup\.spec\.ts$/;
 const islands = /islands\.spec\.ts$/;
 
 // Every page must work without JavaScript and down to 320px wide, in both
-// colour schemes (DESIGN.md §1, §5). Each project is one combination; one
-// more runs with JavaScript on, and with the islands.
+// colour schemes (DESIGN.md §1, §5). Each project is one combination; two
+// more run with JavaScript on, and with the islands, at both widths.
 const noJs = { javaScriptEnabled: false };
 const narrow = { viewport: { width: 320, height: 640 } };
 const wide = { viewport: { width: 1280, height: 900 } };
@@ -28,6 +28,7 @@ export default defineConfig({
     { name: "no-js-1280-light", testIgnore: [setup, islands], use: { ...noJs, ...wide, colorScheme: "light" } },
     { name: "no-js-1280-dark", testIgnore: [setup, islands], use: { ...noJs, ...wide, colorScheme: "dark" } },
     { name: "js-1280", testIgnore: [setup], use: { ...wide, colorScheme: "light" } },
+    { name: "js-320", testIgnore: [setup], use: { ...narrow, colorScheme: "dark" } },
     // Setting up a new forum, which happens once per forum: each of these
     // has an empty forum of its own (see server.mjs).
     {

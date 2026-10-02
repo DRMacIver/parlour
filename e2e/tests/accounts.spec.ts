@@ -4,8 +4,9 @@
 // (delivered over SMTP to the dev compose Mailpit).
 
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import pg from "pg";
-import { expectFits, logIn, member, otherMember, ownAddress } from "./helpers.js";
+import { admin, expectFits, logIn, member, otherMember, ownAddress } from "./helpers.js";
 
 const MAILPIT = process.env.E2E_MAILPIT_URL ?? "http://127.0.0.1:8025";
 
@@ -34,6 +35,12 @@ async function emailTo(page: Page, to: string, since: number, pattern: RegExp): 
 }
 
 const LOGIN_CODE = /^\s*(\d{6})\s*$/m;
+
+// A 2×2 PNG.
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFElEQVR4nGP4z8DAAMIM////ZwAAHu8E/KPItPcAAAAASUVORK5CYII=",
+  "base64",
+);
 const LINK = (path: string) => new RegExp(`http://\\S+/${path}/\\S+`);
 
 test.beforeEach(async ({ page }) => {
@@ -51,13 +58,33 @@ test("the login page renders and fits", async ({ page }) => {
 test("a member logs in and their pages fit the screen", async ({ page }) => {
   const username = member();
   await logIn(page, username);
-  for (const path of ["/", "/settings", "/invites", "/users/tree", `/u/${username}`]) {
+  for (const path of [
+    "/",
+    "/settings",
+    "/invites",
+    "/users/tree",
+    `/u/${username}`,
+    "/search?q=heat",
+    "/uploads/new",
+    "/terms",
+    "/privacy",
+  ]) {
     const response = await page.goto(path);
     expect(response?.status(), path).toBe(200);
     expect(response?.headers()["cache-control"], path).toBe("private, no-store");
     await expect(page.locator(".nav-user")).toHaveText(username);
     await expectFits(page);
   }
+  // Adding an image with the plain upload form gives the Markdown for it.
+  await page.goto("/uploads/new");
+  await page.locator("input[type=file][name=file]").setInputFiles({
+    name: "tiny.png",
+    mimeType: "image/png",
+    buffer: PNG,
+  });
+  await page.locator("form[action='/uploads/new'] button[type=submit]").click();
+  await expect(page.locator("#upload-markdown")).toHaveValue(/^!\[\]\(\/uploads\/[0-9a-f]{64}\.png\)$/);
+  await expectFits(page);
   // Members see the members-only section.
   await page.goto("/");
   await expect(page.locator(".category-list th", { hasText: "Members only" })).toBeVisible();
@@ -66,7 +93,7 @@ test("a member logs in and their pages fit the screen", async ({ page }) => {
 });
 
 test("an admin sees the site settings, members and reactions", async ({ page }) => {
-  await logIn(page, "sam");
+  await logIn(page, admin());
   await page.goto("/admin/settings");
   await expect(page.locator("#site_name")).toHaveValue("The Tuesday Club");
   await expectFits(page);
@@ -77,6 +104,9 @@ test("an admin sees the site settings, members and reactions", async ({ page }) 
   await page.locator(".subnav a[href='/admin/reactions']").click();
   await expect(page.locator("h1")).toHaveText("Reactions");
   await expect(page.locator(".reaction-types button[value=disable]").first()).toBeVisible();
+  await expectFits(page);
+  await page.goto("/admin/pages");
+  await expect(page.locator("h1")).toHaveText("Terms and privacy");
   await expectFits(page);
 });
 
@@ -167,6 +197,23 @@ test("inviting someone, who joins with the link", async ({ page, browser }) => {
   // The invite is used up.
   const again = await visitor.goto(link);
   expect(again?.status()).toBe(200); // logged in: "already a member"
+
+  // They download what the forum holds about them, and then delete their
+  // account.
+  await visitor.goto("/settings");
+  const [download] = await Promise.all([
+    visitor.waitForEvent("download"),
+    visitor.locator("form[action='/settings/export'] button[type=submit]").click(),
+  ]);
+  const data = JSON.parse(readFileSync((await download.path())!, "utf8"));
+  expect(data.account.username).toBe(username);
+  expect(data.account.invited_by).toBe(inviter);
+  await visitor.fill("#delete-confirm", username);
+  await visitor.locator("form[action='/settings/delete'] button[type=submit]").click();
+  await expect(visitor.locator("h1")).toHaveText("Your account has been deleted");
+  await expectFits(visitor);
+  await expect(visitor.locator(".topnav a[href='/login']")).toBeVisible();
+  expect((await visitor.goto(`/u/${username}`))?.status()).toBe(404);
   await context.close();
   const anonymous = await browser.newContext({ ...test.info().project.use });
   const stranger = await anonymous.newPage();

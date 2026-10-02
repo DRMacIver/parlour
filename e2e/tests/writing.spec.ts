@@ -4,7 +4,7 @@
 // category read. Every page must fit the screen and need no JavaScript.
 
 import { expect, test, type Page } from "@playwright/test";
-import { expectFits, logIn, member, ownAddress, preview, withJs } from "./helpers.js";
+import { expectFits, expectOnScreen, logIn, member, ownAddress, preview, withJs } from "./helpers.js";
 
 test.beforeEach(async ({ page }) => {
   await ownAddress(page);
@@ -109,6 +109,9 @@ test("a member quotes a post into a new thread", async ({ page }) => {
   const prefix = withJs() ? "#fork-" : "#";
   const form = withJs() ? page.locator("dialog[open]") : page.locator("main");
   await expectFits(page);
+  if (withJs()) {
+    await expectOnScreen(form);
+  }
   await expect(form.locator(".embed .post-body")).toContainText(sourceText);
   await page.fill(`${prefix}title`, title);
   await page.selectOption(`${prefix}category`, "board-games");

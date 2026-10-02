@@ -3,7 +3,7 @@
 // a member in it and giving it a category of its own.
 
 import { expect, test, type Browser, type Page } from "@playwright/test";
-import { expectFits, logIn, member, ownAddress } from "./helpers.js";
+import { admin, expectFits, logIn, member, ownAddress } from "./helpers.js";
 
 // The seeded Organisers group (see `ORGANISERS` in server/src/db/seed.rs).
 const ORGANISERS = ["sam", "ruth", "priya", "dev"];
@@ -54,7 +54,7 @@ test("an admin gives a new group a category of its own", async ({ page, browser 
   const project = test.info().project.name;
   const slug = `e2e-${project}`;
   const groupName = `Testers ${project}`;
-  await logIn(page, "sam");
+  await logIn(page, admin());
 
   // The admin pages for categories and groups fit the screen.
   for (const path of ["/admin/categories", "/admin/groups", "/admin/categories/new"]) {

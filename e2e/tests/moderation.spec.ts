@@ -6,6 +6,12 @@
 import { expect, test, type Browser } from "@playwright/test";
 import { expectFits, logIn, ownAddress } from "./helpers.js";
 
+// A 2×2 PNG.
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFElEQVR4nGP4z8DAAMIM////ZwAAHu8E/KPItPcAAAAASUVORK5CYII=",
+  "base64",
+);
+
 test.beforeEach(async ({ page }) => {
   await ownAddress(page);
 });
@@ -71,6 +77,32 @@ test("a member reports a post, and a moderator works through the queue", async (
   }
   await moderator.goto("/mod/users/hugo");
   await expect(moderator.getByText("Talk to him before anything else")).toBeVisible();
+
+  // Finding an image by its address, to see where it is shown or remove
+  // it. (Removing it is tested in the server's tests: every project here
+  // uploads the same image.)
+  await moderator.goto("/mod/uploads");
+  await expectFits(moderator);
+  await moderator.fill("#image", "not an address");
+  await moderator.locator("form[action='/mod/uploads'] button[type=submit]").click();
+  await expect(moderator.locator(".notice-error")).toBeVisible();
+  await expectFits(moderator);
+  await moderator.goto("/uploads/new");
+  await moderator.locator("input[type=file][name=file]").setInputFiles({
+    name: "tiny.png",
+    mimeType: "image/png",
+    buffer: PNG,
+  });
+  await moderator.locator("form[action='/uploads/new'] button[type=submit]").click();
+  const image = (await moderator.locator("#upload-markdown").inputValue()).slice(4, -1);
+  await moderator.goto("/mod/uploads");
+  await moderator.fill("#image", image);
+  await moderator.locator("form[action='/mod/uploads'] button[type=submit]").click();
+  await expect(moderator).toHaveURL(/\/mod\/uploads\/[0-9a-f]{64}\.png$/);
+  await expect(moderator.locator("h1")).toHaveText("An image");
+  await expect(moderator.locator(".mod-image img")).toBeVisible();
+  await expect(moderator.locator("button", { hasText: "Remove the image" })).toBeVisible();
+  await expectFits(moderator);
 
   // The pages for acting on a post, its thread and a held post fit too.
   await moderator.goto(threadUrl);

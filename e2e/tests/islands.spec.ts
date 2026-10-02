@@ -1,12 +1,12 @@
-// The JavaScript islands (DESIGN.md §5), which only the project with
-// JavaScript runs: reacting without a reload, the composer's preview,
-// images and quoting a selection, the live "N new posts" bar, and the
-// notification badge and menu kept up to date as things happen. The
-// plain forms each island replaces are tested by the other specs, with
-// and without JavaScript.
+// The JavaScript islands (DESIGN.md §5), which only the projects with
+// JavaScript run, at 1280px and 320px: reacting without a reload, the
+// composer's preview, images and quoting a selection, the live "N new
+// posts" bar, and the notification badge and menu kept up to date as
+// things happen. Each must fit the screen. The plain forms each island
+// replaces are tested by the other specs, with and without JavaScript.
 
 import { expect, test, type Browser, type Page } from "@playwright/test";
-import { expectFits, logIn, ownAddress } from "./helpers.js";
+import { expectFits, expectOnScreen, logIn, ownAddress } from "./helpers.js";
 
 // A 2×2 PNG.
 const PNG = Buffer.from(
@@ -52,10 +52,19 @@ async function stillMarked(page: Page): Promise<boolean> {
   return page.evaluate(() => (window as unknown as { marked?: boolean }).marked === true);
 }
 
-// Members no other spec logs in as, since logins are rate limited per
-// account.
-const AUTHOR = "iris";
-const OTHER = "jude";
+// Members no other spec or project logs in as, since logins are rate
+// limited per account, and the notification tests count what each gets.
+const ISLAND_MEMBERS: Record<string, [string, string]> = {
+  "js-1280": ["iris", "jude"],
+  "js-320": ["uma", "vic"],
+};
+
+let AUTHOR: string;
+let OTHER: string;
+
+test.beforeEach(() => {
+  [AUTHOR, OTHER] = ISLAND_MEMBERS[test.info().project.name] ?? ["iris", "jude"];
+});
 
 test("islands load for members, and reactions change without a reload", async ({ page }) => {
   await logIn(page, AUTHOR);
@@ -85,9 +94,12 @@ test("the composer previews in place, adds images and quotes a selection", async
   await page.fill("#title", title);
   await page.fill("#body", "A **bold** start.");
   await mark(page);
+  await expectFits(page);
+  await expectOnScreen(page.locator(".composer-island").first());
   await page.locator(".composer-tab", { hasText: "Preview" }).click();
   await expect(page.locator(".composer-preview strong")).toHaveText("bold");
   expect(await stillMarked(page)).toBe(true);
+  await expectFits(page);
   await page.locator(".composer-tab", { hasText: "Write" }).click();
 
   // An image chosen with the button goes in as Markdown.
@@ -155,6 +167,7 @@ test("new posts and notifications arrive while the page is open", async ({ page,
   // The author's open page says so, without reloading.
   const bar = page.locator(".new-posts-bar");
   await expect(bar).toContainText("1 new post");
+  await expectOnScreen(bar);
   // And the notification badge goes up, once the notification is made.
   await expect.poll(() => badge(page), { timeout: 15_000 }).toBeGreaterThan(unread);
   expect(await stillMarked(page)).toBe(true);
@@ -164,6 +177,7 @@ test("new posts and notifications arrive while the page is open", async ({ page,
   const menu = page.locator(".notifications-menu");
   await expect(menu).toContainText(title);
   await expectFits(page);
+  await expectOnScreen(menu);
   await menu.locator("button", { hasText: "Mark all read" }).click();
   await expect(page.locator(".topnav [data-count=notifications]")).toHaveCount(0);
   await page.keyboard.press("Escape");

@@ -1,6 +1,6 @@
 // Helpers shared by the browser tests.
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 export const PASSWORD = "tuesday-club";
 
@@ -12,6 +12,7 @@ const MEMBERS: Record<string, string> = {
   "no-js-1280-light": "lin",
   "no-js-1280-dark": "felix",
   "js-1280": "ana",
+  "js-320": "rosa",
 };
 
 // Tests that run at the same time as those above, with accounts of their own
@@ -22,7 +23,23 @@ const OTHER_MEMBERS: Record<string, string> = {
   "no-js-1280-light": "ollie",
   "no-js-1280-dark": "jonah",
   "js-1280": "tomasz",
+  "js-320": "theo",
 };
+
+// Logins and new conversations are rate limited per account, so the
+// projects share out the seeded admins and the members who message each
+// other.
+const SECOND_HALF = new Set(["no-js-320-dark", "no-js-1280-dark", "js-320"]);
+
+/** An admin to log in as. */
+export function admin(): string {
+  return SECOND_HALF.has(test.info().project.name) ? "yara" : "sam";
+}
+
+/** Two members to message each other: the sender and the recipient. */
+export function correspondents(): [string, string] {
+  return SECOND_HALF.has(test.info().project.name) ? ["wes", "xan"] : ["hugo", "bea"];
+}
 
 export function member(): string {
   return MEMBERS[test.info().project.name] ?? "priya";
@@ -65,6 +82,20 @@ export async function expectFits(page: Page) {
       expect(script.island || script.props, "only island scripts").toBe(true);
     }
   }
+}
+
+/**
+ * The element is all on screen: for what sits above the page, such as
+ * dialogs, menus and bars, which the page's own width doesn't account for.
+ */
+export async function expectOnScreen(locator: Locator) {
+  const box = (await locator.boundingBox())!;
+  const { width, height } = locator.page().viewportSize()!;
+  expect(box.x, "starts off the left of the screen").toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width, "goes off the right of the screen").toBeLessThanOrEqual(width + 0.5);
+  expect(box.width, "wider than the screen").toBeLessThanOrEqual(width);
+  expect(box.y, "starts above the screen").toBeGreaterThanOrEqual(0);
+  expect(box.height, "taller than the screen").toBeLessThanOrEqual(height);
 }
 
 /** Whether this test runs with JavaScript (and so with the islands). */

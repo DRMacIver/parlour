@@ -5,7 +5,7 @@
 // page must fit the screen and need no JavaScript.
 
 import { expect, test, type Page } from "@playwright/test";
-import { expectFits, logIn, ownAddress, preview } from "./helpers.js";
+import { correspondents, expectFits, logIn, ownAddress, preview } from "./helpers.js";
 
 test.beforeEach(async ({ page }) => {
   await ownAddress(page);
@@ -20,8 +20,7 @@ test("members message each other and are notified", async ({ page }) => {
   // Accounts no other test logs in with: logins are rate limited per
   // account, and the other tests already log in as member() and
   // otherMember() often. Each project's conversation has its own title.
-  const sender = "hugo";
-  const recipient = "bea";
+  const [sender, recipient] = correspondents();
   const title = `Brass on Tuesday (${test.info().project.name} ${Date.now()})`;
 
   await logIn(page, sender);

@@ -37,6 +37,9 @@ async function discover(page: Page): Promise<Record<string, string>> {
     "long thread": longThread,
     "long thread, last page": lastPage,
     "quote-fork": fork,
+    search: "/search?q=heat",
+    terms: "/terms",
+    privacy: "/privacy",
   };
 }
 
@@ -82,6 +85,9 @@ const names = [
   "long thread",
   "long thread, last page",
   "quote-fork",
+  "search",
+  "terms",
+  "privacy",
 ];
 
 for (const name of names) {
