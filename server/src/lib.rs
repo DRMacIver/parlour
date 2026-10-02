@@ -56,6 +56,7 @@ use crate::jobs::Jobs;
 use crate::live::{Event, Live};
 use crate::mail::Mailer;
 use crate::ratelimit::RateLimiter;
+use crate::viewer::Viewer;
 
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
@@ -152,12 +153,19 @@ impl AppState {
         let tags = changes::tags_for(&self.db, change).await?;
         self.cache.invalidate(&tags);
         if let Change::PostCreated { post_id } = change
+            && self.live.has_listeners()
             && let Some((thread_id, seq)) = changes::post_seq(&self.db, post_id).await?
         {
+            // Whether visitors may read it is checked once here, for every
+            // visitor's stream at once.
+            let public = content::thread_target(&self.db, &Viewer::Anonymous, thread_id)
+                .await?
+                .is_some();
             self.live.publish(Event::Post {
                 thread_id,
                 post_id,
                 seq,
+                public,
             });
         }
         Ok(())

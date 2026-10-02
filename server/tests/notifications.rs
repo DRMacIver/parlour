@@ -822,9 +822,23 @@ struct Stream {
 
 impl Stream {
     async fn open(f: &Forum, path: &str, cookie: Option<&str>) -> Result<Stream, StatusCode> {
+        Stream::open_from(f, path, cookie, None).await
+    }
+
+    /// Opens a stream from the client address `ip` (with
+    /// [`Forum::trusting_proxy`]).
+    async fn open_from(
+        f: &Forum,
+        path: &str,
+        cookie: Option<&str>,
+        ip: Option<&str>,
+    ) -> Result<Stream, StatusCode> {
         let mut request = Request::get(path);
         if let Some(cookie) = cookie {
             request = request.header(header::COOKIE, cookie);
+        }
+        if let Some(ip) = ip {
+            request = request.header("x-forwarded-for", ip);
         }
         let response = app(f.state.clone())
             .oneshot(request.body(Body::empty()).unwrap())
@@ -985,18 +999,147 @@ async fn the_badge_count_streams(pool: PgPool) {
         last = event;
     }
     assert_eq!(last, r#"{"notifications":2,"messages":1}"#);
-    // Other members' changes aren't sent to Ruth.
-    let (_, maya_first) = new_thread(&s.f, &s.maya_cookie, "games", "Mine", "Hi").await;
-    reply(&s.f, &s.jonah_cookie, thread, "x", None).await;
-    let _ = maya_first;
+    // Other members' changes aren't sent to Ruth: Jonah replying to Maya
+    // changes only Maya's counts.
+    let (mine, maya_first) = new_thread(&s.f, &s.maya_cookie, "games", "Mine", "Hi").await;
+    reply(&s.f, &s.jonah_cookie, mine, "Hi Maya", Some(maya_first)).await;
     s.f.run_jobs().await;
-    let mut seen = Vec::new();
+    assert_eq!(
+        count(
+            &s.f,
+            &format!(
+                "SELECT count(*) FROM notifications WHERE user_id = {}",
+                s.maya
+            )
+        )
+        .await,
+        1
+    );
+    assert_eq!(stream.next().await, None);
+}
+
+/// Regression: live streams carried on after their session ended (logging
+/// out, or "log out everywhere else" after a device was lost).
+#[sqlx::test]
+async fn live_streams_end_with_their_session(pool: PgPool) {
+    let s = setup(pool).await;
+    let (thread, _) = new_thread(&s.f, &s.ruth_cookie, "games", "Brass", "Hi").await;
+    let mut badge = Stream::open(&s.f, "/events/notifications", Some(&s.maya_cookie))
+        .await
+        .unwrap();
+    assert_eq!(
+        badge.next().await.unwrap(),
+        r#"{"notifications":0,"messages":0}"#
+    );
+    let mut posts = Stream::open(&s.f, &format!("/events/t/{thread}"), Some(&s.maya_cookie))
+        .await
+        .unwrap();
+    let response = s.f.submit("/logout", &[], Some(&s.maya_cookie)).await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+    s.f.submit(
+        "/messages/new",
+        &[("to", "maya"), ("body", "Psst")],
+        Some(&s.jonah_cookie),
+    )
+    .await;
+    reply(&s.f, &s.jonah_cookie, thread, "Hello", None).await;
+    s.f.run_jobs().await;
+    assert_eq!(badge.next().await, None);
+    assert_eq!(posts.next().await, None);
+}
+
+/// Regression: the badge stream counted with the groups the member had
+/// when it opened.
+#[sqlx::test]
+async fn the_badge_count_follows_group_changes(pool: PgPool) {
+    let s = setup(pool).await;
+    let council_group = count(&s.f, "SELECT id FROM groups WHERE slug = 'council'").await;
+    s.f.join_group(council_group, s.jonah).await;
+    let (agenda, first) = new_thread(&s.f, &s.ruth_cookie, "council", "Agenda", "Hi").await;
+    reply(&s.f, &s.jonah_cookie, agenda, "Item one", Some(first)).await;
+    s.f.run_jobs().await;
+    let mut stream = Stream::open(&s.f, "/events/notifications", Some(&s.ruth_cookie))
+        .await
+        .unwrap();
+    assert_eq!(
+        stream.next().await.unwrap(),
+        r#"{"notifications":1,"messages":0}"#
+    );
+    // Ruth leaves the Council; the notification about its category goes
+    // with it, on the next count she is sent.
+    s.f.exec(&format!(
+        "DELETE FROM group_members WHERE group_id = {council_group} AND user_id = {}",
+        s.ruth
+    ))
+    .await;
+    let (games, games_first) = new_thread(&s.f, &s.ruth_cookie, "games", "Brass", "Hi").await;
+    reply(&s.f, &s.maya_cookie, games, "Hello", Some(games_first)).await;
+    s.f.run_jobs().await;
+    let mut last = String::new();
     while let Some(event) = stream.next().await {
-        seen.push(event);
+        last = event;
     }
-    assert!(!seen.is_empty());
+    assert_eq!(last, r#"{"notifications":1,"messages":0}"#);
+}
+
+/// Live streams are limited per address and per member, so they can't be
+/// opened without end.
+#[sqlx::test]
+async fn live_streams_are_limited(pool: PgPool) {
+    let s = setup(pool).await;
+    let f = Forum {
+        db: s.f.db.clone(),
+        state: s.f.state.clone(),
+    }
+    .trusting_proxy();
+    let (thread, _) = new_thread(&f, &s.ruth_cookie, "games", "Brass", "Hi").await;
+    let path = format!("/events/t/{thread}");
+    let mut open = Vec::new();
+    for _ in 0..parlour::live::MAX_STREAMS_PER_ADDRESS {
+        open.push(
+            Stream::open_from(&f, &path, None, Some("203.0.113.1"))
+                .await
+                .unwrap(),
+        );
+    }
+    assert_eq!(
+        Stream::open_from(&f, &path, None, Some("203.0.113.1"))
+            .await
+            .err(),
+        Some(StatusCode::TOO_MANY_REQUESTS)
+    );
+    // Another address may still open one.
+    let other = Stream::open_from(&f, &path, None, Some("203.0.113.2"))
+        .await
+        .unwrap();
+    // Closing one makes room again.
+    open.pop();
+    open.push(
+        Stream::open_from(&f, &path, None, Some("203.0.113.1"))
+            .await
+            .unwrap(),
+    );
+    drop(open);
+    drop(other);
+    // A member is limited wherever they connect from.
+    let mut mine = Vec::new();
+    for n in 0..parlour::live::MAX_STREAMS_PER_MEMBER {
+        let ip = format!("198.51.100.{n}");
+        mine.push(
+            Stream::open_from(&f, "/events/notifications", Some(&s.ruth_cookie), Some(&ip))
+                .await
+                .unwrap(),
+        );
+    }
+    assert_eq!(
+        Stream::open_from(&f, &path, Some(&s.ruth_cookie), Some("192.0.2.1"))
+            .await
+            .err(),
+        Some(StatusCode::TOO_MANY_REQUESTS)
+    );
     assert!(
-        seen.iter().all(|e| e.starts_with(r#"{"notifications":3"#)),
-        "{seen:?}"
+        Stream::open_from(&f, &path, Some(&s.jonah_cookie), Some("192.0.2.1"))
+            .await
+            .is_ok()
     );
 }

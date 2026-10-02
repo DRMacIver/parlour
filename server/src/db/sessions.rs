@@ -115,6 +115,28 @@ pub async fn lookup(db: &Db, token: &str) -> sqlx::Result<Option<UserCtx>> {
     Ok(Some(user))
 }
 
+/// The user a session token belongs to, as [`lookup`] finds them, but
+/// without counting as a use of the session: for checking again, during a
+/// long-lived response such as a live stream, that the session hasn't
+/// ended and what its owner may see now.
+pub async fn still_current(db: &Db, token: &str) -> sqlx::Result<Option<UserCtx>> {
+    if !tokens::plausible(token) {
+        return Ok(None);
+    }
+    let Some(user_id) = sqlx::query_scalar!(
+        "SELECT user_id FROM sessions
+         WHERE token_hash = $1 AND last_seen_at > now() - make_interval(days => $2)",
+        tokens::hash(token),
+        IDLE_DAYS,
+    )
+    .fetch_optional(db.pool())
+    .await?
+    else {
+        return Ok(None);
+    };
+    user_ctx(db, user_id).await
+}
+
 /// Everything about a member that decides what they may see and do, as
 /// it is now: their role, and their groups and the categories those groups
 /// may read. `None` if the account doesn't exist or was deleted.
