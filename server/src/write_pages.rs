@@ -304,7 +304,7 @@ enum Typed {
     /// Nothing: the request wasn't a form with text.
     Nothing,
     /// Text for a form that can be shown again.
-    Form(Compose, Draft),
+    Form(Box<Compose>, Draft),
     /// Text for a form that can't be shown again, for example because the
     /// thread has been locked since.
     Text(Draft),
@@ -333,7 +333,7 @@ async fn refused(
 ) -> Result<Response, AppError> {
     let compose = match typed {
         Typed::Nothing => None,
-        Typed::Form(compose, draft) => Some((compose, draft)),
+        Typed::Form(compose, draft) => Some((*compose, draft)),
         Typed::Text(draft) if !draft.body.trim().is_empty() || !draft.title.trim().is_empty() => {
             let (status, title, problems) = match refusal {
                 Refused::LogIn => return Ok(web::login_first(back_to)),
@@ -494,7 +494,7 @@ pub async fn new_thread(
         Ok(done) => posted(&state, &viewer, done).await,
         Err(refusal) => {
             let compose = match new_thread_target(&state, &viewer, &slug).await? {
-                Ok(category) => Typed::Form(Compose::NewThread(category), draft),
+                Ok(category) => Typed::Form(Box::new(Compose::NewThread(category)), draft),
                 Err(_) => Typed::Text(draft),
             };
             refused(&state, &viewer, refusal, &back, compose).await
@@ -636,7 +636,7 @@ pub async fn reply(
         Ok(done) => posted(&state, &viewer, done).await,
         Err(refusal) => {
             let compose = match reply_target(&state, &viewer, thread_id).await? {
-                Ok(thread) => Typed::Form(Compose::Reply(thread), draft),
+                Ok(thread) => Typed::Form(Box::new(Compose::Reply(thread)), draft),
                 Err(other) => {
                     return refused(&state, &viewer, other, &back, Typed::Text(draft)).await;
                 }
@@ -742,7 +742,7 @@ pub async fn edit(
         Ok(done) => posted(&state, &viewer, done).await,
         Err(refusal) => {
             let compose = match edit_target(&state, &viewer, post_id).await? {
-                Ok(post) => Typed::Form(Compose::Edit(post), draft),
+                Ok(post) => Typed::Form(Box::new(Compose::Edit(post)), draft),
                 Err(_) => Typed::Text(draft),
             };
             refused(&state, &viewer, refusal, &back, compose).await
@@ -1087,7 +1087,7 @@ pub async fn fork(
         Err(refusal) => {
             let compose = match fork_target(&state, &viewer, post_id).await? {
                 Some((source, destinations)) => {
-                    Typed::Form(Compose::Fork(source, destinations), draft)
+                    Typed::Form(Box::new(Compose::Fork(source, destinations)), draft)
                 }
                 None => Typed::Text(draft),
             };
