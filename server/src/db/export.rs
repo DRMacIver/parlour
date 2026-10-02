@@ -1,11 +1,19 @@
 //! A member's own data, for them to download (DESIGN.md §2): their
 //! account and profile, everything they wrote (with earlier versions),
-//! their reactions, conversations, invites, groups, blocks, watches,
-//! uploads, reports, sessions and the addresses recorded for them.
+//! their posts held for approval, reactions, conversations,
+//! notifications, invites, groups, blocks, watches, uploads, reports,
+//! sessions and the addresses recorded for them.
 //!
 //! Other people's words are not included, not even in conversations the
 //! member is in. The title of a thread is included only if the member may
-//! read the thread now, judged by the shared visibility condition.
+//! read the thread now, judged by the shared visibility condition. A
+//! conversation lists the people in it now, or, if the member has left
+//! it, the people in it when they left: who joined later is none of their
+//! business.
+//!
+//! Posts held for approval are included whatever became of them, and so
+//! are the member's notifications (without who caused them, which may be
+//! in a thread the member can no longer read).
 
 use serde_json::{Value, json};
 
@@ -63,11 +71,37 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
         r#"SELECT t.id, t.title, me.joined_at, me.left_at,
                   array(SELECT u.username::text FROM private_thread_participants o
                         JOIN users u ON u.id = o.user_id
-                        WHERE o.thread_id = t.id AND o.left_at IS NULL
+                        WHERE o.thread_id = t.id
+                          AND CASE WHEN me.left_at IS NULL THEN o.left_at IS NULL
+                                   ELSE o.joined_at <= me.left_at
+                                        AND (o.left_at IS NULL OR o.left_at >= me.left_at) END
                         ORDER BY o.joined_at, u.id) AS "people!"
            FROM private_thread_participants me JOIN threads t ON t.id = me.thread_id
            WHERE me.user_id = $1
            ORDER BY me.joined_at, t.id"#,
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let held = sqlx::query!(
+        r#"SELECT h.created_at, h.title, h.body_md, h.status, h.decided_at, h.post_id, h.thread_id,
+                  CASE WHEN t.deleted_at IS NULL
+                        AND (thread_readable(t.visibility, t.category_id, $2, $3)
+                             OR dm_readable(t.id, t.visibility, $4))
+                       THEN t.title END AS thread_title
+           FROM held_posts h LEFT JOIN threads t ON t.id = h.thread_id
+           WHERE h.author_id = $1
+           ORDER BY h.created_at, h.id"#,
+        user_id,
+        &filter.visibilities,
+        &filter.group_category_ids,
+        filter.dm_viewer,
+    )
+    .fetch_all(pool)
+    .await?;
+    let notifications = sqlx::query!(
+        "SELECT kind, thread_id, post_id, message, created_at, read_at, emailed_at
+         FROM notifications WHERE user_id = $1 ORDER BY created_at, id",
         user_id
     )
     .fetch_all(pool)
@@ -181,10 +215,29 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
             "created_at": r.created_at,
             "markdown": r.body_md,
         })).collect::<Vec<_>>(),
+        "posts_held_for_approval": held.iter().map(|h| json!({
+            "created_at": h.created_at,
+            "title": h.title,
+            "thread_id": h.thread_id,
+            "thread_title": h.thread_title,
+            "markdown": h.body_md,
+            "status": h.status,
+            "decided_at": h.decided_at,
+            "became_post_id": h.post_id,
+        })).collect::<Vec<_>>(),
+        "notifications": notifications.iter().map(|n| json!({
+            "kind": n.kind,
+            "thread_id": n.thread_id,
+            "post_id": n.post_id,
+            "message": n.message,
+            "created_at": n.created_at,
+            "read_at": n.read_at,
+            "emailed_at": n.emailed_at,
+        })).collect::<Vec<_>>(),
         "conversations": conversations.iter().map(|c| json!({
             "id": c.id,
             "title": c.title,
-            "people_now": c.people,
+            "people": c.people,
             "joined_at": c.joined_at,
             "left_at": c.left_at,
         })).collect::<Vec<_>>(),

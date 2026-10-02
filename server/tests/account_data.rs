@@ -429,3 +429,123 @@ async fn deletion_leaves_nothing_identifying(pool: PgPool) {
         }
     }
 }
+
+async fn export_of(f: &Forum, cookie: &str) -> Value {
+    let response = f.submit("/settings/export", &[], Some(cookie)).await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.body);
+    serde_json::from_str(&response.body).unwrap()
+}
+
+/// The usernames listed for a conversation in an export, sorted.
+fn people(conversation: &Value) -> Vec<&str> {
+    let mut people: Vec<&str> = conversation["people"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap())
+        .collect();
+    people.sort();
+    people
+}
+
+/// A conversation the member has left is shown with the people in it when
+/// they left: who joined later is none of their business, as they can't
+/// read it any more.
+#[sqlx::test]
+async fn the_export_shows_left_conversations_as_they_were(pool: PgPool) {
+    let s = setup(pool).await;
+    let priya = s.f.member("priya", "user", None).await;
+    let maya = s.f.member("maya", "user", None).await;
+    let dev = s.f.member("dev", "user", None).await;
+    let conversation = store::create_conversation(
+        &s.f.db,
+        &NewConversation {
+            author_id: priya,
+            title: "Plans".into(),
+            recipient_ids: vec![s.ruth, dev],
+            body_md: "Hello.".into(),
+            created_at: None,
+        },
+    )
+    .await
+    .unwrap();
+    store::leave_conversation(&s.f.db, conversation.thread_id, s.ruth)
+        .await
+        .unwrap();
+    store::add_participant(&s.f.db, conversation.thread_id, maya, priya)
+        .await
+        .unwrap();
+    let data = export_of(&s.f, &s.ruth_cookie).await;
+    let conversations = data["conversations"].as_array().unwrap();
+    assert_eq!(conversations.len(), 1);
+    assert_eq!(people(&conversations[0]), vec!["dev", "priya", "ruth"]);
+    assert!(!serde_json::to_string(&data).unwrap().contains("maya"));
+    // While she's in one, it shows who's in it now.
+    store::add_participant(&s.f.db, conversation.thread_id, s.ruth, priya)
+        .await
+        .unwrap();
+    let data = export_of(&s.f, &s.ruth_cookie).await;
+    assert_eq!(
+        people(&data["conversations"][0]),
+        vec!["dev", "maya", "priya", "ruth"]
+    );
+}
+
+/// Posts waiting for approval, and rejected ones, are the member's words
+/// too, and their notifications are theirs.
+#[sqlx::test]
+async fn the_export_includes_held_posts_and_notifications(pool: PgPool) {
+    let s = setup(pool).await;
+    let thread =
+        s.f.thread(s.public, s.jonah, "Heat", "Jonah's opening.")
+            .await;
+    parlour::mod_records::hold(
+        &s.f.db,
+        s.ruth,
+        &parlour::mod_records::HeldPlace::Reply {
+            thread_id: thread.thread_id,
+            reply_to_post_id: None,
+        },
+        "Ruth's held reply.",
+    )
+    .await
+    .unwrap();
+    let rejected = parlour::mod_records::hold(
+        &s.f.db,
+        s.ruth,
+        &parlour::mod_records::HeldPlace::Thread {
+            category_id: s.public,
+            title: "Ruth's held title".into(),
+            forked_from_post_id: None,
+        },
+        "Ruth's rejected thread.",
+    )
+    .await
+    .unwrap();
+    s.f.exec(&format!(
+        "UPDATE held_posts SET status = 'rejected', decided_at = now() WHERE id = {rejected}"
+    ))
+    .await;
+    let reply = s.f.post(thread.thread_id, s.jonah, "@ruth hello").await;
+    s.f.exec(&format!(
+        "INSERT INTO notifications (user_id, kind, actor_id, thread_id, post_id)
+         VALUES ({}, 'mention', {}, {}, {reply})",
+        s.ruth, s.jonah, thread.thread_id
+    ))
+    .await;
+    let data = export_of(&s.f, &s.ruth_cookie).await;
+    let held = data["posts_held_for_approval"].as_array().unwrap();
+    assert_eq!(held.len(), 2);
+    assert_eq!(held[0]["markdown"], "Ruth's held reply.");
+    assert_eq!(held[0]["status"], "held");
+    assert_eq!(held[0]["thread_title"], "Heat");
+    assert_eq!(held[1]["markdown"], "Ruth's rejected thread.");
+    assert_eq!(held[1]["title"], "Ruth's held title");
+    assert_eq!(held[1]["status"], "rejected");
+    let notifications = data["notifications"].as_array().unwrap();
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0]["kind"], "mention");
+    assert_eq!(notifications[0]["post_id"], reply);
+    // Other people's words still aren't included.
+    assert!(!serde_json::to_string(&data).unwrap().contains("hello"));
+}
