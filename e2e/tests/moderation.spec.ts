@@ -72,6 +72,36 @@ test("a member reports a post, and a moderator works through the queue", async (
   await moderator.goto("/mod/users/hugo");
   await expect(moderator.getByText("Talk to him before anything else")).toBeVisible();
 
+  // The pages for acting on a post, its thread and a held post fit too.
+  await moderator.goto(threadUrl);
+  await moderator.locator("article.post").first().locator(".post-actions a", { hasText: "moderate" }).click();
+  await expect(moderator).toHaveURL(/\/mod\/p\/\d+$/);
+  await expectFits(moderator);
+  await moderator.locator("a", { hasText: "Moderate the thread" }).click();
+  await expect(moderator).toHaveURL(/\/mod\/t\/\d+$/);
+  await expectFits(moderator);
+  await moderator.goto("/mod/queue");
+  await moderator.locator(".queue-item", { hasText: "Held for approval" }).first().locator("a", { hasText: "Read it all" }).click();
+  await expect(moderator).toHaveURL(/\/held\/\d+$/);
+  await expectFits(moderator);
+  // Deleting a spammer asks first, and can be called off.
+  await moderator.goto("/mod/queue");
+  await moderator.locator(".queue-item", { hasText: "Report on a message" }).locator("button", { hasText: "Delete as spammer" }).click();
+  await expect(moderator.locator("h1")).toHaveText("Delete hugo as a spammer?");
+  await expectFits(moderator);
+  await moderator.locator("a", { hasText: "Keep them" }).click();
+  await expect(moderator).toHaveURL(/\/mod\/queue$/);
+  // An earlier version of an edited post, with the form to redact it.
+  await moderator.goto("/c/board-games");
+  await moderator.locator("a", { hasText: "Do solo modes count" }).first().click();
+  const history = await moderator.locator("a.edited").first().getAttribute("href");
+  await moderator.goto(`${history}?v=1`);
+  await expect(moderator.locator("#redact-reason")).toBeVisible();
+  await expectFits(moderator);
+  // The form for reporting a member.
+  await reporter.goto("/u/hugo/report");
+  await expectFits(reporter);
+
   // Visitors see a tombstone; the moderator still sees it, marked.
   const visitor = await browser.newContext({ ...test.info().project.use });
   const anonymous = await visitor.newPage();
