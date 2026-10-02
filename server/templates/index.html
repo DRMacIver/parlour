@@ -26,7 +26,7 @@
           <td class="main-col">
             <div class="row-title">
               <a href="/c/{{ summary.category.slug }}">{{ summary.category.name }}</a>
-              {% if let Some(access) = crate::format::access_label(summary.read_level, summary.group_names) %}<span class="flag flag-access">{{ access }}</span>{% endif %}
+              {% call m::access_flag(summary.read_level, summary.group_names) %}{% endcall %}
             </div>
             {% if !summary.description.is_empty() %}<div class="row-meta">{{ summary.description }}</div>{% endif %}
           </td>

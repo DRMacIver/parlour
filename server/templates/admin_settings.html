@@ -30,7 +30,7 @@
     <fieldset class="field">
       <legend>Who can invite people</legend>
       <label class="choice"><input type="radio" name="invite_who" value="everyone"{% if invite_who == "everyone" %} checked{% endif %}> Every member</label>
-      <label class="choice"><input type="radio" name="invite_who" value="members_older_than"{% if invite_who == "members_older_than" %} checked{% endif %}> Members who joined at least <input class="input-short" name="invite_days" type="number" min="0" max="3650" aria-label="Number of days" value="{{ invite_days }}"> days ago</label>
+      <label class="choice choice-wrap"><input type="radio" name="invite_who" value="members_older_than"{% if invite_who == "members_older_than" %} checked{% endif %}> Members who joined at least <input class="input-short" name="invite_days" type="number" min="0" max="3650" aria-label="Number of days" value="{{ invite_days }}"> days ago</label>
       <label class="choice"><input type="radio" name="invite_who" value="staff"{% if invite_who == "staff" %} checked{% endif %}> Only moderators and admins</label>
       <span class="field-hint">Staff can always invite people. Members must have confirmed their email address.</span>
     </fieldset>

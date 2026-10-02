@@ -500,7 +500,10 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
 .code-input { font-family: var(--font-mono); letter-spacing: 0.3em; max-width: 12em; }
 .link-box { font-family: var(--font-mono); font-size: 14px; }
 
-.choice { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-variant: normal; letter-spacing: 0; font-size: 17px; }
+/* The control stays beside its text, which wraps under itself. A choice
+   with a field inside it wraps as a whole instead. */
+.choice { display: flex; align-items: baseline; gap: 6px; font-variant: normal; letter-spacing: 0; font-size: 17px; }
+.choice-wrap { flex-wrap: wrap; }
 .field .choice { font-variant: normal; letter-spacing: 0; font-size: 17px; }
 
 .form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
@@ -584,6 +587,7 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
   vertical-align: 0.15em;
 }
 .page-title .flag-access { font-size: 15px; vertical-align: middle; }
+.flag-icon { margin-right: 4px; vertical-align: -1px; }
 
 /* The admin pages for categories and groups. */
 .admin-section-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }

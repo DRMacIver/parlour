@@ -128,9 +128,20 @@ async fn only_group_members_and_staff_read_a_group_category(pool: PgPool) {
 async fn the_index_says_who_can_read_each_category(pool: PgPool) {
     let club = club(pool).await;
     let index = club.f.page_as("/", &club.ruth_cookie).await;
-    assert!(index.contains(r#"<span class="flag flag-access">Members only</span>"#));
-    assert!(index.contains(r#"<span class="flag flag-access">Organisers group</span>"#));
-    assert_eq!(index.matches("flag-access").count(), 2, "{index}");
+    // As in the mockup, a padlock marks members-only categories and a
+    // pair of people group ones (Main.dc.html).
+    let flags = access_flags(&index);
+    assert_eq!(flags.len(), 2, "{index}");
+    assert!(
+        flags[0].ends_with(">Members only") && flags[0].contains(LOCK),
+        "{}",
+        flags[0]
+    );
+    assert!(
+        flags[1].ends_with(">Organisers group") && flags[1].contains(PEOPLE),
+        "{}",
+        flags[1]
+    );
     let category = club.f.page_as("/c/planning", &club.ruth_cookie).await;
     assert!(category.contains("Organisers group"));
     let lounge = club.f.page_as("/c/lounge", &club.ruth_cookie).await;
@@ -138,7 +149,24 @@ async fn the_index_says_who_can_read_each_category(pool: PgPool) {
     // Staff see group categories that no group may read, as staff only.
     club.f.restrict(club.planning, &[], None).await;
     let index = club.f.page_as("/", &club.staff_cookie).await;
-    assert!(index.contains(r#"<span class="flag flag-access">Staff only</span>"#));
+    assert!(
+        access_flags(&index)
+            .iter()
+            .any(|flag| flag.ends_with(">Staff only") && flag.contains(LOCK))
+    );
+}
+
+/// Part of the padlock icon.
+const LOCK: &str = "M8 11V7a4 4 0 0 1 8 0v4";
+/// Part of the people icon.
+const PEOPLE: &str = "M2.5 20a6.5 6.5 0 0 1 13 0";
+
+/// The contents of each access label on a page, in order.
+fn access_flags(page: &str) -> Vec<&str> {
+    page.split(r#"<span class="flag flag-access">"#)
+        .skip(1)
+        .map(|rest| rest.split("</span>").next().unwrap())
+        .collect()
 }
 
 #[sqlx::test]

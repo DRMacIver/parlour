@@ -2,7 +2,7 @@
 // them and how the index labels them, and an admin making a group, putting
 // a member in it and giving it a category of its own.
 
-import { expect, test, type Browser } from "@playwright/test";
+import { expect, test, type Browser, type Page } from "@playwright/test";
 import { expectFits, logIn, member, ownAddress } from "./helpers.js";
 
 // The seeded Organisers group (see `ORGANISERS` in server/src/db/seed.rs).
@@ -83,6 +83,19 @@ test("an admin gives a new group a category of its own", async ({ page, browser 
   await expect(page.locator("h1")).toHaveText(groupName);
 
   await page.goto("/admin/categories/new");
+  // Each choice's text starts beside its radio or checkbox, wrapping
+  // under itself rather than dropping below the control.
+  const misplaced = await page.evaluate(() =>
+    [...document.querySelectorAll("label.choice")].flatMap((label) => {
+      const input = label.querySelector("input")!.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(label);
+      range.setStartAfter(label.querySelector("input")!);
+      const first = range.getClientRects()[0];
+      return first && first.top < input.bottom && first.left >= input.right ? [] : [label.textContent!.trim()];
+    }),
+  );
+  expect(misplaced).toEqual([]);
   await page.fill("#name", `Private ${project}`);
   await page.fill("#slug", slug);
   await page.check("input[name=read_level][value=groups]");
@@ -102,12 +115,16 @@ test("an admin gives a new group a category of its own", async ({ page, browser 
   const visitor = await browser.newPage();
   expect((await visitor.goto(`/c/${slug}`))?.status()).toBe(404);
   await visitor.close();
+
+  // Long and many group names wrap instead of widening the page.
+  await longGroupNamesFit(page, browser);
 });
 
-test("long and many group names wrap instead of widening the page", async ({ page, browser }) => {
+// Signing in as the admin is rate limited per account, so this runs inside
+// the test above rather than signing in again.
+async function longGroupNamesFit(page: Page, browser: Browser) {
   const project = test.info().project.name;
   const reader = member();
-  await logIn(page, "sam");
 
   // Three groups with realistic names, and one with a name at the length limit.
   const names = [
@@ -158,4 +175,4 @@ test("long and many group names wrap instead of widening the page", async ({ pag
     await expectFits(viewer);
   }
   await viewer.context().close();
-});
+}

@@ -3,7 +3,7 @@
 {% block title %}{{ category.category.name }} · {{ layout.site_name }}{% endblock %}
 {% block content %}
 <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a>{% if let Some(section) = category.section_name %} › {{ section }}{% endif %} › <span aria-current="page">{{ category.category.name }}</span></nav>
-<h1 class="page-title">{{ category.category.name }}{% if let Some(access) = crate::format::access_label(category.read_level, category.group_names) %} <span class="flag flag-access">{{ access }}</span>{% endif %}</h1>
+<h1 class="page-title">{{ category.category.name }} {% call m::access_flag(category.read_level, category.group_names) %}{% endcall %}</h1>
 {% if !category.description.is_empty() %}<p class="lede">{{ category.description }}</p>{% endif %}
 <div class="toolbar">
   {% if can_post %}<a class="button" href="/c/{{ category.category.slug }}/new">New thread</a>{% endif %}

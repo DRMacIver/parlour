@@ -95,9 +95,40 @@ pub fn access_label(read_level: &str, group_names: &[String]) -> Option<String> 
         "members" => Some("Members only".to_owned()),
         _ => Some(match group_names {
             [] => "Staff only".to_owned(),
+            [one] if without_group(one).len() < one.len() => one.clone(),
             [one] => format!("{one} group"),
-            [first @ .., last] => format!("{} and {last} groups", first.join(", ")),
+            [first @ .., last] => format!(
+                "{} and {} groups",
+                first
+                    .iter()
+                    .map(|name| without_group(name))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                without_group(last)
+            ),
         }),
+    }
+}
+
+/// Whether a category's access label names groups (rather than saying
+/// "Members only" or "Staff only"), for its icon.
+pub fn access_is_groups(read_level: &str, group_names: &[String]) -> bool {
+    read_level == "groups" && !group_names.is_empty()
+}
+
+/// A group's name without a final word "group", which the label adds.
+fn without_group(name: &str) -> &str {
+    const SUFFIX: &str = " group";
+    match name.len().checked_sub(SUFFIX.len()) {
+        Some(cut)
+            if cut > 0
+                && name
+                    .get(cut..)
+                    .is_some_and(|end| end.eq_ignore_ascii_case(SUFFIX)) =>
+        {
+            &name[..cut]
+        }
+        _ => name,
     }
 }
 
@@ -143,6 +174,27 @@ mod tests {
         assert_eq!(
             access_label("groups", &names(&["Board", "Organisers", "Treasurers"])).unwrap(),
             "Board, Organisers and Treasurers groups"
+        );
+        // A name that already says "group" doesn't say it twice.
+        assert_eq!(
+            access_label("groups", &names(&["Organisers group"])).unwrap(),
+            "Organisers group"
+        );
+        assert_eq!(
+            access_label("groups", &names(&["Steering Group"])).unwrap(),
+            "Steering Group"
+        );
+        assert_eq!(
+            access_label("groups", &names(&["Board group", "Treasurers"])).unwrap(),
+            "Board and Treasurers groups"
+        );
+        assert_eq!(
+            access_label("groups", &names(&["Playgroup"])).unwrap(),
+            "Playgroup group"
+        );
+        assert_eq!(
+            access_label("groups", &names(&["Group"])).unwrap(),
+            "Group group"
         );
     }
 
