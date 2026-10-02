@@ -985,6 +985,44 @@ async fn read_markers_follow_what_members_have_seen(pool: PgPool) {
     assert_eq!(response.location(), path);
 }
 
+/// Your own reply isn't "new since your last visit" when you are sent to
+/// it, but posts by others you hadn't seen before replying still are.
+#[sqlx::test]
+async fn your_own_reply_isnt_new_to_you(pool: PgPool) {
+    let s = setup(pool).await;
+    let t = s.f.thread(s.games, s.ruth, "Chat", "first").await;
+    let path = format!("/t/{}/chat", t.thread_id);
+    let reply = |body: &'static str| {
+        let f = &s.f;
+        let cookie = s.jonah_cookie.clone();
+        async move {
+            let response = f
+                .submit(
+                    &format!("/t/{}/reply", t.thread_id),
+                    &[("body", body)],
+                    Some(&cookie),
+                )
+                .await;
+            assert_status(&response, StatusCode::SEE_OTHER);
+            anchored_post(response.location())
+        }
+    };
+    s.f.page_as(&path, &s.jonah_cookie).await;
+    reply("my reply").await;
+    let page = s.f.page_as(&path, &s.jonah_cookie).await;
+    assert!(!page.contains("New since your last visit"), "{page}");
+    let list = s.f.page_as("/c/games", &s.jonah_cookie).await;
+    assert!(!list.contains(" new<"), "{list}");
+
+    // Someone else posts before jonah replies again without looking.
+    let theirs = s.f.post(t.thread_id, s.ruth, "ruth again").await;
+    let mine = reply("and again").await;
+    let page = s.f.page_as(&path, &s.jonah_cookie).await;
+    let divider = page.find("New since your last visit").expect("divider");
+    assert!(divider < page.find(&format!("id=\"p{theirs}\"")).unwrap());
+    assert!(divider < page.find(&format!("id=\"p{mine}\"")).unwrap());
+}
+
 #[sqlx::test]
 async fn whole_categories_can_be_marked_read(pool: PgPool) {
     let s = setup(pool).await;

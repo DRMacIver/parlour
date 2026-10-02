@@ -786,6 +786,23 @@ pub async fn remove_reaction<'c>(
     Ok(done.rows_affected() == 1)
 }
 
+/// Counts a new post as read by its author if they had read everything
+/// before it, so that their own post isn't new to them. If others posted
+/// in between that they haven't seen, those (and so this) stay new.
+pub async fn read_own_post<'c>(db: impl Handle<'c>, post_id: i64) -> sqlx::Result<()> {
+    let mut conn = db.open(KEY).acquire().await?;
+    sqlx::query!(
+        r#"UPDATE thread_reads tr SET last_read_seq = p.seq
+           FROM posts p
+           WHERE p.id = $1 AND tr.user_id = p.author_id AND tr.thread_id = p.thread_id
+             AND tr.last_read_seq = p.seq - 1"#,
+        post_id
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 /// Moves a member's read marker in a thread forward to `seq`. It never
 /// moves back.
 pub async fn mark_read<'c>(

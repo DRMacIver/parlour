@@ -384,6 +384,7 @@ pub(crate) async fn publish_reply(
         },
     )
     .await?;
+    store::read_own_post(&mut tx, post_id).await?;
     notify::queue_post(&mut tx, post_id).await?;
     tx.commit().await?;
     state.jobs().wake();
