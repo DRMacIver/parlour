@@ -55,6 +55,8 @@ pub enum Action {
     Contact,
     /// Searching.
     Search,
+    /// Uploading an image.
+    Upload,
 }
 
 /// Whose allowance a request uses up.
@@ -125,6 +127,8 @@ pub fn rule(action: Action, scope: Scope) -> Rule {
         (Action::Contact, _) => Rule::new(3, 1200),
         // A few searches in quick succession, then one every three seconds.
         (Action::Search, _) => Rule::new(20, 3),
+        // Enough for a post with a handful of photos, then one a minute.
+        (Action::Upload, _) => Rule::new(20, 60),
     }
 }
 

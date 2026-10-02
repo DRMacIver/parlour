@@ -29,6 +29,7 @@ pub mod sessions;
 pub mod settings;
 pub mod social;
 pub mod store;
+pub mod uploads;
 pub mod users;
 
 use std::ops::{Deref, DerefMut};

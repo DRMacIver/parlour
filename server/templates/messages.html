@@ -72,7 +72,7 @@
   {% match post.body %}
   {% when PostBody::Live { author, body_html, edited_at, hidden } %}
   <article class="message{% if *hidden %} post-hidden{% endif %}" id="p{{ post.id }}">
-    {% call m::avatar(author.user, "avatar-small") %}{% endcall %}
+    {% call m::picture(author.user, author.avatar, "avatar-small") %}{% endcall %}
     <div class="message-main">
       <header class="message-info">
         <a class="message-author" href="/u/{{ author.user.username }}">{{ author.user.display_name }}</a>
@@ -138,7 +138,7 @@
     <label for="reply-body">Reply to {{ shown.page.conversation.name(shown.page.thread.title, viewer_id.clone()) }}</label>
     <textarea id="reply-body" name="body" rows="4" required>{{ shown.draft }}</textarea>
     <div class="form-actions">
-      <span class="field-hint">Only the people in this conversation can see it. Markdown supported.</span>
+      <span class="field-hint">Only the people in this conversation can see it. Markdown supported · <a href="/uploads/new" target="_blank" rel="noopener">upload an image</a></span>
       <span class="spacer"></span>
       <button class="button button-quiet" type="submit" name="preview" value="1">Preview</button>
       <button class="button" type="submit">Send</button>

@@ -700,6 +700,8 @@ struct SettingsTemplate<'a> {
     email_prefs: crate::social::EmailPrefs,
     blocked: Vec<crate::content::UserRef>,
     profile: accounts::ProfileFields,
+    avatar: Option<String>,
+    me: crate::content::UserRef,
 }
 
 #[derive(Deserialize, Default)]
@@ -723,6 +725,8 @@ fn notice_for(done: &str) -> Option<&'static str> {
         "email-prefs" => Some("Saved which emails you get."),
         "unblocked" => Some("Unblocked."),
         "profile" => Some("Your profile has been saved."),
+        "avatar" => Some("Your new picture is in place."),
+        "avatar-removed" => Some("Your picture has been removed."),
         "welcome" => {
             Some("Welcome! You’re a member now. This page is where you manage your account.")
         }
@@ -787,6 +791,12 @@ async fn render_settings(
             profile: match outcome.profile {
                 Some(typed) => typed,
                 None => users::profile_fields(state.db(), user.id).await?,
+            },
+            avatar: crate::upload_records::avatar_url(state.db(), user.id).await?,
+            me: crate::content::UserRef {
+                id: user.id,
+                username: user.username.clone(),
+                display_name: user.display_name.clone(),
             },
         },
     )

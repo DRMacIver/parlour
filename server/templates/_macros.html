@@ -17,6 +17,9 @@
 
 {% macro time(at) %}<time datetime="{{ crate::format::iso(at) }}">{{ crate::format::datetime(at) }}</time>{% endmacro %}
 
+{# A member's picture if they chose one, or else their initial. #}
+{% macro picture(user, url, class) %}{% if let Some(src) = url %}<img class="avatar {{ class }}" src="{{ src }}" alt="" width="256" height="256" loading="lazy">{% else %}{% call avatar(user, class) %}{% endcall %}{% endif %}{% endmacro %}
+
 {% macro avatar(user, class) %}<span class="avatar {{ class }} {{ crate::format::avatar_class(user.id) }}" aria-hidden="true">{{ crate::format::initial(user.display_name) }}</span>{% endmacro %}
 
 {# Who can read a category: a padlock for members or staff only, people for groups (Main.dc.html). #}

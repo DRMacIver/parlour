@@ -8,13 +8,14 @@ ammonia = "4.2.0"
 anyhow = "1.0.104"
 argon2 = "0.6.0"
 askama = "0.16.1"
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["multipart"] }
 base64 = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 comrak = { version = "0.55.0", default-features = false }
 futures-util = "0.3.34"
 getrandom = { version = "0.4.3", features = ["sys_rng"] }
 hmac = "0.13.0"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "rustls-platform-verifier", "ring", "hostname"] }
 mime_guess = "2.0.5"
 rust-embed = "8.12.0"

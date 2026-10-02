@@ -30,6 +30,8 @@ pub mod ratelimit;
 mod search_pages;
 pub mod setup;
 pub mod tokens;
+mod upload_pages;
+pub mod uploads;
 pub mod viewer;
 mod web;
 mod write_pages;
@@ -37,12 +39,13 @@ pub mod writing;
 
 pub use db::{
     changes, content, groups, invites, jobs, login_tokens, members, moderation as mod_records,
-    notifications, seed, sessions, settings, social, store, users,
+    notifications, seed, sessions, settings, social, store, uploads as upload_records, users,
 };
 
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::middleware;
 use axum::response::IntoResponse;
@@ -186,6 +189,24 @@ pub fn app(state: AppState) -> Router {
         .route("/t/{id}/{slug}", get(pages::thread))
         .route("/p/{id}", get(pages::permalink))
         .route("/search", get(search_pages::search_page))
+        .route("/uploads/{name}", get(upload_pages::serve))
+        .route(
+            "/uploads/new",
+            get(upload_pages::upload_page)
+                .post(upload_pages::upload)
+                .layer(DefaultBodyLimit::max(upload_pages::MAX_BODY_BYTES)),
+        )
+        .route(
+            "/api/uploads",
+            post(upload_pages::api_upload)
+                .layer(DefaultBodyLimit::max(upload_pages::MAX_BODY_BYTES)),
+        )
+        .route(
+            "/settings/avatar",
+            post(upload_pages::set_avatar)
+                .layer(DefaultBodyLimit::max(upload_pages::MAX_BODY_BYTES)),
+        )
+        .route("/settings/avatar/remove", post(upload_pages::remove_avatar))
         // Writing
         .route(
             "/c/{slug}/new",

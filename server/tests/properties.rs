@@ -48,6 +48,7 @@ use parlour::AppState;
 use parlour::accounts::Role;
 use parlour::cache::PageCache;
 use parlour::changes::Change;
+use parlour::content::uploads::UploadAccess;
 use parlour::content::{
     self, Deps, Embed, POSTS_PER_PAGE, PostBody, THREADS_PER_PAGE, page_count, page_of_seq,
 };
@@ -1854,6 +1855,8 @@ struct AccessThread {
 
 struct AccessPost {
     id: i64,
+    /// The image the post shows, by hash.
+    image: String,
     thread: usize,
     author: usize,
     deleted: bool,
@@ -1870,6 +1873,7 @@ struct AccessConversation {
 
 struct AccessMessage {
     id: i64,
+    image: String,
     conversation: usize,
     deleted: bool,
     /// Hidden by a moderator (after it was reported).
@@ -1890,6 +1894,7 @@ struct Access {
     moved_from: Vec<BTreeSet<usize>>,
     conversations: Vec<AccessConversation>,
     messages: Vec<AccessMessage>,
+    images: u64,
 }
 
 /// The members who never change role; there is always an admin among them.
@@ -1918,6 +1923,7 @@ impl Access {
             moved_from: Vec::new(),
             conversations: Vec::new(),
             messages: Vec::new(),
+            images: 0,
         };
         for (name, role) in [
             ("boss", "admin"),
@@ -2007,14 +2013,28 @@ impl Access {
         });
     }
 
+    /// A new uploaded image (with no uploader, who could always fetch
+    /// it), and the Markdown that shows it.
+    fn new_image(&mut self) -> (String, String) {
+        self.images += 1;
+        let sha = format!("{:064x}", self.images);
+        self.exec(format!(
+            "INSERT INTO uploads (sha256, ext, mime, bytes, width, height)
+             VALUES ('{sha}', 'png', 'image/png', 1, 1, 1)"
+        ));
+        let markdown = format!(" ![](/uploads/{sha}.png)");
+        (sha, markdown)
+    }
+
     fn add_post(&mut self, thread: usize, author: usize) {
+        let (image, markdown) = self.new_image();
         let id = self
             .block(store::create_post(
                 &self.pool,
                 &NewPost {
                     thread_id: self.threads[thread].id,
                     author_id: self.users[author].id,
-                    body_md: "Text".into(),
+                    body_md: format!("Text{markdown}"),
                     reply_to_post_id: None,
                     created_at: None,
                 },
@@ -2022,6 +2042,7 @@ impl Access {
             .unwrap();
         self.posts.push(AccessPost {
             id,
+            image,
             thread,
             author,
             deleted: false,
@@ -2213,6 +2234,24 @@ impl Access {
             |m| m.id,
         );
         assert_eq!(found, expected, "{who:?}: messages found by search");
+        for (m, message) in self.messages.iter().enumerate() {
+            let shown = self.reads_conversation(who, message.conversation)
+                && !message.deleted
+                && (!message.hidden || self.sees_hidden(who));
+            let access = self
+                .block(content::uploads::upload_access(
+                    &self.db,
+                    viewer,
+                    &message.image,
+                    "png",
+                ))
+                .unwrap();
+            assert_eq!(
+                access,
+                shown.then_some(UploadAccess::Private),
+                "{who:?}: image in message {m}"
+            );
+        }
     }
 
     /// Whether the viewer may start threads in a category: they read it,
@@ -2574,6 +2613,28 @@ impl Access {
         );
         assert_eq!(found, expected, "{who:?}: search");
 
+        // Each post's image may be fetched by those who are shown the
+        // post, and by everyone (and so by shared caches) only if every
+        // visitor is.
+        for (p, post) in self.posts.iter().enumerate() {
+            let expected = if self.reads_thread(None, post.thread) && self.post_live(p) {
+                Some(UploadAccess::Public)
+            } else if self.reads_thread(who, post.thread) && self.shown_post(who, p) {
+                Some(UploadAccess::Private)
+            } else {
+                None
+            };
+            let access = self
+                .block(content::uploads::upload_access(
+                    db,
+                    &viewer,
+                    &post.image,
+                    "png",
+                ))
+                .unwrap();
+            assert_eq!(access, expected, "{who:?}: image in post {p}");
+        }
+
         self.check_writing(who, &viewer);
         self.check_conversations(who, &viewer);
     }
@@ -2666,6 +2727,7 @@ impl Access {
         } else {
             Some(tc.draw(gs::integers::<usize>().max_value(self.posts.len() - 1)))
         };
+        let (image, markdown) = self.new_image();
         let created = self
             .block(store::create_thread(
                 &self.pool,
@@ -2673,7 +2735,7 @@ impl Access {
                     category_id: self.categories[category].id,
                     title: "A thread".into(),
                     author_id: self.users[author].id,
-                    body_md: "Opening".into(),
+                    body_md: format!("Opening{markdown}"),
                     forked_from_post_id: fork_of.map(|p| self.posts[p].id),
                     pinned: false,
                     locked: false,
@@ -2689,6 +2751,7 @@ impl Access {
         });
         self.posts.push(AccessPost {
             id: created.first_post_id,
+            image,
             thread: self.threads.len() - 1,
             author,
             deleted: false,
@@ -2765,6 +2828,7 @@ impl Access {
         if others.is_empty() {
             others.insert((author + 1) % self.users.len());
         }
+        let (image, markdown) = self.new_image();
         let created = self
             .block(store::create_conversation(
                 &self.pool,
@@ -2772,7 +2836,7 @@ impl Access {
                     author_id: self.users[author].id,
                     title: String::new(),
                     recipient_ids: others.iter().map(|&u| self.users[u].id).collect(),
-                    body_md: "Psst".into(),
+                    body_md: format!("Psst{markdown}"),
                     created_at: None,
                 },
             ))
@@ -2785,6 +2849,7 @@ impl Access {
         });
         self.messages.push(AccessMessage {
             id: created.first_post_id,
+            image,
             conversation: self.conversations.len() - 1,
             deleted: false,
             hidden: false,
@@ -2796,13 +2861,14 @@ impl Access {
         tc.assume(!self.conversations.is_empty() && self.messages.len() < 20);
         let c = tc.draw(gs::integers::<usize>().max_value(self.conversations.len() - 1));
         let author = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
+        let (image, markdown) = self.new_image();
         let id = self
             .block(store::create_post(
                 &self.pool,
                 &NewPost {
                     thread_id: self.conversations[c].id,
                     author_id: self.users[author].id,
-                    body_md: "Message".into(),
+                    body_md: format!("Message{markdown}"),
                     reply_to_post_id: None,
                     created_at: None,
                 },
@@ -2810,6 +2876,7 @@ impl Access {
             .unwrap();
         self.messages.push(AccessMessage {
             id,
+            image,
             conversation: c,
             deleted: false,
             hidden: false,

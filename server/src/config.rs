@@ -20,6 +20,9 @@ pub struct Config {
     /// SMTP settings from the environment. Settings saved in the admin
     /// interface take precedence.
     pub smtp: Option<SmtpSettings>,
+    /// Where uploaded images are kept (`PARLOUR_UPLOADS_DIR`; by default
+    /// `uploads` in the working directory). Back it up with the database.
+    pub uploads_dir: std::path::PathBuf,
 }
 
 impl Config {
@@ -31,6 +34,9 @@ impl Config {
             cookie_secure: false,
             trust_proxy: false,
             smtp: None,
+            // Shared by every test and development run: files are named by
+            // their content, so they can't clash.
+            uploads_dir: std::env::temp_dir().join("parlour-uploads"),
         }
     }
 
@@ -88,11 +94,15 @@ impl Config {
                 })
             }
         };
+        let uploads_dir = get("PARLOUR_UPLOADS_DIR")
+            .unwrap_or_else(|| "uploads".to_owned())
+            .into();
         Ok(Config {
             base_url,
             cookie_secure,
             trust_proxy,
             smtp,
+            uploads_dir,
         })
     }
 

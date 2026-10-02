@@ -34,6 +34,13 @@ pub const PRIVATE_CACHE_CONTROL: &str = "private, no-store";
 #[derive(Clone, Debug)]
 pub struct CacheTags(pub Vec<Tag>, pub Option<DateTime<Utc>>);
 
+/// Attached by a handler whose response sets its own `Cache-Control`
+/// (uploaded images, which are named by their content), so that it isn't
+/// replaced with `private, no-store`. Such responses never go in the page
+/// cache.
+#[derive(Clone, Copy, Debug)]
+pub struct OwnCacheControl;
+
 pub async fn middleware(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let cacheable_request =
@@ -95,6 +102,11 @@ pub async fn middleware(State(state): State<AppState>, request: Request, next: N
 }
 
 fn private(mut response: Response) -> Response {
+    if response.extensions().get::<OwnCacheControl>().is_some()
+        && response.headers().contains_key(CACHE_CONTROL)
+    {
+        return response;
+    }
     response.headers_mut().insert(
         CACHE_CONTROL,
         HeaderValue::from_static(PRIVATE_CACHE_CONTROL),

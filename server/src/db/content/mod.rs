@@ -12,6 +12,7 @@ pub mod messages;
 pub mod moderation;
 pub mod notifications;
 pub mod search;
+pub mod uploads;
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -574,6 +575,8 @@ pub struct AuthorInfo {
     pub pronouns: Option<String>,
     pub status_line: Option<String>,
     pub location: Option<String>,
+    /// The address of their picture, if they chose one.
+    pub avatar: Option<String>,
     pub joined_at: DateTime<Utc>,
     /// Posts by this user that the viewer can see.
     pub post_count: i64,
@@ -825,12 +828,15 @@ async fn author_infos(
     let filter = viewer.filter();
     let rows = sqlx::query!(
         r#"
-        SELECT u.id, u.username, u.display_name, u.title, u.pronouns, u.status_line, u.location, u.created_at,
+        SELECT u.id AS "id!", u.username AS "username!", u.display_name AS "display_name!",
+               u.title, u.pronouns, u.status_line, u.location, u.created_at AS "created_at!",
+               av.sha256 AS "avatar_sha256?", av.ext AS "avatar_ext?",
                (SELECT count(*) FROM posts p JOIN threads t ON t.id = p.thread_id
                 WHERE p.author_id = u.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL
                   AND t.deleted_at IS NULL
                   AND thread_readable(t.visibility, t.category_id, $2, $3)) AS "post_count!"
         FROM users u
+        LEFT JOIN uploads av ON av.id = u.avatar_upload_id
         WHERE u.id = ANY($1)
         "#,
         ids,
@@ -855,6 +861,10 @@ async fn author_infos(
                     pronouns: row.pronouns,
                     status_line: row.status_line,
                     location: row.location,
+                    avatar: match (row.avatar_sha256, row.avatar_ext) {
+                        (Some(sha256), Some(ext)) => Some(crate::uploads::url(&sha256, &ext)),
+                        _ => None,
+                    },
                     joined_at: row.created_at,
                     post_count: row.post_count,
                 },

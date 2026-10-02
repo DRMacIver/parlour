@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {%- import "_forms.html" as f -%}
+{%- import "_macros.html" as m -%}
 {% block title %}Your account · {{ layout.site_name }}{% endblock %}
 {% block content %}
 <div class="narrow">
@@ -24,6 +25,18 @@
 
 <section class="panel" id="profile" aria-labelledby="profile-heading">
   <h2 class="panel-bar" id="profile-heading">Your profile</h2>
+  <div class="form">
+    <div class="avatar-settings">
+      {% call m::picture(me, avatar, "avatar-large") %}{% endcall %}
+      <form class="form-inline-row" method="post" action="/settings/avatar" enctype="multipart/form-data">
+        <label for="avatar-file">{% if avatar.is_some() %}A new picture{% else %}Your picture{% endif %}</label>
+        <input id="avatar-file" name="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" required>
+        <button class="button button-small" type="submit">Upload</button>
+      </form>
+      {% if avatar.is_some() %}<form class="form-inline" method="post" action="/settings/avatar/remove"><button class="button button-small button-quiet" type="submit">Remove picture</button></form>{% endif %}
+    </div>
+    <p class="form-note">Shown beside your posts, cropped square. Its details, such as where a photo was taken, are removed.</p>
+  </div>
   <form class="form" method="post" action="/settings/profile">
     <p class="form-note">These show beside each of your posts and on <a href="/u/{{ user.username }}">your profile</a>. Each is one line of plain text; leave any of them blank.</p>
     <div class="field">

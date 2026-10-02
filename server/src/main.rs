@@ -21,6 +21,7 @@ Environment:
   PARLOUR_COOKIE_SECURE  mark the session cookie Secure (default: true
                          when the base URL is https)
   PARLOUR_TRUST_PROXY    take client addresses from X-Forwarded-For
+  PARLOUR_UPLOADS_DIR    where uploaded images are kept (default ./uploads)
   PARLOUR_SMTP_HOST, PARLOUR_SMTP_PORT, PARLOUR_SMTP_SECURITY
   (none|starttls|tls), PARLOUR_SMTP_USERNAME, PARLOUR_SMTP_PASSWORD,
   PARLOUR_MAIL_FROM      the SMTP server for email, unless one is saved

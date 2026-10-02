@@ -4,7 +4,7 @@
 {% block content %}
 <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/users/tree">Members</a> › <span aria-current="page">{{ profile.user.display_name }}</span></nav>
 <div class="profile">
-  {% call m::avatar(profile.user, "avatar-large") %}{% endcall %}
+  {% call m::picture(profile.user, profile.avatar, "avatar-large") %}{% endcall %}
   <div class="profile-main">
     <h1 class="page-title">{{ profile.user.display_name }}</h1>
     <p class="profile-handle">@{{ profile.user.username }}{% if let Some(badge) = profile.role.badge() %} <span class="badge">{{ badge }}</span>{% endif %}</p>

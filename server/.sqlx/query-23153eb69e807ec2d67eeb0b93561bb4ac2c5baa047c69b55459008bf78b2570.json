@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO uploads (user_id, sha256, ext, mime, bytes, width, height)\n           VALUES ($1, $2, $3, $4, $5, $6, $7)\n           ON CONFLICT (user_id, sha256) DO UPDATE SET created_at = uploads.created_at\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "uploads",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "23153eb69e807ec2d67eeb0b93561bb4ac2c5baa047c69b55459008bf78b2570"
+}

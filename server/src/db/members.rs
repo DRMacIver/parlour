@@ -21,6 +21,7 @@ pub struct Profile {
     pub pronouns: Option<String>,
     pub status_line: Option<String>,
     pub location: Option<String>,
+    pub avatar: Option<String>,
     pub joined_at: DateTime<Utc>,
     /// Posts the viewer can see.
     pub post_count: i64,
@@ -46,8 +47,10 @@ pub async fn profile(
         r#"SELECT u.id AS "id!", u.username AS "username!", u.display_name AS "display_name!", u.role AS "role!",
                   u.title, u.pronouns, u.status_line, u.location,
                   u.created_at AS "created_at!", i.id AS "inviter_id?", i.username AS "inviter_username?",
-                  i.display_name AS "inviter_display_name?"
+                  i.display_name AS "inviter_display_name?",
+                  av.sha256 AS "avatar_sha256?", av.ext AS "avatar_ext?"
            FROM users u LEFT JOIN users i ON i.id = u.invited_by_user_id
+           LEFT JOIN uploads av ON av.id = u.avatar_upload_id
            WHERE u.username = $1::citext AND u.deleted_at IS NULL"#,
         username as _
     )
@@ -89,6 +92,10 @@ pub async fn profile(
         pronouns: row.pronouns,
         status_line: row.status_line,
         location: row.location,
+        avatar: match (row.avatar_sha256, row.avatar_ext) {
+            (Some(sha256), Some(ext)) => Some(crate::uploads::url(&sha256, &ext)),
+            _ => None,
+        },
         joined_at: row.created_at,
         post_count,
         invited_by: match (

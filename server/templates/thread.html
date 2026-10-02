@@ -56,7 +56,7 @@
   {% when PostBody::Live { author, body_html, edited_at, hidden } %}
   <article class="post{% if *hidden %} post-hidden{% endif %}" id="p{{ post.id }}">
     <aside class="post-author" aria-label="About {{ author.user.display_name }}">
-      {% call m::avatar(author.user, "") %}{% endcall %}
+      {% call m::picture(author.user, author.avatar, "") %}{% endcall %}
       <div class="author-names">
         <span class="author-name">{{ author.user.display_name }}</span>
         <span class="author-username">@{{ author.user.username }}</span>
@@ -173,7 +173,7 @@
     <div class="form-actions">
       <button class="button" type="submit">Post reply</button>
       <button class="button button-quiet" type="submit" name="preview" value="1">Preview</button>
-      <span class="field-hint">Markdown supported</span>
+      <span class="field-hint">Markdown supported · <a href="/uploads/new" target="_blank" rel="noopener">upload an image</a></span>
     </div>
   </div>
 </form>

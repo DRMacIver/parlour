@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT u.id AS \"id!\", u.username AS \"username!\", u.display_name AS \"display_name!\", u.role AS \"role!\",\n                  u.title, u.pronouns, u.status_line, u.location,\n                  u.created_at AS \"created_at!\", i.id AS \"inviter_id?\", i.username AS \"inviter_username?\",\n                  i.display_name AS \"inviter_display_name?\"\n           FROM users u LEFT JOIN users i ON i.id = u.invited_by_user_id\n           WHERE u.username = $1::citext AND u.deleted_at IS NULL",
+  "query": "SELECT u.id AS \"id!\", u.username AS \"username!\", u.display_name AS \"display_name!\", u.role AS \"role!\",\n                  u.title, u.pronouns, u.status_line, u.location,\n                  u.created_at AS \"created_at!\", i.id AS \"inviter_id?\", i.username AS \"inviter_username?\",\n                  i.display_name AS \"inviter_display_name?\",\n                  av.sha256 AS \"avatar_sha256?\", av.ext AS \"avatar_ext?\"\n           FROM users u LEFT JOIN users i ON i.id = u.invited_by_user_id\n           LEFT JOIN uploads av ON av.id = u.avatar_upload_id\n           WHERE u.username = $1::citext AND u.deleted_at IS NULL",
   "describe": {
     "columns": [
       {
@@ -144,6 +144,28 @@
             "name": "display_name"
           }
         }
+      },
+      {
+        "ordinal": 12,
+        "name": "avatar_sha256?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "uploads",
+            "name": "sha256"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "avatar_ext?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "uploads",
+            "name": "ext"
+          }
+        }
       }
     ],
     "parameters": {
@@ -168,8 +190,10 @@
       true,
       false,
       false,
-      false
+      false,
+      true,
+      true
     ]
   },
-  "hash": "1a8c9954a5b0838f1ef1228d2b558cb0fc1ca976baee7c81ee523b99b6e02de1"
+  "hash": "9edd279510996483635df1e655c4757dbcff227e39c92df302e9ac56d5744cc9"
 }
