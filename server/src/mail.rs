@@ -261,8 +261,18 @@ pub async fn send_with(settings: &SmtpSettings, email: &Email) -> anyhow::Result
 
 /// The message to send.
 pub fn build(from: &str, email: &Email) -> anyhow::Result<Message> {
+    let from: lettre::message::Mailbox = from.parse().context("invalid From address")?;
+    // Some receivers refuse mail without a Message-ID, and not every relay
+    // adds one. It names the sending domain rather than the host, which in
+    // a container is a meaningless name.
+    let message_id = format!(
+        "<{}@{}>",
+        crate::tokens::random_token(18),
+        from.email.domain()
+    );
     let mut builder = Message::builder()
-        .from(from.parse().context("invalid From address")?)
+        .message_id(Some(message_id))
+        .from(from)
         .to(email.to.parse().context("invalid recipient address")?)
         .subject(&email.subject)
         .header(ContentType::TEXT_PLAIN);
@@ -364,6 +374,42 @@ mod tests {
                 .unwrap()
                 .contains("List-Unsubscribe")
         );
+    }
+
+    /// Some receivers (Gmail among them) refuse mail without a Message-ID,
+    /// and not every relay adds one.
+    #[test]
+    fn messages_have_a_unique_message_id_and_a_date() {
+        let email = Email {
+            to: "ruth@example.com".into(),
+            subject: "Hello".into(),
+            body: "Body".into(),
+            secret: false,
+            private: false,
+            unsubscribe: None,
+        };
+        let message_id = |from: &str| {
+            let text = String::from_utf8(build(from, &email).unwrap().formatted()).unwrap();
+            assert!(text.contains("\r\nDate: "), "{text}");
+            text.lines()
+                .find_map(|line| line.strip_prefix("Message-ID: "))
+                .unwrap_or_else(|| panic!("no Message-ID in {text}"))
+                .to_owned()
+        };
+        let first = message_id("Forum <forum@example.com>");
+        assert!(
+            first.starts_with('<') && first.ends_with("@example.com>"),
+            "{first}"
+        );
+        let left = &first[1..first.len() - "@example.com>".len()];
+        assert!(left.len() >= 20, "{first}");
+        assert!(
+            left.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "{first}"
+        );
+        assert_ne!(first, message_id("Forum <forum@example.com>"));
+        assert!(message_id("forum@mail.example.org").ends_with("@mail.example.org>"));
     }
 
     #[test]
