@@ -1882,6 +1882,9 @@ struct AccessPost {
     id: i64,
     /// The image the post shows, by hash.
     image: String,
+    /// The images its earlier versions showed, and whether each version
+    /// has been redacted.
+    earlier_images: Vec<(String, bool)>,
     thread: usize,
     author: usize,
     deleted: bool,
@@ -1920,6 +1923,8 @@ struct Access {
     conversations: Vec<AccessConversation>,
     messages: Vec<AccessMessage>,
     images: u64,
+    /// The images in posts held for approval.
+    held_images: Vec<String>,
 }
 
 /// The members who never change role; there is always an admin among them.
@@ -1949,6 +1954,7 @@ impl Access {
             conversations: Vec::new(),
             messages: Vec::new(),
             images: 0,
+            held_images: Vec::new(),
         };
         for (name, role) in [
             ("boss", "admin"),
@@ -2068,6 +2074,7 @@ impl Access {
         self.posts.push(AccessPost {
             id,
             image,
+            earlier_images: Vec::new(),
             thread,
             author,
             deleted: false,
@@ -2658,6 +2665,28 @@ impl Access {
                 ))
                 .unwrap();
             assert_eq!(access, expected, "{who:?}: image in post {p}");
+            // An earlier version's image goes with the post, as the edit
+            // history does, unless the version was redacted.
+            for (image, redacted) in &post.earlier_images {
+                let access = self
+                    .block(content::uploads::upload_access(db, &viewer, image, "png"))
+                    .unwrap();
+                let expected = if *redacted { None } else { expected };
+                assert_eq!(access, expected, "{who:?}: earlier image in post {p}");
+            }
+        }
+
+        // Images in posts held for approval are for staff, who review
+        // them.
+        for image in &self.held_images {
+            let access = self
+                .block(content::uploads::upload_access(db, &viewer, image, "png"))
+                .unwrap();
+            assert_eq!(
+                access,
+                self.sees_hidden(who).then_some(UploadAccess::Private),
+                "{who:?}: image in a held post"
+            );
         }
 
         self.check_writing(who, &viewer);
@@ -2777,12 +2806,81 @@ impl Access {
         self.posts.push(AccessPost {
             id: created.first_post_id,
             image,
+            earlier_images: Vec::new(),
             thread: self.threads.len() - 1,
             author,
             deleted: false,
             hidden: false,
         });
         self.moved_from.push(BTreeSet::new());
+    }
+
+    /// Edits a post past its grace period, so the old version, and its
+    /// image, stay in its history.
+    #[rule]
+    fn edit_post(&mut self, tc: TestCase) {
+        tc.assume(!self.posts.is_empty());
+        let p = tc.draw(gs::integers::<usize>().max_value(self.posts.len() - 1));
+        let (image, markdown) = self.new_image();
+        let post = &self.posts[p];
+        self.exec(format!(
+            "UPDATE posts SET created_at = created_at - interval '1 hour' WHERE id = {}",
+            post.id
+        ));
+        let edited = self
+            .block(store::edit_post(
+                &self.pool,
+                post.id,
+                self.users[post.author].id,
+                &format!("Text{markdown}"),
+            ))
+            .unwrap();
+        assert!(matches!(edited, store::Edited::Revised { .. }));
+        let post = &mut self.posts[p];
+        let old = std::mem::replace(&mut post.image, image);
+        post.earlier_images.push((old, false));
+    }
+
+    #[rule]
+    fn redact_revision(&mut self, tc: TestCase) {
+        let edited: Vec<usize> = (0..self.posts.len())
+            .filter(|&p| !self.posts[p].earlier_images.is_empty())
+            .collect();
+        tc.assume(!edited.is_empty());
+        let p = edited[tc.draw(gs::integers::<usize>().max_value(edited.len() - 1))];
+        let n = self.posts[p].earlier_images.len();
+        let rev = tc.draw(gs::integers::<usize>().max_value(n - 1));
+        let done = self
+            .block(parlour::mod_records::redact_revision(
+                &self.pool,
+                self.posts[p].id,
+                rev as i32 + 1,
+                self.users[0].id,
+            ))
+            .unwrap();
+        let redacted = &mut self.posts[p].earlier_images[rev].1;
+        assert_eq!(done, !*redacted);
+        *redacted = true;
+    }
+
+    /// Holds a reply with an image for approval, in any thread.
+    #[rule]
+    fn hold_post(&mut self, tc: TestCase) {
+        tc.assume(!self.threads.is_empty() && self.held_images.len() < 4);
+        let thread = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
+        let author = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
+        let (image, markdown) = self.new_image();
+        self.block(parlour::mod_records::hold(
+            &self.pool,
+            self.users[author].id,
+            &parlour::mod_records::HeldPlace::Reply {
+                thread_id: self.threads[thread].id,
+                reply_to_post_id: None,
+            },
+            &format!("Held{markdown}"),
+        ))
+        .unwrap();
+        self.held_images.push(image);
     }
 
     #[rule]

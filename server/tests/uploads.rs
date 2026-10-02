@@ -516,3 +516,102 @@ async fn members_choose_an_avatar(pool: PgPool) {
         StatusCode::OK
     );
 }
+
+/// Moderators reviewing a post held for approval see its images, which
+/// nobody else does until it is approved.
+#[sqlx::test]
+async fn staff_see_the_images_in_held_posts(pool: PgPool) {
+    let s = setup(pool).await;
+    let sam = s.f.member("sam", "moderator", None).await;
+    let sam_cookie = s.f.session(sam).await;
+    let url = upload_url(
+        &upload(
+            &s.f,
+            "/uploads/new",
+            &png_with_text(7, 7),
+            Some(&s.jonah_cookie),
+        )
+        .await
+        .body,
+    );
+    let thread = s.f.thread(s.public, s.ruth, "Photos", "Show us.").await;
+    let held = parlour::mod_records::hold(
+        &s.f.db,
+        s.jonah,
+        &parlour::mod_records::HeldPlace::Reply {
+            thread_id: thread.thread_id,
+            reply_to_post_id: None,
+        },
+        &format!("Here: ![]({url})"),
+    )
+    .await
+    .unwrap();
+    // It is on the page the moderator reviews it on.
+    let page = s.f.page_as(&format!("/held/{held}"), &sam_cookie).await;
+    assert!(page.contains(&url), "{page}");
+    let (status, headers, _) = get_bytes(&s.f, &url, Some(&sam_cookie)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        headers[header::CACHE_CONTROL]
+            .to_str()
+            .unwrap()
+            .starts_with("private")
+    );
+    // Nobody else gets it from the held post.
+    assert_eq!(
+        get_bytes(&s.f, &url, Some(&s.ruth_cookie)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(get_bytes(&s.f, &url, None).await.0, StatusCode::NOT_FOUND);
+}
+
+/// An image only in an earlier version of a post may be fetched by whoever
+/// may read that version on the post's edit history, until a moderator
+/// redacts the version.
+#[sqlx::test]
+async fn images_in_earlier_versions_follow_the_history(pool: PgPool) {
+    let s = setup(pool).await;
+    let sam = s.f.member("sam", "moderator", None).await;
+    let url = upload_url(
+        &upload(
+            &s.f,
+            "/uploads/new",
+            &png_with_text(6, 6),
+            Some(&s.ruth_cookie),
+        )
+        .await
+        .body,
+    );
+    let thread =
+        s.f.thread(s.public, s.ruth, "Photos", &format!("Look: ![]({url})"))
+            .await;
+    // Past the grace period, an edit keeps the old version.
+    s.f.exec(&format!(
+        "UPDATE posts SET created_at = now() - interval '1 hour' WHERE id = {}",
+        thread.first_post_id
+    ))
+    .await;
+    store::edit_post(&s.f.db, thread.first_post_id, s.ruth, "No photo after all.")
+        .await
+        .unwrap();
+    let history =
+        s.f.page_as(
+            &format!("/p/{}/revisions?v=1", thread.first_post_id),
+            &s.jonah_cookie,
+        )
+        .await;
+    assert!(history.contains(&url), "{history}");
+    assert_eq!(
+        get_bytes(&s.f, &url, Some(&s.jonah_cookie)).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(get_bytes(&s.f, &url, None).await.0, StatusCode::OK);
+    parlour::mod_records::redact_revision(&s.f.db, thread.first_post_id, 1, sam)
+        .await
+        .unwrap();
+    assert_eq!(
+        get_bytes(&s.f, &url, Some(&s.jonah_cookie)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(get_bytes(&s.f, &url, None).await.0, StatusCode::NOT_FOUND);
+}
