@@ -91,6 +91,15 @@ async fn index_with_no_categories_says_so(pool: PgPool) {
     let f = Forum::new(pool);
     let page = f.page("/").await;
     assert!(page.contains("There are no categories yet."));
+    assert!(!page.contains("/admin/categories"));
+    // A new admin is shown where to make them; nobody else is.
+    let sam = f.member("sam", "admin", None).await;
+    let page = f.page_as("/", &f.session(sam).await).await;
+    assert!(page.contains("href=\"/admin/categories\""), "{page}");
+    let jonah = f.member("jonah", "user", None).await;
+    let page = f.page_as("/", &f.session(jonah).await).await;
+    assert!(page.contains("There are no categories yet."));
+    assert!(!page.contains("/admin/categories"));
 }
 
 #[sqlx::test]

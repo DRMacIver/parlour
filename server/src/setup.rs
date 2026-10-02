@@ -378,6 +378,8 @@ struct SetupInvitesTemplate {
     created: Vec<CreatedInvite>,
     emails: String,
     uses: String,
+    /// How many of a new member's posts are held for approval.
+    hold_posts: u32,
 }
 
 impl SetupInvitesTemplate {
@@ -399,6 +401,7 @@ pub async fn invites_page(
         created: Vec::new(),
         emails: String::new(),
         uses: String::new(),
+        hold_posts: settings::moderation_settings(state.db()).await?.hold_posts,
     })
 }
 
@@ -487,6 +490,7 @@ pub async fn create_invites(
                 created,
                 emails: failed.join("\n"),
                 uses: String::new(),
+                hold_posts: settings::moderation_settings(state.db()).await?.hold_posts,
             },
         );
     }
@@ -498,6 +502,7 @@ pub async fn create_invites(
             created,
             emails: form.emails,
             uses: form.uses,
+            hold_posts: settings::moderation_settings(state.db()).await?.hold_posts,
         },
     )
 }

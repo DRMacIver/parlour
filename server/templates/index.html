@@ -7,7 +7,7 @@
   {% if sections.is_empty() %}
     <section class="panel">
       <h2 class="panel-bar">Categories</h2>
-      <p class="empty">There are no categories yet.</p>
+      <p class="empty">There are no categories yet.{% if let Some(user) = layout.user %}{% if user.is_admin %} <a href="/admin/categories">Make the first ones in Admin → Categories.</a>{% endif %}{% endif %}</p>
     </section>
   {% endif %}
   {% for section in sections %}

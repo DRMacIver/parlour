@@ -35,6 +35,11 @@
     <div class="form-actions"><button class="button" type="submit">Create invitations</button></div>
   </form>
 </section>
+<section class="panel" aria-labelledby="next-heading">
+  <h2 class="panel-bar" id="next-heading">Before they arrive</h2>
+  <p class="panel-text">Members need somewhere to post: make the forum’s sections and categories in <a href="/admin/categories">Admin → Categories</a>.</p>
+  <p class="panel-text">{% if hold_posts == 0 %}New members’ posts aren’t held for approval.{% else %}Each new member’s first {% if hold_posts == 1 %}post waits{% else %}{{ hold_posts }} posts wait{% endif %} for a moderator to approve them, in the moderation queue.{% endif %} You can change this in <a href="/admin/moderation">Admin → Moderation</a>.</p>
+</section>
 <p class="form-actions-page"><a class="button button-quiet" href="/">Finish: go to the forum</a></p>
 </div>
 {% endblock %}

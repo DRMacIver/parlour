@@ -97,7 +97,10 @@ afterwards.
 Run `cargo run` against an empty database instead of seeding it. The server
 logs a one-time link, `http://localhost:8080/setup?token=…`, which walks
 through creating the admin account, the email settings (with a test
-send) and the first invitations.
+send) and the first invitations. Then make some categories in Admin →
+Categories: members have nowhere to post until there are some. By default
+each new member's first 2 posts are held for a moderator to approve; change
+that in Admin → Moderation (0 turns it off).
 
 ### Email
 
