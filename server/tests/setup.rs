@@ -600,3 +600,17 @@ async fn setup_wont_email_invites_without_a_mail_server(db: PgPool) {
         .unwrap();
     assert_eq!(emailed, 0);
 }
+
+/// A new forum's pages don't use the sample forum's names as examples.
+#[sqlx::test]
+async fn hints_dont_name_the_sample_forum(db: PgPool) {
+    let forum = Forum::new(db);
+    let alex = forum.member("alex", "admin", None).await;
+    let cookie = forum.session(alex).await;
+    for path in ["/setup/email", "/admin/settings", "/messages/new"] {
+        let page = forum.page_as(path, &cookie).await;
+        assert!(!page.contains("Tuesday Club"), "{path}: {page}");
+        assert!(!page.contains("ruth"), "{path}: {page}");
+        assert!(!page.contains("jonah"), "{path}: {page}");
+    }
+}
