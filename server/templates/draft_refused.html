@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">{{ title }}</h1>
+{% for problem in problems %}<p>{{ problem }}</p>{% endfor %}
+<section class="panel" aria-labelledby="kept-heading">
+  <h2 class="panel-bar" id="kept-heading">What you wrote</h2>
+  <div class="form">
+    <p class="form-note">It hasn’t been saved. Copy it from here if you want to keep it.</p>
+    {% if !draft_title.is_empty() %}
+    <div class="field">
+      <label for="kept-title">Title</label>
+      <input type="text" id="kept-title" value="{{ draft_title }}" readonly>
+    </div>
+    {% endif %}
+    <div class="field">
+      <label for="kept-body">Text</label>
+      <textarea id="kept-body" rows="12" readonly>{{ draft_body }}</textarea>
+    </div>
+  </div>
+</section>
+<p><a href="{{ back }}">{{ back_label }}</a></p>
+</div>
+{% endblock %}

@@ -1474,3 +1474,96 @@ async fn raw_html_is_shown_and_blank_posts_are_refused(pool: PgPool) {
     assert!(response.body.contains("Write something first."));
     assert_eq!(count(&s.f, "SELECT count(*) FROM posts").await, 2);
 }
+
+// ---------------------------------------------------------------------------
+// Keeping what was typed
+
+/// The member's text, read-only on a refusal page, so that it isn't lost.
+fn assert_text_kept(response: &Response, text: &str) {
+    let body = &response.body;
+    let start = body
+        .find("<textarea")
+        .unwrap_or_else(|| panic!("no textarea in {body}"));
+    let textarea = &body[start..];
+    let textarea = &textarea[..textarea.find("</textarea>").unwrap()];
+    assert!(textarea.contains("readonly"), "{textarea}");
+    assert!(textarea.contains(text), "{textarea}");
+    assert!(!body.contains("<form class=\"panel composer\""), "{body}");
+}
+
+#[sqlx::test]
+async fn text_is_kept_when_a_thread_is_locked_while_writing(pool: PgPool) {
+    let s = setup(pool).await;
+    let t = s.f.thread(s.games, s.ruth, "Spirit Island", "First").await;
+    let reply = s.f.post(t.thread_id, s.jonah, "My earlier reply").await;
+    age_post(&s.f, reply).await;
+    s.f.exec(&format!(
+        "UPDATE threads SET locked = true WHERE id = {}",
+        t.thread_id
+    ))
+    .await;
+    let path = format!("/t/{}/reply", t.thread_id);
+    for preview in [false, true] {
+        let mut fields = vec![("body", "A long and thoughtful reply")];
+        if preview {
+            fields.push(("preview", "1"));
+        }
+        let response = s.f.submit(&path, &fields, Some(&s.jonah_cookie)).await;
+        assert_status(&response, StatusCode::FORBIDDEN);
+        assert!(response.body.contains("This thread is locked."));
+        assert_text_kept(&response, "A long and thoughtful reply");
+    }
+    let path = format!("/p/{reply}/edit");
+    for preview in [false, true] {
+        let mut fields = vec![("body", "My better earlier reply")];
+        if preview {
+            fields.push(("preview", "1"));
+        }
+        let response = s.f.submit(&path, &fields, Some(&s.jonah_cookie)).await;
+        assert_status(&response, StatusCode::FORBIDDEN);
+        assert!(response.body.contains("This thread is locked."));
+        assert_text_kept(&response, "My better earlier reply");
+    }
+    assert_eq!(count(&s.f, "SELECT count(*) FROM posts").await, 2);
+}
+
+#[sqlx::test]
+async fn text_is_kept_when_a_category_is_closed_while_writing(pool: PgPool) {
+    let s = setup(pool).await;
+    s.f.exec(&format!(
+        "UPDATE categories SET write_level = 'staff' WHERE id = {}",
+        s.games
+    ))
+    .await;
+    let response =
+        s.f.submit(
+            "/c/games/new",
+            &[("title", "My new thread"), ("body", "Its opening post")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+    assert_text_kept(&response, "Its opening post");
+    assert!(response.body.contains("My new thread"));
+    assert_eq!(count(&s.f, "SELECT count(*) FROM threads").await, 0);
+}
+
+#[sqlx::test]
+async fn text_is_kept_when_a_thread_goes_while_writing(pool: PgPool) {
+    let s = setup(pool).await;
+    let t = s.f.thread(s.games, s.ruth, "Spirit Island", "First").await;
+    s.f.exec(&format!(
+        "UPDATE threads SET deleted_at = now() WHERE id = {}",
+        t.thread_id
+    ))
+    .await;
+    let response =
+        s.f.submit(
+            &format!("/t/{}/reply", t.thread_id),
+            &[("body", "Into the void")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::NOT_FOUND);
+    assert_text_kept(&response, "Into the void");
+}

@@ -299,15 +299,79 @@ async fn render_compose(
     render(status, &template)
 }
 
+/// What a member had typed when a write was refused.
+enum Typed {
+    /// Nothing: the request wasn't a form with text.
+    Nothing,
+    /// Text for a form that can be shown again.
+    Form(Compose, Draft),
+    /// Text for a form that can't be shown again, for example because the
+    /// thread has been locked since.
+    Text(Draft),
+}
+
+#[derive(Template)]
+#[template(path = "draft_refused.html")]
+struct DraftRefusedTemplate<'a> {
+    layout: Layout,
+    title: &'a str,
+    problems: Vec<String>,
+    draft_title: String,
+    draft_body: String,
+    back: &'a str,
+    back_label: &'a str,
+}
+
 /// Shows what a refused write means: the form again with what was typed,
-/// or a page explaining.
+/// or a page explaining, with the text typed (if any) so it isn't lost.
 async fn refused(
     state: &AppState,
     viewer: &Viewer,
     refusal: Refused,
     back_to: &str,
-    compose: Option<(Compose, Draft)>,
+    typed: Typed,
 ) -> Result<Response, AppError> {
+    let compose = match typed {
+        Typed::Nothing => None,
+        Typed::Form(compose, draft) => Some((compose, draft)),
+        Typed::Text(draft) if !draft.body.trim().is_empty() || !draft.title.trim().is_empty() => {
+            let (status, title, problems) = match refusal {
+                Refused::LogIn => return Ok(web::login_first(back_to)),
+                Refused::NotFound => (
+                    StatusCode::NOT_FOUND,
+                    "Not found",
+                    vec![
+                        "What you were writing to isn’t there any more, or you can no longer see it."
+                            .to_owned(),
+                    ],
+                ),
+                Refused::NotAllowed(reason) => {
+                    (StatusCode::FORBIDDEN, "Not allowed", vec![reason.to_owned()])
+                }
+                Refused::Invalid(problems) => {
+                    (StatusCode::BAD_REQUEST, "That didn’t work", problems)
+                }
+                Refused::RateLimited => (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "Slow down",
+                    vec![TOO_FAST.to_owned()],
+                ),
+            };
+            return render(
+                status,
+                &DraftRefusedTemplate {
+                    layout: Layout::load(state, viewer, Nav::None).await?,
+                    title,
+                    problems,
+                    draft_title: draft.title,
+                    draft_body: draft.body,
+                    back: "/",
+                    back_label: "Back to the forum index",
+                },
+            );
+        }
+        Typed::Text(_) => None,
+    };
     match (refusal, compose) {
         (Refused::LogIn, _) => Ok(web::login_first(back_to)),
         (Refused::NotFound, _) => web::not_found(state, viewer).await,
@@ -394,7 +458,7 @@ pub async fn new_thread_page(
             )
             .await
         }
-        Err(refusal) => refused(&state, &viewer, refusal, &back, None).await,
+        Err(refusal) => refused(&state, &viewer, refusal, &back, Typed::Nothing).await,
     }
 }
 
@@ -423,15 +487,15 @@ pub async fn new_thread(
                 )
                 .await
             }
-            Err(refusal) => refused(&state, &viewer, refusal, &back, None).await,
+            Err(refusal) => refused(&state, &viewer, refusal, &back, Typed::Text(draft)).await,
         };
     }
     match writing::new_thread(&state, &viewer, &slug, &draft.title, &draft.body).await? {
         Ok(done) => posted(&state, &viewer, done).await,
         Err(refusal) => {
             let compose = match new_thread_target(&state, &viewer, &slug).await? {
-                Ok(category) => Some((Compose::NewThread(category), draft)),
-                Err(_) => None,
+                Ok(category) => Typed::Form(Compose::NewThread(category), draft),
+                Err(_) => Typed::Text(draft),
             };
             refused(&state, &viewer, refusal, &back, compose).await
         }
@@ -488,7 +552,7 @@ pub async fn reply_page(
     };
     let thread = match reply_target(&state, &viewer, thread_id).await? {
         Ok(thread) => thread,
-        Err(refusal) => return refused(&state, &viewer, refusal, &back, None).await,
+        Err(refusal) => return refused(&state, &viewer, refusal, &back, Typed::Nothing).await,
     };
     let mut draft = Draft::default();
     let params = Query::<Fields>::try_from_uri(&uri)
@@ -558,7 +622,7 @@ pub async fn reply(
                 )
                 .await
             }
-            Err(refusal) => refused(&state, &viewer, refusal, &back, None).await,
+            Err(refusal) => refused(&state, &viewer, refusal, &back, Typed::Text(draft)).await,
         };
     }
     let outcome = if bad_reply_to {
@@ -572,8 +636,10 @@ pub async fn reply(
         Ok(done) => posted(&state, &viewer, done).await,
         Err(refusal) => {
             let compose = match reply_target(&state, &viewer, thread_id).await? {
-                Ok(thread) => Some((Compose::Reply(thread), draft)),
-                Err(other) => return refused(&state, &viewer, other, &back, None).await,
+                Ok(thread) => Typed::Form(Compose::Reply(thread), draft),
+                Err(other) => {
+                    return refused(&state, &viewer, other, &back, Typed::Text(draft)).await;
+                }
             };
             refused(&state, &viewer, refusal, &back, compose).await
         }
@@ -637,7 +703,7 @@ pub async fn edit_page(
             )
             .await
         }
-        Err(refusal) => refused(&state, &viewer, refusal, &back, None).await,
+        Err(refusal) => refused(&state, &viewer, refusal, &back, Typed::Nothing).await,
     }
 }
 
@@ -669,15 +735,15 @@ pub async fn edit(
                 )
                 .await
             }
-            Err(refusal) => refused(&state, &viewer, refusal, &back, None).await,
+            Err(refusal) => refused(&state, &viewer, refusal, &back, Typed::Text(draft)).await,
         };
     }
     match writing::edit(&state, &viewer, post_id, &draft.body).await? {
         Ok(done) => posted(&state, &viewer, done).await,
         Err(refusal) => {
             let compose = match edit_target(&state, &viewer, post_id).await? {
-                Ok(post) => Some((Compose::Edit(post), draft)),
-                Err(_) => None,
+                Ok(post) => Typed::Form(Compose::Edit(post), draft),
+                Err(_) => Typed::Text(draft),
             };
             refused(&state, &viewer, refusal, &back, compose).await
         }
@@ -734,7 +800,7 @@ pub async fn delete(
     };
     match writing::delete(&state, &viewer, post_id).await? {
         Ok(done) => posted(&state, &viewer, done).await,
-        Err(refusal) => refused(&state, &viewer, refusal, &back, None).await,
+        Err(refusal) => refused(&state, &viewer, refusal, &back, Typed::Nothing).await,
     }
 }
 
@@ -915,7 +981,7 @@ pub async fn react(
     let add = field(&fields, "action") != Some("remove");
     match writing::react(&state, &viewer, post_id, emoji, add).await? {
         Ok(done) => posted(&state, &viewer, done).await,
-        Err(refusal) => refused(&state, &viewer, refusal, &back, None).await,
+        Err(refusal) => refused(&state, &viewer, refusal, &back, Typed::Nothing).await,
     }
 }
 
@@ -987,7 +1053,14 @@ pub async fn fork(
     let draft = Draft::from_fields(&fields);
     if field(&fields, "preview").is_some() {
         let Some((source, destinations)) = fork_target(&state, &viewer, post_id).await? else {
-            return web::not_found(&state, &viewer).await;
+            return refused(
+                &state,
+                &viewer,
+                Refused::NotFound,
+                &back,
+                Typed::Text(draft),
+            )
+            .await;
         };
         return render_compose(
             &state,
@@ -1012,9 +1085,12 @@ pub async fn fork(
     {
         Ok(done) => posted(&state, &viewer, done).await,
         Err(refusal) => {
-            let compose = fork_target(&state, &viewer, post_id)
-                .await?
-                .map(|(source, destinations)| (Compose::Fork(source, destinations), draft));
+            let compose = match fork_target(&state, &viewer, post_id).await? {
+                Some((source, destinations)) => {
+                    Typed::Form(Compose::Fork(source, destinations), draft)
+                }
+                None => Typed::Text(draft),
+            };
             refused(&state, &viewer, refusal, &back, compose).await
         }
     }
@@ -1030,7 +1106,7 @@ pub async fn mark_category_read(
     let back = format!("/c/{slug}");
     match writing::mark_category_read(&state, &viewer, &slug).await? {
         Ok(category) => Ok(see_other(&format!("/c/{}", category.category.slug))),
-        Err(refusal) => refused(&state, &viewer, refusal, &back, None).await,
+        Err(refusal) => refused(&state, &viewer, refusal, &back, Typed::Nothing).await,
     }
 }
 
