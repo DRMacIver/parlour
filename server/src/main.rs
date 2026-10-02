@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use anyhow::Context;
 use parlour::config::Config;
-use parlour::{AppState, MIGRATOR, jobs, seed, setup};
+use parlour::{AppState, MIGRATOR, jobs, seed, setup, startup};
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 
@@ -21,7 +21,9 @@ Environment:
   PARLOUR_COOKIE_SECURE  mark the session cookie Secure (default: true
                          when the base URL is https)
   PARLOUR_TRUST_PROXY    take client addresses from X-Forwarded-For
-  PARLOUR_UPLOADS_DIR    where uploaded images are kept (default ./uploads)
+  PARLOUR_UPLOADS_DIR    where uploaded images are kept (default ./uploads),
+                         with the forum id the server checks the database
+                         against at startup
   PARLOUR_SMTP_HOST, PARLOUR_SMTP_PORT, PARLOUR_SMTP_SECURITY
   (none|starttls|tls), PARLOUR_SMTP_USERNAME, PARLOUR_SMTP_PASSWORD,
   PARLOUR_MAIL_FROM      the SMTP server for email, unless one is saved
@@ -60,13 +62,16 @@ async fn main() -> anyhow::Result<()> {
         .connect(&database_url)
         .await
         .context("could not connect to the database")?;
+    let config = Config::from_env()?;
+    startup::check(&db, &config.uploads_dir).await?;
     MIGRATOR
         .run(&db)
         .await
         .context("database migration failed")?;
+    startup::record(&db, &config.uploads_dir).await?;
 
     match command {
-        Command::Serve => serve(db, Config::from_env()?).await,
+        Command::Serve => serve(db, config).await,
         Command::Seed { reset } => {
             if reset {
                 seed::reset(&db).await?;

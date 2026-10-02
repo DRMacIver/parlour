@@ -50,6 +50,9 @@ for (const database of databases) {
   await admin.query(`CREATE DATABASE ${database}`);
 }
 await admin.end();
+// The uploads belong to the old databases, and name them (see
+// server/src/startup.rs), so they go too.
+rmSync(here("./.uploads"), { recursive: true, force: true });
 
 const env = (database, servePort) => ({
   ...process.env,

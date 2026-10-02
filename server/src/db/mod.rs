@@ -18,6 +18,7 @@
 pub mod changes;
 pub mod content;
 pub mod export;
+pub mod forum_id;
 pub mod groups;
 pub mod invites;
 pub mod jobs;

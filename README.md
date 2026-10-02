@@ -62,7 +62,7 @@ variables.
 ### The sample forum
 
 `parlour seed` creates "The Tuesday Club", a board games and books club
-taken from the mockups: 20 members, 3 sections, 8 categories (one
+taken from the mockups: 27 members (and one deleted spammer), 3 sections, 8 categories (one
 members-only, one for the Organisers group only), about 70 threads and over
 1,500 posts, conversations, reactions, read markers, edit history, and a
 moderation queue with reports and a held post.
@@ -84,6 +84,10 @@ start completely afresh:
 
     docker compose -f dev/compose.yaml down -v
     docker compose -f dev/compose.yaml up -d
+    rm -r uploads          # in server/, or wherever PARLOUR_UPLOADS_DIR points
+
+The uploads go too because they belong to the old database: see "Starting
+on the wrong database" below.
 
 A running server keeps serving cached pages from before a seed: restart it
 afterwards.
@@ -120,6 +124,18 @@ Everything else is set in the admin pages. The environment sets:
 | `PARLOUR_UPLOADS_DIR` | where uploaded images are kept (default `./uploads`) |
 | `PARLOUR_SMTP_HOST`, `_PORT`, `_SECURITY` (`none`, `starttls`, `tls`), `_USERNAME`, `_PASSWORD`, `PARLOUR_MAIL_FROM` | the SMTP server, unless one is saved in the admin settings |
 | `RUST_LOG` | log filter (default `info`) |
+
+### Starting on the wrong database
+
+The first time a forum starts, it gives itself a random id and writes it
+both to the database and to `.parlour-forum-id` in the uploads directory.
+Every later start checks, before migrating, that the database has that id,
+and refuses to start if it doesn't. This stops a forum that comes back up
+on an empty database (after a Postgres upgrade or a volume mix-up, say)
+from printing a new setup link that anyone who sees the log could use to
+take it over, and stops a server pointed at another forum's database. The
+error says what to check; to start a new forum on purpose, remove the
+file.
 
 ## The islands
 

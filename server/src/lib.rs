@@ -32,6 +32,7 @@ pub mod permissions;
 pub mod ratelimit;
 mod search_pages;
 pub mod setup;
+pub mod startup;
 pub mod tokens;
 mod upload_pages;
 pub mod uploads;
