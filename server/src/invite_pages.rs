@@ -588,6 +588,8 @@ struct ProfileActions {
     can_message: bool,
     blocked: bool,
     can_block: bool,
+    /// Whether the viewer is staff, who can open the member's record.
+    staff: bool,
 }
 
 pub async fn profile(
@@ -622,6 +624,7 @@ pub async fn profile(
                     blocked: crate::social::has_blocked(state.db(), user.id, member.user.id)
                         .await?,
                     can_block: !member.role.is_staff(),
+                    staff: viewer.is_staff(),
                 }),
                 None => None,
             }

@@ -1,3 +1,4 @@
+{%- macro base_time(at) -%}<time datetime="{{ crate::format::iso(at) }}">{{ crate::format::datetime(at) }}</time>{%- endmacro -%}
 <!doctype html>
 <html lang="en">
 <head>
@@ -23,6 +24,7 @@
     <a class="nav-count" href="/notifications"{% if layout.nav == Nav::Notifications %} aria-current="page"{% endif %}>Notifications{% if user.notifications > 0 %} <span class="count-badge" data-count="notifications">{{ user.notifications }}</span><span class="visually-hidden"> unread</span>{% endif %}</a>
     <a class="nav-count" href="/messages"{% if layout.nav == Nav::Messages %} aria-current="page"{% endif %}>Messages{% if user.messages > 0 %} <span class="count-badge" data-count="messages">{{ user.messages }}</span><span class="visually-hidden"> with new messages</span>{% endif %}</a>
     <a href="/invites"{% if layout.nav == Nav::Invites %} aria-current="page"{% endif %}>Invites</a>
+    {% if let Some(queue) = user.queue %}<a class="nav-count" href="/mod/queue"{% if layout.nav == Nav::Moderation %} aria-current="page"{% endif %}>Moderation{% if *queue > 0 %} <span class="count-badge">{{ queue }}</span><span class="visually-hidden"> waiting</span>{% endif %}</a>{% endif %}
     {% if user.is_admin %}<a href="/admin/settings"{% if layout.nav == Nav::Admin %} aria-current="page"{% endif %}>Admin</a>{% endif %}
     <a class="nav-user" href="/settings"{% if layout.nav == Nav::Account %} aria-current="page"{% endif %} title="Your account settings">{{ user.username }}</a>
     <form class="nav-form" method="post" action="/logout"><button class="nav-button" type="submit">Log out</button></form>
@@ -32,10 +34,13 @@
   </div>
 </nav>
 <main class="wrap" id="content">
+{% if let Some(r) = layout.restriction %}
+<div class="notice notice-error restriction" role="status"><p>{% if r.suspended %}Your account is suspended until {% call base_time(r.until) %}{% endcall %}. You can read what visitors can read, and nothing else.{% else %}Your account is silenced until {% call base_time(r.until) %}{% endcall %}. You can read, but not post, edit, react or send messages.{% endif %}{% if let Some(id) = r.action_id %} <a href="/appeal/{{ id }}">Contest this</a>{% endif %}</p></div>
+{% endif %}
 {% block content %}{% endblock %}
 </main>
 <footer class="site-footer">
-  <div class="wrap">All times are UTC · Powered by Parlour</div>
+  <div class="wrap">All times are UTC · <a href="/moderation">Moderation log</a> · <a href="/contact">Contact the moderators</a> · Powered by Parlour</div>
 </footer>
 </body>
 </html>

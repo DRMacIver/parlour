@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{%- import "_mod.html" as md -%}
+{% block title %}{{ member.user.display_name }} · Moderation · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/mod/users">Members</a> › <span aria-current="page">{{ member.user.display_name }}</span></nav>
+<div class="profile">
+  {% call m::avatar(member.user, "avatar-large") %}{% endcall %}
+  <div class="profile-main">
+    <h1 class="page-title">{{ member.user.display_name }}</h1>
+    <p class="profile-handle">@{{ member.user.username }}{% if let Some(badge) = member.role.badge() %} <span class="badge">{{ badge }}</span>{% endif %}{% if member.deleted %} <span class="flag">Deleted</span>{% else if member.is_suspended() %} <span class="flag">Suspended</span>{% else if member.is_silenced() %} <span class="flag">Silenced</span>{% endif %}</p>
+    {% if !member.deleted %}<p><a href="/u/{{ member.user.username }}">Public profile</a> · <a href="/messages/new?to={{ member.user.username }}">Send a staff message</a></p>{% endif %}
+  </div>
+</div>
+{% call md::mod_nav("users") %}{% endcall %}
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+<div class="with-sidebar mod-layout">
+<div>
+<section class="panel" aria-labelledby="record-heading">
+  <h2 class="panel-bar" id="record-heading">Record</h2>
+  <dl class="details">
+    <dt>Email</dt><dd>{{ member.email }}{% if !member.email_verified %} (not confirmed){% endif %}</dd>
+    <dt>Joined</dt><dd>{% call m::time(member.created_at) %}{% endcall %}</dd>
+    <dt>Last seen</dt><dd>{% if let Some(at) = member.last_seen_at %}{% call m::time(at) %}{% endcall %}{% else %}Never{% endif %}</dd>
+    <dt>Posts</dt><dd>{{ crate::format::count(member.posts) }}</dd>
+    <dt>Invited by</dt><dd>{% if let Some(inviter) = member.invited_by %}<a href="/mod/users/{{ inviter.username }}">{{ inviter.display_name }}</a>{% else %}<em>A founding member</em>{% endif %}</dd>
+    <dt>Invited</dt><dd>{{ crate::format::plural(member.descendants, "person", "people") }} below them in the tree</dd>
+    {% if let Some(until) = member.silenced_until %}{% if member.is_silenced() %}<dt>Silenced until</dt><dd>{% call m::time(until) %}{% endcall %}</dd>{% endif %}{% endif %}
+    {% if let Some(until) = member.suspended_until %}{% if member.is_suspended() %}<dt>Suspended until</dt><dd>{% call m::time(until) %}{% endcall %}</dd>{% endif %}{% endif %}
+  </dl>
+</section>
+
+{% if !member.deleted && !member.role.is_staff() %}
+<form class="panel" method="post" action="/mod/users/{{ member.user.username }}/silence">
+  <h2 class="panel-bar">Act on this member</h2>
+  <div class="form">
+    <div class="field-row">
+      <div class="field"><label for="reason">Reason</label><input id="reason" name="reason" type="text" maxlength="500" required></div>
+      <div class="field"><label for="days">For</label>{% call md::days_field("days", durations, 7) %}{% endcall %}</div>
+    </div>
+    <div class="form-actions">
+      <button class="button" type="submit">Silence</button>
+      <button class="button button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/suspend">Suspend</button>
+      <button class="button button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/suspend-branch">Suspend with everyone they invited ({{ branch.len() }})</button>
+      {% if member.is_silenced() %}<button class="button button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/unsilence">Lift silence</button>{% endif %}
+      {% if member.is_suspended() %}<button class="button button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/unsuspend">Lift suspension</button>{% endif %}
+      <button class="button button-danger" type="submit" formaction="/mod/users/{{ member.user.username }}/spammer">Delete as spammer</button>
+    </div>
+    <p class="form-note">Silenced members can read but not post, edit, react, message or invite. Suspended members see only what visitors see. Deleting a spammer removes the account and everything it wrote, and can’t be undone.</p>
+  </div>
+</form>
+{% endif %}
+
+<section class="panel" aria-labelledby="actions-heading">
+  <h2 class="panel-bar" id="actions-heading">Moderation history</h2>
+  {% if actions.is_empty() %}<p class="empty">Nothing yet.</p>{% else %}
+  <ol class="log-list">{% for entry in actions %}{% call md::log_entry(entry, true) %}{% endcall %}{% endfor %}</ol>
+  {% endif %}
+</section>
+</div>
+<div>
+<section class="panel" aria-labelledby="notes-heading">
+  <h2 class="panel-bar" id="notes-heading">Staff notes</h2>
+  {% if notes.is_empty() %}<p class="empty">No notes.</p>{% else %}
+  <ul class="note-list">{% for note in notes %}<li><p class="note-body">{{ note.body }}</p><p class="row-meta">{{ note.author.username }} · {% call m::time(note.created_at) %}{% endcall %}</p></li>{% endfor %}</ul>
+  {% endif %}
+  <form class="form" method="post" action="/mod/users/{{ member.user.username }}/notes">
+    <label class="visually-hidden" for="note">A note for other staff</label>
+    <textarea id="note" name="body" rows="3" maxlength="2000" placeholder="A note for other staff" required></textarea>
+    <div class="form-actions"><button class="button button-small" type="submit">Add note</button></div>
+  </form>
+</section>
+<section class="panel" aria-labelledby="ips-heading">
+  <h2 class="panel-bar" id="ips-heading">Addresses</h2>
+  {% if ips.is_empty() %}<p class="empty">None in the last {{ retention_days }} days.</p>{% else %}
+  <ul class="ip-list">
+  {% for ip in ips %}
+    <li><code>{{ ip.ip }}</code> <span class="row-meta">{% call m::time(ip.last_seen_at) %}{% endcall %}</span>
+      {% if ip.others.is_empty() %}<span class="row-meta">· no other accounts</span>{% else %}<span class="row-meta">· also used by</span> {% for other in ip.others %}<a href="/mod/users/{{ other.username }}">{{ other.username }}</a>{% if !loop.last %}, {% endif %}{% endfor %}{% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+  <p class="panel-foot">Addresses are kept for {{ retention_days }} days.</p>
+</section>
+</div>
+</div>
+{% endblock %}

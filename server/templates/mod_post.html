@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{%- import "_mod.html" as md -%}
+{% block title %}Moderate № {{ post.seq }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+{% call m::post_crumbs(post.thread) %}{% endcall %}
+<h1 class="page-title">Moderate № {{ post.seq }}</h1>
+{% call md::mod_nav("") %}{% endcall %}
+<p class="lede">By <a href="/mod/users/{{ post.author.username }}">{{ post.author.display_name }}</a> · {% call m::time(post.created_at) %}{% endcall %}{% if deleted %} · <span class="flag">Deleted</span>{% else if post.hidden %} · <span class="flag flag-hidden">Hidden from members</span>{% endif %}</p>
+{% if let Some(text) = post.body %}
+<section class="panel"><div class="post-body">{{ text.html|safe }}</div></section>
+{% endif %}
+<form class="panel queue-actions-panel" method="post" action="/mod/p/{{ post.post_id }}">
+  <h2 class="panel-bar">Act on this post</h2>
+  <div class="form">
+    <div class="field">
+      <label for="reason">Reason</label>
+      <input id="reason" name="reason" type="text" maxlength="500" required>
+      <span class="field-hint">Goes in the moderation log{% if post.thread.audience() == crate::permissions::Audience::Public %}, which is public for this post{% endif %}, and to the author.</span>
+    </div>
+    <div class="form-actions">
+      {% if deleted %}
+      <button class="button" type="submit" name="action" value="restore">Restore it</button>
+      {% else %}
+      {% if post.hidden %}<button class="button" type="submit" name="action" value="unhide">Show it again</button>{% else %}<button class="button" type="submit" name="action" value="hide">Hide from members</button>{% endif %}
+      <button class="button button-danger" type="submit" name="action" value="delete">Delete it</button>
+      {% endif %}
+    </div>
+  </div>
+</form>
+{% if !deleted %}
+<section class="panel">
+  <h2 class="panel-bar">More</h2>
+  <ul class="mod-links">
+    <li><a href="/p/{{ post.post_id }}/edit">Edit the post</a> (you’ll be asked for a reason)</li>
+    {% if post.edited_at.is_some() %}<li><a href="/p/{{ post.post_id }}/revisions">See its history</a>, where earlier versions can be redacted{% if !revisions.is_empty() %} ({{ crate::format::plural(revisions.len() as i64, "version", "versions") }} not redacted){% endif %}</li>{% endif %}
+    {% if post.thread.category().is_some() %}<li><a href="/mod/t/{{ post.thread.thread.id }}">Moderate the thread</a>, or move this post elsewhere</li>{% endif %}
+    <li><a href="/mod/users/{{ post.author.username }}">The author’s record</a></li>
+  </ul>
+</section>
+{% endif %}
+</div>
+{% endblock %}

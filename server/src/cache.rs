@@ -31,6 +31,8 @@ pub enum Tag {
     Members,
     /// An invite's registration page.
     Invite(i64),
+    /// The public moderation log.
+    ModLog,
 }
 
 impl fmt::Display for Tag {
@@ -42,6 +44,7 @@ impl fmt::Display for Tag {
             Tag::User(id) => write!(f, "user:{id}"),
             Tag::Members => write!(f, "members"),
             Tag::Invite(id) => write!(f, "invite:{id}"),
+            Tag::ModLog => write!(f, "modlog"),
         }
     }
 }

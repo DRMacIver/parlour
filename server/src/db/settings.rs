@@ -164,3 +164,29 @@ pub async fn signing_secret(db: &Db) -> sqlx::Result<Vec<u8>> {
         .decode(secret.as_bytes())
         .unwrap_or_else(|_| secret.into_bytes()))
 }
+
+/// The moderation settings (DESIGN.md §7, §8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModerationSettings {
+    /// A new member's posts are held for a moderator to approve until this
+    /// many of their posts have been published (0 turns holding off). Who
+    /// is new is set by [`MessageSettings::new_user_days`] and
+    /// [`MessageSettings::new_user_posts`].
+    pub hold_posts: u32,
+    /// How many days the addresses members use are kept.
+    pub ip_retention_days: u32,
+}
+
+impl Default for ModerationSettings {
+    fn default() -> Self {
+        ModerationSettings {
+            hold_posts: 2,
+            ip_retention_days: 90,
+        }
+    }
+}
+
+pub async fn moderation_settings(db: &Db) -> sqlx::Result<ModerationSettings> {
+    Ok(get(db, "moderation").await?.unwrap_or_default())
+}

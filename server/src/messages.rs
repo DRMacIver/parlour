@@ -51,7 +51,10 @@ pub fn parse_recipients(to: &str) -> Vec<String> {
 /// Why a member who isn't staff may not start conversations, if they
 /// may not.
 pub async fn start_refusal(state: &AppState, user: &UserCtx) -> Result<Option<String>, AppError> {
-    if user.role.is_staff() {
+    if let Some(why) = writing::restriction(user) {
+        return Ok(Some(why.to_owned()));
+    }
+    if user.is_staff() {
         return Ok(None);
     }
     let rules = settings::message_settings(state.db()).await?;
@@ -79,7 +82,7 @@ async fn may_write_to(
     recipient: &Recipient,
 ) -> Result<Result<(), String>, AppError> {
     let db = state.db();
-    if sender.role.is_staff() {
+    if sender.is_staff() {
         return Ok(Ok(()));
     }
     let refused = Err(format!(
@@ -231,7 +234,19 @@ pub async fn send_refusal(
     let (Some(user), Some(conversation)) = (viewer.user(), thread.conversation()) else {
         return Ok(Some("Log in to reply."));
     };
-    if user.role.is_staff() {
+    // Staff can read a reported conversation without being in it, but
+    // only those in it write in it.
+    if !conversation.includes(user.id) {
+        return Ok(Some("You aren’t in this conversation."));
+    }
+    if user.is_suspended() {
+        return Ok(Some(writing::SUSPENDED));
+    }
+    // A silenced member can still answer the moderators.
+    if user.is_silenced() && !conversation.others(Some(user.id)).iter().any(|p| p.staff) {
+        return Ok(Some(writing::SILENCED));
+    }
+    if user.is_staff() {
         return Ok(None);
     }
     if !settings::message_settings(state.db()).await?.enabled {

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO user_ips (user_id, ip) VALUES ($1, $2)\n         ON CONFLICT (user_id, ip) DO UPDATE SET last_seen_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e1efb8c65c8cbc123f00ff1331d77cd78afc441bb2431f1ef3878257330b567d"
+}

@@ -45,6 +45,14 @@ pub enum Action {
     Message,
     /// Starting a conversation, or adding someone to one.
     NewConversation,
+    /// Posting, for new members (DESIGN.md §7), on top of [`Action::Post`].
+    NewMemberPost,
+    /// Sending messages, for new members, on top of [`Action::Message`].
+    NewMemberMessage,
+    /// Reporting a post or a member.
+    Report,
+    /// Sending the contact form, which needs no account.
+    Contact,
 }
 
 /// Whose allowance a request uses up.
@@ -107,6 +115,12 @@ pub fn rule(action: Action, scope: Scope) -> Rule {
         (Action::Message, _) => Rule::new(20, 10),
         // A few conversations at once, then one every ten minutes.
         (Action::NewConversation, _) => Rule::new(5, 600),
+        // New members: a few posts, then one every two minutes.
+        (Action::NewMemberPost, _) => Rule::new(3, 120),
+        (Action::NewMemberMessage, _) => Rule::new(5, 60),
+        (Action::Report, _) => Rule::new(10, 120),
+        // Anyone can send the contact form, so it is kept slow.
+        (Action::Contact, _) => Rule::new(3, 1200),
     }
 }
 

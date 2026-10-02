@@ -121,6 +121,16 @@ pub async fn enqueue_at<'c>(
     .await
 }
 
+/// Whether a job of this kind is waiting to run (or running).
+pub async fn has_pending(db: &crate::db::Db, kind: &str) -> sqlx::Result<bool> {
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM jobs WHERE kind = $1 AND failed_at IS NULL) AS "p!""#,
+        kind
+    )
+    .fetch_one(db.pool())
+    .await
+}
+
 /// What happened to a job a worker ran.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {

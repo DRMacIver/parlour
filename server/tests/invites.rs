@@ -1080,7 +1080,7 @@ mod model {
                     let cookie = forum.session(id).await;
                     let token = cookie.trim_start_matches("parlour_session=");
                     creators.push(
-                        parlour::sessions::lookup(forum.state.db(), token)
+                        parlour::sessions::lookup(forum.state.db(), token, "test")
                             .await
                             .unwrap()
                             .unwrap(),

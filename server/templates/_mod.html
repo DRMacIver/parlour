@@ -1,0 +1,23 @@
+{# Shared pieces of the moderation pages. #}
+{% macro mod_nav(current) %}
+<nav class="subnav" aria-label="Moderation">
+  <a href="/mod/queue"{% if current == "queue" %} aria-current="page"{% endif %}>Queue</a>
+  <a href="/mod/users"{% if current == "users" %} aria-current="page"{% endif %}>Members</a>
+  <a href="/mod/log"{% if current == "log" %} aria-current="page"{% endif %}>Log</a>
+  <a href="/moderation"{% if current == "public" %} aria-current="page"{% endif %}>Public log</a>
+</nav>
+{% endmacro %}
+
+{# One entry in the moderation log: who did what, why, and when. #}
+{% macro log_entry(entry, staff_view) %}
+<li class="log-entry">
+  <div><strong>{{ entry.actor.username }}</strong> {% for bit in entry.bits %}{% match bit %}{% when crate::content::moderation::Bit::Text(t) %}{{ t }}{% when crate::content::moderation::Bit::Link { href, text } %}<a href="{{ href }}">{{ text }}</a>{% endmatch %}{% endfor %}{% if !entry.reason.is_empty() %} <span class="log-reason">— {{ entry.reason }}</span>{% endif %}</div>
+  <div class="row-meta"><time datetime="{{ crate::format::iso(entry.created_at) }}">{{ crate::format::datetime(entry.created_at) }}</time>{% if staff_view %} · {% if entry.public %}<span class="log-public">Public</span>{% else %}<span class="log-staff">Staff only</span>{% endif %}{% endif %}</div>
+</li>
+{% endmacro %}
+
+{# A reason field for an action, with what it is prefilled with. #}
+{% macro reason_field(id, value) %}<label class="visually-hidden" for="{{ id }}">Reason</label><input class="mod-reason" id="{{ id }}" name="reason" type="text" maxlength="500" placeholder="Reason" value="{{ value }}" required>{% endmacro %}
+
+{# How long to silence or suspend for. #}
+{% macro days_field(id, durations, chosen) %}<label class="visually-hidden" for="{{ id }}">For how long</label><select id="{{ id }}" name="days">{% for (days, label) in durations %}<option value="{{ days }}"{% if *days == chosen %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>{% endmacro %}

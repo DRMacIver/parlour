@@ -447,7 +447,7 @@ async fn reading_a_thread_reads_its_notifications(pool: PgPool) {
 #[sqlx::test]
 async fn moderation_notices(pool: PgPool) {
     let s = setup(pool).await;
-    parlour::notify::moderation(&s.f.state, s.maya, None, "Please keep it civil.")
+    parlour::notify::moderation(&s.f.state, s.maya, None, "Please keep it civil.", None)
         .await
         .unwrap();
     let page = s.f.page_as("/notifications", &s.maya_cookie).await;

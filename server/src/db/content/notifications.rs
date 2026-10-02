@@ -81,6 +81,9 @@ pub struct NotificationRow {
     pub about: Option<About>,
     /// For a moderation notice, what the moderators said.
     pub message: Option<String>,
+    /// For a moderation notice about an action the member may contest,
+    /// that action.
+    pub mod_action_id: Option<i64>,
 }
 
 pub struct NotificationList {
@@ -106,13 +109,14 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
         WHERE n.user_id = $1
           AND (n.post_id IS NULL
                OR (p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
-                   AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $1))))
+                   AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))))
           AND NOT EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id
                           WHERE b.user_id = $1 AND b.blocked_user_id = n.actor_id AND bu.role = 'user')
         "#,
         user_id,
         &filter.visibilities,
         &filter.group_category_ids,
+        filter.dm_viewer,
     )
     .fetch_one(db.pool())
     .await?;
@@ -124,7 +128,7 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
     };
     let rows = sqlx::query!(
         r#"
-        SELECT n.id, n.kind, n.created_at, n.read_at IS NOT NULL AS "read!", n.message,
+        SELECT n.id, n.kind, n.created_at, n.read_at IS NOT NULL AS "read!", n.message, n.mod_action_id,
                a.id AS "actor_id?", a.username AS "actor_username?", a.display_name AS "actor_name?",
                p.id AS "post_id?", p.seq AS "seq?", t.id AS "thread_id?", t.title AS "title?",
                t.slug AS "slug?", t.visibility = 'private' AS "private?"
@@ -135,7 +139,7 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
         WHERE n.user_id = $1
           AND (n.post_id IS NULL
                OR (p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
-                   AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $1))))
+                   AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $6))))
           AND NOT EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id
                           WHERE b.user_id = $1 AND b.blocked_user_id = n.actor_id AND bu.role = 'user')
         ORDER BY n.created_at DESC, n.id DESC
@@ -146,6 +150,7 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
         &filter.group_category_ids,
         NOTIFICATIONS_PER_PAGE,
         offset,
+        filter.dm_viewer,
     )
     .fetch_all(db.pool())
     .await?;
@@ -195,6 +200,7 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
                     _ => None,
                 },
                 message: row.message,
+                mod_action_id: row.mod_action_id,
             })
             .collect(),
     })
@@ -216,13 +222,14 @@ pub async fn unread_count(db: &Db, viewer: &Viewer) -> sqlx::Result<i64> {
         WHERE n.user_id = $1 AND n.read_at IS NULL
           AND (n.post_id IS NULL
                OR (p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
-                   AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $1))))
+                   AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))))
           AND NOT EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id
                           WHERE b.user_id = $1 AND b.blocked_user_id = n.actor_id AND bu.role = 'user')
         "#,
         user_id,
         &filter.visibilities,
         &filter.group_category_ids,
+        filter.dm_viewer,
     )
     .fetch_one(db.pool())
     .await

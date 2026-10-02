@@ -209,8 +209,9 @@ pub async fn moderation(
     user_id: i64,
     actor_id: Option<i64>,
     message: &str,
+    action_id: Option<i64>,
 ) -> sqlx::Result<i64> {
-    let id = stored::insert_moderation(state.db(), user_id, actor_id, message).await?;
+    let id = stored::insert_moderation(state.db(), user_id, actor_id, message, action_id).await?;
     created(state, user_id, id).await?;
     Ok(id)
 }

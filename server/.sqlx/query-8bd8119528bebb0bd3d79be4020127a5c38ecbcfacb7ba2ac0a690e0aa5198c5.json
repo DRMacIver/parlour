@@ -1,0 +1,208 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH RECURSIVE below AS (\n               SELECT id FROM users WHERE invited_by_user_id = (SELECT id FROM users WHERE username = $1::citext)\n               UNION ALL\n               SELECT u.id FROM users u JOIN below b ON u.invited_by_user_id = b.id\n           )\n           SELECT u.id AS \"id!\", u.username AS \"username!: String\", u.display_name AS \"display_name!\",\n                  u.email AS \"email!: String\",\n                  u.email_verified_at IS NOT NULL AS \"verified!\", u.role AS \"role!\", u.created_at AS \"created_at!\",\n                  u.last_seen_at AS \"last_seen_at?\",\n                  u.deleted_at IS NOT NULL AS \"deleted!\", u.silenced_until AS \"silenced_until?\",\n                  u.suspended_until AS \"suspended_until?\",\n                  i.id AS \"inviter_id?\", i.username AS \"inviter_username?: String\",\n                  i.display_name AS \"inviter_name?\",\n                  (SELECT count(*) FROM posts p WHERE p.author_id = u.id AND p.deleted_at IS NULL) AS \"posts!\",\n                  (SELECT count(*) FROM below) AS \"descendants!\"\n           FROM users u LEFT JOIN users i ON i.id = u.invited_by_user_id\n           WHERE u.username = $1::citext",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "username!: String",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "display_name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "email!: String",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "email"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "verified!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "role!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "last_seen_at?",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "last_seen_at"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "deleted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "silenced_until?",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "silenced_until"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "suspended_until?",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "suspended_until"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "inviter_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "inviter_username?: String",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "inviter_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "posts!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 15,
+        "name": "descendants!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        }
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      null,
+      true,
+      true,
+      true,
+      null,
+      true,
+      true,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "8bd8119528bebb0bd3d79be4020127a5c38ecbcfacb7ba2ac0a690e0aa5198c5"
+}

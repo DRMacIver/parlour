@@ -1,0 +1,1674 @@
+//! Moderation (milestone 7, DESIGN.md §7, §8): reports and the contact
+//! form, the queue, moderators' actions and the logs, held posts and the
+//! other limits on new members, silences and suspensions, staff notes and
+//! addresses, and appeals, over HTTP as a browser without JavaScript would.
+
+mod common;
+
+use axum::http::{StatusCode, header};
+use common::{Forum, Response, post_html};
+use parlour::settings::{self, MessageSettings, ModerationSettings};
+use sqlx::PgPool;
+
+/// A forum with a public category `games` and a members-only `lounge`;
+/// members ruth, jonah and maya, who don't count as new; and staff: sam,
+/// an admin, and mo, a moderator. Everyone has a session.
+struct Setup {
+    f: Forum,
+    games: i64,
+    lounge: i64,
+    ruth: i64,
+    ruth_cookie: String,
+    jonah: i64,
+    jonah_cookie: String,
+    maya: i64,
+    maya_cookie: String,
+    sam_cookie: String,
+    mo_cookie: String,
+}
+
+async fn setup(pool: PgPool) -> Setup {
+    let f = Forum::new(pool).trusting_proxy();
+    f.no_new_members().await;
+    let games = f.category("games", "public", None, 0).await;
+    let lounge = f.category("lounge", "members", None, 1).await;
+    let ruth = f.member("ruth", "user", None).await;
+    let jonah = f.member("jonah", "user", None).await;
+    let maya = f.member("maya", "user", None).await;
+    let sam = f.member("sam", "admin", None).await;
+    let mo = f.member("mo", "moderator", None).await;
+    Setup {
+        ruth_cookie: f.session(ruth).await,
+        jonah_cookie: f.session(jonah).await,
+        maya_cookie: f.session(maya).await,
+        sam_cookie: f.session(sam).await,
+        mo_cookie: f.session(mo).await,
+        f,
+        games,
+        lounge,
+        ruth,
+        jonah,
+        maya,
+    }
+}
+
+fn assert_status(response: &Response, status: StatusCode) {
+    assert_eq!(response.status, status, "{}", response.body);
+}
+
+async fn count(f: &Forum, sql: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql.to_owned()))
+        .fetch_one(&f.db)
+        .await
+        .unwrap()
+}
+
+async fn text(f: &Forum, sql: &str) -> String {
+    sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql.to_owned()))
+        .fetch_one(&f.db)
+        .await
+        .unwrap()
+}
+
+/// Submits a form and expects to be sent on with a 303.
+async fn ok(f: &Forum, path: &str, fields: &[(&str, &str)], cookie: &str) -> Response {
+    let response = f.submit(path, fields, Some(cookie)).await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+    response
+}
+
+async fn report(f: &Forum, cookie: &str, post: i64, reason: &str, details: &str) -> Response {
+    f.submit(
+        &format!("/p/{post}/report"),
+        &[("reason", reason), ("details", details)],
+        Some(cookie),
+    )
+    .await
+}
+
+/// The id of the newest moderation action.
+async fn last_action(f: &Forum) -> i64 {
+    count(f, "SELECT max(id) FROM mod_actions").await
+}
+
+// ---------------------------------------------------------------------------
+// Reports and the queue
+
+#[sqlx::test]
+async fn members_report_posts_and_staff_see_them_in_the_queue(pool: PgPool) {
+    let s = setup(pool).await;
+    let t =
+        s.f.thread(
+            s.games,
+            s.jonah,
+            "Cheap watches",
+            "Buy replica watches here",
+        )
+        .await;
+    let form =
+        s.f.page_as(&format!("/p/{}/report", t.first_post_id), &s.ruth_cookie)
+            .await;
+    assert!(form.contains("Buy replica watches here"), "{form}");
+    let response = report(
+        &s.f,
+        &s.ruth_cookie,
+        t.first_post_id,
+        "spam",
+        "Obvious spam",
+    )
+    .await;
+    assert_status(&response, StatusCode::OK);
+    assert!(response.body.contains("Thank you"));
+    // Reporting again while the first is open is refused.
+    let again = report(&s.f, &s.ruth_cookie, t.first_post_id, "spam", "").await;
+    assert_status(&again, StatusCode::FORBIDDEN);
+    // A second member's report joins the same item.
+    let response = report(&s.f, &s.maya_cookie, t.first_post_id, "spam", "").await;
+    assert_status(&response, StatusCode::OK);
+    // A reason must be one of those offered.
+    let bad = report(&s.f, &s.maya_cookie, t.first_post_id, "bogus", "").await;
+    assert_status(&bad, StatusCode::BAD_REQUEST);
+
+    for cookie in [&s.sam_cookie, &s.mo_cookie] {
+        let queue = s.f.page_as("/mod/queue", cookie).await;
+        assert!(queue.contains("Buy replica watches here"), "{queue}");
+        assert!(queue.contains("reported by ruth and maya"), "{queue}");
+        assert!(queue.contains("Obvious spam"), "{queue}");
+        assert!(queue.contains("1 item needs attention"), "{queue}");
+    }
+    // The badge in the header counts it, for staff only.
+    let page = s.f.page_as("/", &s.mo_cookie).await;
+    assert!(page.contains("href=\"/mod/queue\""), "{page}");
+    let page = s.f.page_as("/", &s.ruth_cookie).await;
+    assert!(!page.contains("href=\"/mod/queue\""));
+    // Nobody else gets in: members are told there's nothing there, and
+    // visitors are asked to log in, without a cookie.
+    for path in ["/mod/queue", "/mod/log", "/mod/users", "/mod/users/jonah"] {
+        let response = s.f.get_as(path, Some(&s.ruth_cookie)).await;
+        assert_status(&response, StatusCode::NOT_FOUND);
+        let response = s.f.get(path).await;
+        assert_status(&response, StatusCode::SEE_OTHER);
+        assert!(response.location().starts_with("/login?next="));
+        assert!(response.header(header::SET_COOKIE).is_none());
+    }
+    // Members can't act either.
+    let response =
+        s.f.submit(
+            &format!("/mod/p/{}", t.first_post_id),
+            &[("action", "hide"), ("reason", "x")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::NOT_FOUND);
+    assert_eq!(
+        count(
+            &s.f,
+            "SELECT count(*) FROM posts WHERE hidden_at IS NOT NULL"
+        )
+        .await,
+        0
+    );
+}
+
+#[sqlx::test]
+async fn members_report_members(pool: PgPool) {
+    let s = setup(pool).await;
+    let page = s.f.page_as("/u/jonah", &s.ruth_cookie).await;
+    assert!(page.contains("/u/jonah/report"), "{page}");
+    let response =
+        s.f.submit(
+            "/u/jonah/report",
+            &[("reason", "harassment"), ("details", "Keeps messaging me")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::OK);
+    let response =
+        s.f.submit(
+            "/u/ruth/report",
+            &[("reason", "spam")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+    let queue = s.f.page_as("/mod/queue", &s.mo_cookie).await;
+    assert!(queue.contains("Report on a member"), "{queue}");
+    assert!(queue.contains("Keeps messaging me"), "{queue}");
+    // Dismissing settles it, and is logged for staff only.
+    let id = count(&s.f, "SELECT id FROM reports").await;
+    ok(
+        &s.f,
+        &format!("/mod/reports/{id}/dismiss"),
+        &[("reason", "Nothing wrong")],
+        &s.mo_cookie,
+    )
+    .await;
+    let queue = s.f.page_as("/mod/queue", &s.mo_cookie).await;
+    assert!(queue.contains("The queue is empty"), "{queue}");
+    let log = s.f.page_as("/mod/log", &s.mo_cookie).await;
+    assert!(log.contains("dismissed a report about"), "{log}");
+    let public = s.f.page("/moderation").await;
+    assert!(!public.contains("dismissed"), "{public}");
+}
+
+#[sqlx::test]
+async fn reporting_a_message_shows_that_conversation_and_no_other_to_staff(pool: PgPool) {
+    let s = setup(pool).await;
+    let start = |cookie: String, to: &'static str, title: &'static str, body: &'static str| {
+        let f = &s.f;
+        async move {
+            let response = f
+                .submit(
+                    "/messages/new",
+                    &[("to", to), ("title", title), ("body", body)],
+                    Some(&cookie),
+                )
+                .await;
+            assert_status(&response, StatusCode::SEE_OTHER);
+            let location = response.location().to_owned();
+            location
+                .trim_start_matches("/messages/")
+                .split(|c: char| !c.is_ascii_digit())
+                .next()
+                .unwrap()
+                .parse::<i64>()
+                .unwrap()
+        }
+    };
+    let reported = start(
+        s.jonah_cookie.clone(),
+        "ruth",
+        "Games",
+        "come on, one more game, why are you ignoring me",
+    )
+    .await;
+    let other = start(
+        s.jonah_cookie.clone(),
+        "maya",
+        "Other",
+        "an entirely private aside",
+    )
+    .await;
+    let post = count(
+        &s.f,
+        &format!("SELECT max(id) FROM posts WHERE thread_id = {reported}"),
+    )
+    .await;
+    // Before the report, staff can't read it.
+    let response =
+        s.f.get_as(&format!("/messages/{reported}"), Some(&s.mo_cookie))
+            .await;
+    assert_status(&response, StatusCode::NOT_FOUND);
+    // Only those in it can report its messages.
+    let response = report(&s.f, &s.maya_cookie, post, "harassment", "").await;
+    assert_status(&response, StatusCode::NOT_FOUND);
+    let form =
+        s.f.page_as(&format!("/p/{post}/report"), &s.ruth_cookie)
+            .await;
+    assert!(
+        form.contains("lets the moderators read this conversation"),
+        "{form}"
+    );
+    let response = report(
+        &s.f,
+        &s.ruth_cookie,
+        post,
+        "harassment",
+        "Asked him to stop twice",
+    )
+    .await;
+    assert_status(&response, StatusCode::OK);
+
+    for cookie in [&s.mo_cookie, &s.sam_cookie] {
+        let queue = s.f.page_as("/mod/queue", cookie).await;
+        assert!(queue.contains("Report on a message"), "{queue}");
+        assert!(queue.contains("why are you ignoring me"), "{queue}");
+        let page = s.f.page_as(&format!("/messages/{reported}"), cookie).await;
+        assert!(page.contains("why are you ignoring me"), "{page}");
+        assert!(page.contains("one of its messages was reported"), "{page}");
+        // Reading it doesn't put staff in it: they can't write there, and
+        // it isn't in their list.
+        assert!(!page.contains("id=\"reply-body\""), "{page}");
+        let response =
+            s.f.submit(
+                &format!("/messages/{reported}"),
+                &[("body", "staff butting in")],
+                Some(cookie),
+            )
+            .await;
+        assert_status(&response, StatusCode::FORBIDDEN);
+        let list = s.f.page_as("/messages", cookie).await;
+        assert!(!list.contains("why are you ignoring me"), "{list}");
+        // The other conversation stays private.
+        let response =
+            s.f.get_as(&format!("/messages/{other}"), Some(cookie))
+                .await;
+        assert_status(&response, StatusCode::NOT_FOUND);
+        assert!(!response.body.contains("an entirely private aside"));
+    }
+    // Other members still can't.
+    let response =
+        s.f.get_as(&format!("/messages/{reported}"), Some(&s.maya_cookie))
+            .await;
+    assert_status(&response, StatusCode::NOT_FOUND);
+    // Hiding the message is logged for staff only.
+    ok(
+        &s.f,
+        &format!("/mod/p/{post}"),
+        &[("action", "hide"), ("reason", "Unwanted contact")],
+        &s.mo_cookie,
+    )
+    .await;
+    let public = s.f.page("/moderation").await;
+    assert!(!public.contains("Unwanted contact"), "{public}");
+    let log = s.f.page_as("/mod/log", &s.mo_cookie).await;
+    assert!(log.contains("Unwanted contact"), "{log}");
+    assert!(log.contains("Staff only"), "{log}");
+}
+
+#[sqlx::test]
+async fn the_contact_form_works_without_an_account(pool: PgPool) {
+    let s = setup(pool).await;
+    let page = s.f.get("/contact").await;
+    assert_status(&page, StatusCode::OK);
+    assert!(page.header(header::SET_COOKIE).is_none());
+    // From a post's report link, the message starts with its address.
+    let t = s.f.thread(s.games, s.jonah, "Thread", "Body").await;
+    let page =
+        s.f.page(&format!("/contact?post={}", t.first_post_id))
+            .await;
+    assert!(page.contains(&format!("/p/{}", t.first_post_id)), "{page}");
+    let thread_page = s.f.page(&format!("/t/{}/thread", t.thread_id)).await;
+    assert!(
+        thread_page.contains(&format!("/contact?post={}", t.first_post_id)),
+        "{thread_page}"
+    );
+
+    let response =
+        s.f.submit_as_ip(
+            "/contact",
+            &[
+                ("email", "worried@example.org"),
+                ("message", "Someone posted my address in Games"),
+            ],
+            "203.0.113.5",
+        )
+        .await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+    assert!(response.header(header::SET_COOKIE).is_none());
+    assert_eq!(response.location(), "/contact?sent=1");
+    let response =
+        s.f.submit_as_ip(
+            "/contact",
+            &[("email", "not an address"), ("message", "x")],
+            "203.0.113.5",
+        )
+        .await;
+    assert_status(&response, StatusCode::BAD_REQUEST);
+    let response =
+        s.f.submit_as_ip("/contact", &[("message", "  ")], "203.0.113.5")
+            .await;
+    assert_status(&response, StatusCode::BAD_REQUEST);
+    // It is rate limited by address.
+    let mut limited = false;
+    for i in 0..5 {
+        let response =
+            s.f.submit_as_ip(
+                "/contact",
+                &[("message", &format!("again {i}"))],
+                "203.0.113.5",
+            )
+            .await;
+        assert!(response.header(header::SET_COOKIE).is_none());
+        if response.status == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+        assert_status(&response, StatusCode::SEE_OTHER);
+    }
+    assert!(limited, "the contact form was never rate limited");
+    // Another address is unaffected.
+    let response =
+        s.f.submit_as_ip("/contact", &[("message", "from elsewhere")], "198.51.100.7")
+            .await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+
+    let queue = s.f.page_as("/mod/queue", &s.mo_cookie).await;
+    assert!(
+        queue.contains("Someone posted my address in Games"),
+        "{queue}"
+    );
+    assert!(queue.contains("mailto:worried@example.org"), "{queue}");
+    assert!(queue.contains("from a visitor"), "{queue}");
+}
+
+// ---------------------------------------------------------------------------
+// Posts
+
+#[sqlx::test]
+async fn hidden_posts_are_tombstones_for_all_but_staff(pool: PgPool) {
+    let s = setup(pool).await;
+    let t = s.f.thread(s.games, s.ruth, "Venues", "Opening post").await;
+    let post =
+        s.f.post(t.thread_id, s.jonah, "Ruth lives at 12 Secret Street")
+            .await;
+    report(&s.f, &s.maya_cookie, post, "personal", "").await;
+    let report_id = count(&s.f, "SELECT id FROM reports").await;
+    // Warm the anonymous cache first: hiding must clear it.
+    let path = format!("/t/{}/venues", t.thread_id);
+    assert!(s.f.page(&path).await.contains("12 Secret Street"));
+    let response = ok(
+        &s.f,
+        &format!("/mod/p/{post}"),
+        &[
+            ("action", "hide"),
+            ("reason", "Personal information"),
+            ("report", &report_id.to_string()),
+            ("back", "/mod/queue?done=1"),
+        ],
+        &s.mo_cookie,
+    )
+    .await;
+    assert_eq!(response.location(), "/mod/queue?done=1");
+    // Visitors and members see a tombstone.
+    for page in [
+        s.f.page(&path).await,
+        s.f.page_as(&path, &s.ruth_cookie).await,
+        s.f.page_as(&path, &s.jonah_cookie).await,
+    ] {
+        assert!(!page.contains("12 Secret Street"));
+        assert!(post_html(&page, post).contains("Post hidden by a moderator"));
+    }
+    // Staff still see it, marked.
+    let page = s.f.page_as(&path, &s.sam_cookie).await;
+    let html = post_html(&page, post);
+    assert!(html.contains("12 Secret Street"), "{html}");
+    assert!(html.contains("Hidden from members"), "{html}");
+    // Its history is hidden with it, except from staff.
+    let history = s.f.get(&format!("/p/{post}/revisions")).await;
+    assert_status(&history, StatusCode::NOT_FOUND);
+    s.f.page_as(&format!("/p/{post}/revisions"), &s.mo_cookie)
+        .await;
+    // The report is settled.
+    assert_eq!(
+        text(
+            &s.f,
+            &format!("SELECT status FROM reports WHERE id = {report_id}")
+        )
+        .await,
+        "resolved"
+    );
+    // The author is told, and may contest it.
+    let notes = s.f.page_as("/notifications", &s.jonah_cookie).await;
+    assert!(
+        notes.contains("A moderator hid your post № 2 in “Venues”. Reason: Personal information"),
+        "{notes}"
+    );
+    let action = last_action(&s.f).await;
+    assert!(notes.contains(&format!("/appeal/{action}")), "{notes}");
+    // The public log says so, without the post's text.
+    let public = s.f.page("/moderation").await;
+    assert!(public.contains("hid"), "{public}");
+    assert!(public.contains("Personal information"), "{public}");
+    assert!(public.contains("Venues"), "{public}");
+    assert!(!public.contains("12 Secret Street"));
+    // Showing it again brings it back for everyone.
+    ok(
+        &s.f,
+        &format!("/mod/p/{post}"),
+        &[("action", "unhide"), ("reason", "Address was fake")],
+        &s.mo_cookie,
+    )
+    .await;
+    assert!(s.f.page(&path).await.contains("12 Secret Street"));
+}
+
+#[sqlx::test]
+async fn moderators_delete_posts(pool: PgPool) {
+    let s = setup(pool).await;
+    let t = s.f.thread(s.games, s.ruth, "Thread", "Opening").await;
+    let post = s.f.post(t.thread_id, s.jonah, "Delete me please").await;
+    let response =
+        s.f.submit(
+            &format!("/mod/p/{post}"),
+            &[("action", "delete"), ("reason", "  ")],
+            Some(&s.mo_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::BAD_REQUEST);
+    ok(
+        &s.f,
+        &format!("/mod/p/{post}"),
+        &[("action", "delete"), ("reason", "Off topic")],
+        &s.mo_cookie,
+    )
+    .await;
+    for cookie in [None, Some(s.sam_cookie.as_str())] {
+        let response =
+            s.f.get_as(&format!("/t/{}/thread", t.thread_id), cookie)
+                .await;
+        assert!(!response.body.contains("Delete me please"));
+        assert!(
+            post_html(&response.body, post).contains("Post deleted by a moderator"),
+            "{}",
+            response.body
+        );
+    }
+    // A moderator's deletion can be undone.
+    ok(
+        &s.f,
+        &format!("/mod/p/{post}"),
+        &[("action", "restore"), ("reason", "Mistake")],
+        &s.mo_cookie,
+    )
+    .await;
+    assert!(
+        s.f.page(&format!("/t/{}/thread", t.thread_id))
+            .await
+            .contains("Delete me please")
+    );
+}
+
+#[sqlx::test]
+async fn staff_edit_posts_with_a_reason(pool: PgPool) {
+    let s = setup(pool).await;
+    let t =
+        s.f.thread(s.games, s.jonah, "Thread", "My number is 0123 456")
+            .await;
+    let form =
+        s.f.page_as(&format!("/p/{}/edit", t.first_post_id), &s.mo_cookie)
+            .await;
+    assert!(form.contains("name=\"reason\""), "{form}");
+    // Authors aren't asked for a reason.
+    let form =
+        s.f.page_as(&format!("/p/{}/edit", t.first_post_id), &s.jonah_cookie)
+            .await;
+    assert!(!form.contains("name=\"reason\""), "{form}");
+    // Other members can't edit it.
+    let response =
+        s.f.submit(
+            &format!("/p/{}/edit", t.first_post_id),
+            &[("body", "hacked")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+    let response =
+        s.f.submit(
+            &format!("/p/{}/edit", t.first_post_id),
+            &[("body", "My number is [removed]")],
+            Some(&s.mo_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::BAD_REQUEST);
+    ok(
+        &s.f,
+        &format!("/p/{}/edit", t.first_post_id),
+        &[
+            ("body", "My number is [removed]"),
+            ("reason", "Phone number"),
+        ],
+        &s.mo_cookie,
+    )
+    .await;
+    let page = s.f.page(&format!("/t/{}/thread", t.thread_id)).await;
+    assert!(page.contains("My number is [removed]"));
+    let log = s.f.page("/moderation").await;
+    assert!(log.contains("edited"), "{log}");
+    assert!(log.contains("Phone number"), "{log}");
+    let notes = s.f.page_as("/notifications", &s.jonah_cookie).await;
+    assert!(notes.contains("A moderator edited your post"), "{notes}");
+}
+
+#[sqlx::test]
+async fn moderators_redact_earlier_versions(pool: PgPool) {
+    let s = setup(pool).await;
+    let t =
+        s.f.thread(s.games, s.jonah, "Thread", "Lives at 9 Elm Road")
+            .await;
+    s.f.exec(&format!(
+        "UPDATE posts SET created_at = now() - interval '1 hour' WHERE id = {}",
+        t.first_post_id
+    ))
+    .await;
+    ok(
+        &s.f,
+        &format!("/p/{}/edit", t.first_post_id),
+        &[("body", "Lives nearby")],
+        &s.jonah_cookie,
+    )
+    .await;
+    let path = format!("/p/{}/revisions?v=1", t.first_post_id);
+    assert!(s.f.page(&path).await.contains("9 Elm Road"));
+    let page = s.f.page_as(&path, &s.mo_cookie).await;
+    assert!(page.contains("Redact version 1"), "{page}");
+    // Members aren't offered it, and can't do it.
+    let page = s.f.page_as(&path, &s.ruth_cookie).await;
+    assert!(!page.contains("Redact version"));
+    let redact = format!("/mod/p/{}/revisions/1/redact", t.first_post_id);
+    let response =
+        s.f.submit(&redact, &[("reason", "Address")], Some(&s.ruth_cookie))
+            .await;
+    assert_status(&response, StatusCode::NOT_FOUND);
+    ok(&s.f, &redact, &[("reason", "Home address")], &s.mo_cookie).await;
+    for cookie in [None, Some(s.mo_cookie.as_str())] {
+        let page = s.f.get_as(&path, cookie).await;
+        assert!(!page.body.contains("9 Elm Road"));
+        assert!(
+            page.body.contains("redacted by a moderator"),
+            "{}",
+            page.body
+        );
+    }
+    // The text is gone from the database too.
+    assert_eq!(
+        count(
+            &s.f,
+            "SELECT count(*) FROM post_revisions WHERE body_md LIKE '%Elm Road%'"
+        )
+        .await,
+        0
+    );
+    // Redacting it again, or the current version, is refused.
+    let response =
+        s.f.submit(&redact, &[("reason", "again")], Some(&s.mo_cookie))
+            .await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+    let response =
+        s.f.submit(
+            &format!("/mod/p/{}/revisions/2/redact", t.first_post_id),
+            &[("reason", "current")],
+            Some(&s.mo_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+    let log = s.f.page("/moderation").await;
+    assert!(log.contains("redacted version 1"), "{log}");
+}
+
+// ---------------------------------------------------------------------------
+// Threads
+
+#[sqlx::test]
+async fn moderators_lock_pin_rename_move_and_delete_threads(pool: PgPool) {
+    let s = setup(pool).await;
+    let t = s.f.thread(s.games, s.jonah, "Old title", "Opening").await;
+    let action = format!("/mod/t/{}", t.thread_id);
+    let page = s.f.page_as(&action, &s.mo_cookie).await;
+    assert!(page.contains("Move posts"), "{page}");
+    let thread_page =
+        s.f.page_as(&format!("/t/{}/old-title", t.thread_id), &s.mo_cookie)
+            .await;
+    assert!(thread_page.contains(&format!("href=\"{action}\"")));
+
+    ok(
+        &s.f,
+        &action,
+        &[("action", "lock"), ("reason", "Heated")],
+        &s.mo_cookie,
+    )
+    .await;
+    let response =
+        s.f.submit(
+            &format!("/t/{}/reply", t.thread_id),
+            &[("body", "One more thing")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+    ok(
+        &s.f,
+        &action,
+        &[("action", "pin"), ("reason", "Useful")],
+        &s.mo_cookie,
+    )
+    .await;
+    let category = s.f.page("/c/games").await;
+    assert!(
+        category.contains("Pinned") || category.contains("pinned"),
+        "{category}"
+    );
+
+    ok(
+        &s.f,
+        &action,
+        &[
+            ("action", "rename"),
+            ("title", "New title"),
+            ("reason", "Clearer"),
+        ],
+        &s.mo_cookie,
+    )
+    .await;
+    let response = s.f.get(&format!("/t/{}/old-title", t.thread_id)).await;
+    assert_status(&response, StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(response.location(), format!("/t/{}/new-title", t.thread_id));
+    let log = s.f.page("/moderation").await;
+    assert!(log.contains("renamed"), "{log}");
+    assert!(log.contains("it was “Old title”"), "{log}");
+
+    // Moving it into the members-only lounge takes it out of public view,
+    // and the public log stops naming it.
+    ok(
+        &s.f,
+        &action,
+        &[
+            ("action", "move"),
+            ("category", "lounge"),
+            ("reason", "Members only"),
+        ],
+        &s.mo_cookie,
+    )
+    .await;
+    let response = s.f.get(&format!("/t/{}/new-title", t.thread_id)).await;
+    assert_status(&response, StatusCode::NOT_FOUND);
+    let log = s.f.page("/moderation").await;
+    assert!(!log.contains("New title"), "{log}");
+    assert!(!log.contains("Old title"), "{log}");
+    assert!(log.contains("a thread you can’t see"), "{log}");
+    // The move itself, into a members-only category, isn't public.
+    assert!(!log.contains("Members only"), "{log}");
+    let staff_log = s.f.page_as("/mod/log", &s.mo_cookie).await;
+    assert!(staff_log.contains("Members only"), "{staff_log}");
+
+    ok(
+        &s.f,
+        &action,
+        &[("action", "delete"), ("reason", "Spam")],
+        &s.mo_cookie,
+    )
+    .await;
+    let response =
+        s.f.get_as(
+            &format!("/t/{}/new-title", t.thread_id),
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::NOT_FOUND);
+    let notes = s.f.page_as("/notifications", &s.jonah_cookie).await;
+    assert!(notes.contains("A moderator deleted your thread"), "{notes}");
+    assert!(notes.contains("A moderator locked your thread"), "{notes}");
+    ok(
+        &s.f,
+        &action,
+        &[("action", "restore"), ("reason", "Oops")],
+        &s.mo_cookie,
+    )
+    .await;
+    s.f.page_as(&format!("/t/{}/new-title", t.thread_id), &s.ruth_cookie)
+        .await;
+}
+
+/// Splitting: posts moved to a new thread are numbered from 1 there, keep
+/// their ids (so permalinks follow them) and leave their numbers behind.
+#[sqlx::test]
+async fn moving_posts_to_a_new_thread_keeps_numbers_and_links(pool: PgPool) {
+    let s = setup(pool).await;
+    let t =
+        s.f.thread(s.games, s.ruth, "Spirit Island", "Post one")
+            .await;
+    let mut posts = vec![t.first_post_id];
+    for i in 2..=6 {
+        posts.push(s.f.post(t.thread_id, s.jonah, &format!("Post {i}")).await);
+    }
+    // № 4 replies to № 3 (which moves with it) and № 6 to № 2 (which
+    // stays while № 6 moves).
+    s.f.exec(&format!(
+        "UPDATE posts SET reply_to_post_id = {} WHERE id = {}",
+        posts[2], posts[3]
+    ))
+    .await;
+    s.f.exec(&format!(
+        "UPDATE posts SET reply_to_post_id = {} WHERE id = {}",
+        posts[1], posts[5]
+    ))
+    .await;
+    let response =
+        s.f.submit(
+            &format!("/mod/t/{}/move-posts", t.thread_id),
+            &[
+                ("numbers", "3-4, 6"),
+                ("to", "new"),
+                ("title", "Spirit Island strategy"),
+                ("category", "games"),
+                ("reason", "Split off"),
+            ],
+            Some(&s.mo_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+    let new_thread = count(&s.f, "SELECT max(id) FROM threads").await;
+    assert!(
+        response
+            .location()
+            .starts_with(&format!("/t/{new_thread}/"))
+    );
+    // The new thread holds them as № 1-3, in order.
+    let seqs = |id: i64| {
+        let f = &s.f;
+        async move {
+            sqlx::query_as::<_, (i64, i32)>(sqlx::AssertSqlSafe(format!(
+                "SELECT thread_id, seq FROM posts WHERE id = {id}"
+            )))
+            .fetch_one(&f.db)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(seqs(posts[2]).await, (new_thread, 1));
+    assert_eq!(seqs(posts[3]).await, (new_thread, 2));
+    assert_eq!(seqs(posts[5]).await, (new_thread, 3));
+    assert_eq!(seqs(posts[4]).await, (t.thread_id, 5));
+    let new_page =
+        s.f.page(&format!("/t/{new_thread}/spirit-island-strategy"))
+            .await;
+    assert!(
+        new_page.contains("Post 3") && new_page.contains("Post 4") && new_page.contains("Post 6")
+    );
+    // The reply between moved posts survives; the one across threads goes.
+    assert!(
+        post_html(&new_page, posts[3]).contains("in reply to"),
+        "{new_page}"
+    );
+    assert!(!post_html(&new_page, posts[5]).contains("in reply to"));
+    // The old thread keeps every number: the moved ones say where they went.
+    let old = s.f.page(&format!("/t/{}/spirit-island", t.thread_id)).await;
+    for (i, id) in posts.iter().enumerate() {
+        assert!(
+            old.contains(&format!("id=\"p{id}\"")),
+            "№ {} missing",
+            i + 1
+        );
+    }
+    let moved = post_html(&old, posts[2]);
+    assert!(moved.contains("Moved to"), "{moved}");
+    assert!(moved.contains("Spirit Island strategy"), "{moved}");
+    assert!(!old.contains("Post 3"));
+    assert!(old.contains("Post 5"));
+    // Permalinks lead to the posts' new places.
+    let response = s.f.get(&format!("/p/{}", posts[3])).await;
+    assert_eq!(
+        response.location(),
+        format!("/t/{new_thread}/spirit-island-strategy#p{}", posts[3])
+    );
+    // The old thread's count of posts and the first-unread jump still work.
+    s.f.exec(&format!(
+        "INSERT INTO thread_reads (user_id, thread_id, last_read_seq) VALUES ({}, {}, 2)",
+        s.ruth, t.thread_id
+    ))
+    .await;
+    let response =
+        s.f.get_as(&format!("/t/{}/unread", t.thread_id), Some(&s.ruth_cookie))
+            .await;
+    assert_status(&response, StatusCode::TEMPORARY_REDIRECT);
+    assert!(
+        response.location().ends_with(&format!("#p{}", posts[4])),
+        "{}",
+        response.location()
+    );
+    let log = s.f.page("/moderation").await;
+    assert!(log.contains("moved 3 posts from"), "{log}");
+}
+
+/// Merging: moving every post to an existing thread appends them there and
+/// leaves the old thread leading to it.
+#[sqlx::test]
+async fn moving_all_posts_merges_threads(pool: PgPool) {
+    let s = setup(pool).await;
+    let target = s.f.thread(s.games, s.ruth, "Main thread", "Main one").await;
+    s.f.post(target.thread_id, s.ruth, "Main two").await;
+    let dupe = s.f.thread(s.games, s.jonah, "Duplicate", "Dupe one").await;
+    let dupe_two = s.f.post(dupe.thread_id, s.maya, "Dupe two").await;
+    // A link to the thread works as well as its number.
+    let response =
+        s.f.submit(
+            &format!("/mod/t/{}/move-posts", dupe.thread_id),
+            &[
+                ("numbers", "1-2"),
+                ("to", "existing"),
+                (
+                    "thread",
+                    &format!("http://localhost:8080/t/{}/main-thread", target.thread_id),
+                ),
+                ("reason", "Merge duplicates"),
+            ],
+            Some(&s.mo_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+    let page =
+        s.f.page(&format!("/t/{}/main-thread", target.thread_id))
+            .await;
+    let order: Vec<usize> = ["Main one", "Main two", "Dupe one", "Dupe two"]
+        .iter()
+        .map(|t| page.find(t).unwrap_or_else(|| panic!("{t} missing")))
+        .collect();
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{page}");
+    assert!(post_html(&page, dupe_two).contains("№ 4"));
+    // The emptied thread leads to the one it was merged into.
+    let response = s.f.get(&format!("/t/{}/duplicate", dupe.thread_id)).await;
+    assert_status(&response, StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        response.location(),
+        format!("/t/{}/main-thread", target.thread_id)
+    );
+    let category = s.f.page("/c/games").await;
+    assert!(!category.contains("Duplicate"), "{category}");
+    // Nonsense is refused.
+    for fields in [
+        vec![
+            ("numbers", "9"),
+            ("to", "existing"),
+            ("thread", &*target.thread_id.to_string()),
+        ],
+        vec![
+            ("numbers", "1"),
+            ("to", "existing"),
+            ("thread", "not a thread"),
+        ],
+        vec![
+            ("numbers", "1"),
+            ("to", "new"),
+            ("title", ""),
+            ("category", "games"),
+        ],
+    ] {
+        let mut fields = fields;
+        fields.push(("reason", "x"));
+        let response =
+            s.f.submit(
+                &format!("/mod/t/{}/move-posts", target.thread_id),
+                &fields,
+                Some(&s.mo_cookie),
+            )
+            .await;
+        assert_status(&response, StatusCode::BAD_REQUEST);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Silences and suspensions
+
+#[sqlx::test]
+async fn silenced_members_read_but_dont_write(pool: PgPool) {
+    let s = setup(pool).await;
+    let t = s.f.thread(s.games, s.ruth, "Thread", "Opening").await;
+    let own = s.f.post(t.thread_id, s.jonah, "Jonah's post").await;
+    ok(
+        &s.f,
+        "/mod/users/jonah/silence",
+        &[("days", "3"), ("reason", "Cool off")],
+        &s.mo_cookie,
+    )
+    .await;
+    let page =
+        s.f.page_as(&format!("/t/{}/thread", t.thread_id), &s.jonah_cookie)
+            .await;
+    assert!(page.contains("Your account is silenced until"), "{page}");
+    assert!(page.contains("Contest this"), "{page}");
+    assert!(!page.contains("id=\"reply-body\""), "{page}");
+    // Members-only content is still readable.
+    s.f.page_as("/c/lounge", &s.jonah_cookie).await;
+    for (path, fields) in [
+        (
+            "/c/games/new".to_owned(),
+            vec![("title", "Hi"), ("body", "Hello")],
+        ),
+        (format!("/t/{}/reply", t.thread_id), vec![("body", "Hello")]),
+        (format!("/p/{own}/edit"), vec![("body", "Edited")]),
+        (
+            format!("/p/{own}/reactions"),
+            vec![("emoji", "👍"), ("action", "add")],
+        ),
+        (
+            format!("/p/{}/fork", t.first_post_id),
+            vec![("title", "Fork"), ("body", "Hello"), ("category", "games")],
+        ),
+        (
+            "/messages/new".to_owned(),
+            vec![("to", "ruth"), ("body", "Hello")],
+        ),
+        ("/invites".to_owned(), vec![("note", "x")]),
+    ] {
+        let response = s.f.submit(&path, &fields, Some(&s.jonah_cookie)).await;
+        // Forms that can be shown again say why with a 400.
+        assert!(
+            response.status == StatusCode::FORBIDDEN || response.status == StatusCode::BAD_REQUEST,
+            "{path}: {}",
+            response.status
+        );
+        assert!(
+            response.body.contains("silenced"),
+            "{path}: {}",
+            response.body
+        );
+    }
+    assert_eq!(
+        count(
+            &s.f,
+            &format!("SELECT count(*) FROM posts WHERE author_id = {}", s.jonah)
+        )
+        .await,
+        1
+    );
+    assert_eq!(count(&s.f, "SELECT count(*) FROM invites").await, 0);
+    assert_eq!(count(&s.f, "SELECT count(*) FROM reactions").await, 0);
+    // They can still report, and delete their own posts.
+    let response = report(&s.f, &s.jonah_cookie, t.first_post_id, "other", "").await;
+    assert_status(&response, StatusCode::OK);
+    ok(&s.f, &format!("/p/{own}/delete"), &[], &s.jonah_cookie).await;
+    // Lifting the silence lets them write again.
+    ok(
+        &s.f,
+        "/mod/users/jonah/unsilence",
+        &[("reason", "Calmer now")],
+        &s.mo_cookie,
+    )
+    .await;
+    ok(
+        &s.f,
+        &format!("/t/{}/reply", t.thread_id),
+        &[("body", "Back again")],
+        &s.jonah_cookie,
+    )
+    .await;
+    let public = s.f.page("/moderation").await;
+    assert!(public.contains("silenced"), "{public}");
+    assert!(public.contains("for 3 days"), "{public}");
+    assert!(public.contains("lifted the silence on"), "{public}");
+}
+
+#[sqlx::test]
+async fn silenced_members_can_still_answer_the_moderators(pool: PgPool) {
+    let s = setup(pool).await;
+    let response = ok(
+        &s.f,
+        "/messages/new",
+        &[("to", "jonah"), ("body", "A word, please")],
+        &s.mo_cookie,
+    )
+    .await;
+    let conversation = response
+        .location()
+        .trim_start_matches("/messages/")
+        .to_owned();
+    let conversation: String = conversation
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    let peer = ok(
+        &s.f,
+        "/messages/new",
+        &[("to", "jonah"), ("body", "Hi jonah")],
+        &s.ruth_cookie,
+    )
+    .await;
+    let peer: String = peer
+        .location()
+        .trim_start_matches("/messages/")
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    ok(
+        &s.f,
+        "/mod/users/jonah/silence",
+        &[("days", "1"), ("reason", "x")],
+        &s.mo_cookie,
+    )
+    .await;
+    ok(
+        &s.f,
+        &format!("/messages/{conversation}"),
+        &[("body", "Sorry")],
+        &s.jonah_cookie,
+    )
+    .await;
+    let response =
+        s.f.submit(
+            &format!("/messages/{peer}"),
+            &[("body", "Hey")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+}
+
+#[sqlx::test]
+async fn suspended_members_read_only_what_visitors_read(pool: PgPool) {
+    let s = setup(pool).await;
+    let public = s.f.thread(s.games, s.ruth, "Public", "Public text").await;
+    let private =
+        s.f.thread(s.lounge, s.ruth, "Members", "Members-only text")
+            .await;
+    let own = s.f.post(public.thread_id, s.jonah, "Jonah's").await;
+    let conversation = ok(
+        &s.f,
+        "/messages/new",
+        &[("to", "jonah"), ("body", "a private word")],
+        &s.ruth_cookie,
+    )
+    .await;
+    let conversation = conversation.location().to_owned();
+    ok(
+        &s.f,
+        "/mod/users/jonah/suspend",
+        &[("days", "7"), ("reason", "Spamming")],
+        &s.sam_cookie,
+    )
+    .await;
+    let page =
+        s.f.page_as(&format!("/t/{}/public", public.thread_id), &s.jonah_cookie)
+            .await;
+    assert!(page.contains("Your account is suspended until"), "{page}");
+    assert!(page.contains("Public text"));
+    for path in [
+        format!("/t/{}/members", private.thread_id),
+        "/c/lounge".to_owned(),
+        format!("/p/{}", private.first_post_id),
+        conversation.clone(),
+    ] {
+        let response = s.f.get_as(&path, Some(&s.jonah_cookie)).await;
+        assert_status(&response, StatusCode::NOT_FOUND);
+        assert!(!response.body.contains("Members-only text"));
+        assert!(!response.body.contains("a private word"));
+    }
+    let index = s.f.page_as("/", &s.jonah_cookie).await;
+    assert!(!index.contains("Lounge"), "{index}");
+    for (path, fields) in [
+        (
+            format!("/t/{}/reply", public.thread_id),
+            vec![("body", "Hello")],
+        ),
+        (format!("/p/{own}/delete"), vec![]),
+        (
+            format!("/p/{}/report", public.first_post_id),
+            vec![("reason", "spam")],
+        ),
+    ] {
+        let response = s.f.submit(&path, &fields, Some(&s.jonah_cookie)).await;
+        assert_status(&response, StatusCode::FORBIDDEN);
+    }
+    // They can contest it.
+    let action = last_action(&s.f).await;
+    assert!(page.contains(&format!("/appeal/{action}")), "{page}");
+    s.f.page_as(&format!("/appeal/{action}"), &s.jonah_cookie)
+        .await;
+    ok_or_200(
+        &s.f,
+        &format!("/appeal/{action}"),
+        &[("details", "It was a misunderstanding")],
+        &s.jonah_cookie,
+    )
+    .await;
+    // Only once, and only their own.
+    let response =
+        s.f.submit(
+            &format!("/appeal/{action}"),
+            &[("details", "again")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+    let response =
+        s.f.get_as(&format!("/appeal/{action}"), Some(&s.ruth_cookie))
+            .await;
+    assert_status(&response, StatusCode::NOT_FOUND);
+    // The appeal is in the queue; reversing it lifts the suspension.
+    let queue = s.f.page_as("/mod/queue", &s.mo_cookie).await;
+    assert!(queue.contains("It was a misunderstanding"), "{queue}");
+    assert!(queue.contains("contests a decision"), "{queue}");
+    let appeal = count(&s.f, "SELECT id FROM reports WHERE kind = 'appeal'").await;
+    ok(
+        &s.f,
+        &format!("/mod/appeals/{appeal}"),
+        &[("decision", "overturn"), ("reason", "Fair enough")],
+        &s.mo_cookie,
+    )
+    .await;
+    s.f.page_as(
+        &format!("/t/{}/members", private.thread_id),
+        &s.jonah_cookie,
+    )
+    .await;
+    let notes = s.f.page_as("/notifications", &s.jonah_cookie).await;
+    assert!(notes.contains("reversed their decision"), "{notes}");
+}
+
+async fn ok_or_200(f: &Forum, path: &str, fields: &[(&str, &str)], cookie: &str) {
+    let response = f.submit(path, fields, Some(cookie)).await;
+    assert!(
+        response.status == StatusCode::OK || response.status == StatusCode::SEE_OTHER,
+        "{}: {}",
+        response.status,
+        response.body
+    );
+}
+
+#[sqlx::test]
+async fn staff_cant_be_silenced_or_suspended(pool: PgPool) {
+    let s = setup(pool).await;
+    for action in ["silence", "suspend", "suspend-branch", "spammer"] {
+        let response =
+            s.f.submit(
+                &format!("/mod/users/sam/{action}"),
+                &[("days", "7"), ("reason", "Coup")],
+                Some(&s.mo_cookie),
+            )
+            .await;
+        assert_status(&response, StatusCode::FORBIDDEN);
+    }
+    assert_eq!(
+        count(&s.f, "SELECT count(*) FROM users WHERE suspended_until IS NOT NULL OR silenced_until IS NOT NULL OR deleted_at IS NOT NULL").await,
+        0
+    );
+}
+
+#[sqlx::test]
+async fn suspending_an_invite_branch(pool: PgPool) {
+    let s = setup(pool).await;
+    let felix = s.f.invitee("felix", s.jonah).await;
+    s.f.invitee("cheapdeals", felix).await;
+    let mod_child = s.f.invitee("modchild", felix).await;
+    s.f.exec(&format!(
+        "UPDATE users SET role = 'moderator' WHERE id = {mod_child}"
+    ))
+    .await;
+    s.f.user("other").await;
+    let page = s.f.page_as("/mod/users/felix", &s.mo_cookie).await;
+    assert!(
+        page.contains("Suspend with everyone they invited (2)"),
+        "{page}"
+    );
+    ok(
+        &s.f,
+        "/mod/users/felix/suspend-branch",
+        &[("days", "30"), ("reason", "Spam ring")],
+        &s.mo_cookie,
+    )
+    .await;
+    let suspended: Vec<String> = sqlx::query_scalar(
+        "SELECT username::text FROM users WHERE suspended_until > now() ORDER BY username",
+    )
+    .fetch_all(&s.f.db)
+    .await
+    .unwrap();
+    assert_eq!(suspended, vec!["cheapdeals", "felix"]);
+    let log = s.f.page("/moderation").await;
+    assert!(log.contains("and 1 other member they invited"), "{log}");
+}
+
+#[sqlx::test]
+async fn deleting_a_spammer_removes_everything(pool: PgPool) {
+    let s = setup(pool).await;
+    let spammer = s.f.member("cheapdeals", "user", None).await;
+    let cookie = s.f.session(spammer).await;
+    let t =
+        s.f.thread(s.games, spammer, "Best replica watches", "Buy now")
+            .await;
+    s.f.post(t.thread_id, s.ruth, "Ruth replies to the spam")
+        .await;
+    let other = s.f.thread(s.games, s.ruth, "Real thread", "Real").await;
+    let spam_reply = s.f.post(other.thread_id, spammer, "Visit my shop").await;
+    report(&s.f, &s.ruth_cookie, spam_reply, "spam", "").await;
+    ok(
+        &s.f,
+        "/mod/users/cheapdeals/spammer",
+        &[("reason", "Spam")],
+        &s.mo_cookie,
+    )
+    .await;
+    let category = s.f.page("/c/games").await;
+    assert!(!category.contains("Best replica watches"), "{category}");
+    let page =
+        s.f.page(&format!("/t/{}/real-thread", other.thread_id))
+            .await;
+    assert!(!page.contains("Visit my shop"));
+    // Their session is over and they can't log back in.
+    let response = s.f.get_as("/settings", Some(&cookie)).await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+    assert!(s.f.get_as("/u/cheapdeals", None).await.status == StatusCode::NOT_FOUND);
+    // The report about them is settled.
+    assert_eq!(
+        count(&s.f, "SELECT count(*) FROM reports WHERE status = 'open'").await,
+        0
+    );
+    let log = s.f.page("/moderation").await;
+    assert!(log.contains("as a spammer"), "{log}");
+}
+
+// ---------------------------------------------------------------------------
+// New members
+
+#[sqlx::test]
+async fn new_members_first_posts_are_held_for_approval(pool: PgPool) {
+    let mut s = setup(pool).await;
+    // New members' lower rates are tested on their own below.
+    s.f = s.f.without_rate_limits();
+    settings::set(&s.f.db, "messages", &MessageSettings::default())
+        .await
+        .unwrap();
+    let tomasz = s.f.member("tomasz", "user", None).await;
+    let cookie = s.f.session(tomasz).await;
+    let response = ok(
+        &s.f,
+        "/c/games/new",
+        &[("title", "Hi from Leeds!"), ("body", "Hello, I love Brass")],
+        &cookie,
+    )
+    .await;
+    let held_path = response.location().to_owned();
+    assert!(held_path.starts_with("/held/"), "{held_path}");
+    // Only they and staff can see it.
+    let page = s.f.page_as(&held_path, &cookie).await;
+    assert!(page.contains("Waiting for approval"), "{page}");
+    assert!(page.contains("Hello, I love Brass"));
+    for cookie in [None, Some(s.ruth_cookie.as_str())] {
+        let response = s.f.get_as(&held_path, cookie).await;
+        assert!(!response.body.contains("Hello, I love Brass"));
+    }
+    assert!(!s.f.page("/c/games").await.contains("Hi from Leeds!"));
+    let queue = s.f.page_as("/mod/queue", &s.mo_cookie).await;
+    assert!(queue.contains("Held for approval"), "{queue}");
+    assert!(queue.contains("Hello, I love Brass"), "{queue}");
+    let held = count(&s.f, "SELECT id FROM held_posts").await;
+    ok(
+        &s.f,
+        &format!("/mod/held/{held}/approve"),
+        &[("reason", "")],
+        &s.mo_cookie,
+    )
+    .await;
+    assert!(s.f.page("/c/games").await.contains("Hi from Leeds!"));
+    let notes = s.f.page_as("/notifications", &cookie).await;
+    assert!(notes.contains("approved your post"), "{notes}");
+    let log = s.f.page("/moderation").await;
+    assert!(log.contains("approved a post by new member"), "{log}");
+    // The second post is held too; rejecting it posts nothing.
+    let thread = count(&s.f, "SELECT max(id) FROM threads").await;
+    let response = ok(
+        &s.f,
+        &format!("/t/{thread}/reply"),
+        &[("body", "Buy watches")],
+        &cookie,
+    )
+    .await;
+    assert!(response.location().starts_with("/held/"));
+    let held = count(&s.f, "SELECT max(id) FROM held_posts").await;
+    ok(
+        &s.f,
+        &format!("/mod/held/{held}/reject"),
+        &[("reason", "Advertising")],
+        &s.mo_cookie,
+    )
+    .await;
+    assert_eq!(
+        count(
+            &s.f,
+            &format!("SELECT count(*) FROM posts WHERE author_id = {tomasz}")
+        )
+        .await,
+        1
+    );
+    let notes = s.f.page_as("/notifications", &cookie).await;
+    assert!(
+        notes.contains("didn’t approve your post. Reason: Advertising"),
+        "{notes}"
+    );
+    // Rejections aren't in the public log.
+    assert!(!s.f.page("/moderation").await.contains("Advertising"));
+    // Once two have been approved, posts go straight up.
+    let response = ok(
+        &s.f,
+        &format!("/t/{thread}/reply"),
+        &[("body", "Second try")],
+        &cookie,
+    )
+    .await;
+    let held = count(&s.f, "SELECT max(id) FROM held_posts").await;
+    assert_eq!(response.location(), format!("/held/{held}"));
+    ok(
+        &s.f,
+        &format!("/mod/held/{held}/approve"),
+        &[],
+        &s.mo_cookie,
+    )
+    .await;
+    let response = ok(
+        &s.f,
+        &format!("/t/{thread}/reply"),
+        &[("body", "Straight up")],
+        &cookie,
+    )
+    .await;
+    assert!(
+        response.location().contains("#p"),
+        "{}",
+        response.location()
+    );
+    // Approving twice does nothing more.
+    let response =
+        s.f.submit(
+            &format!("/mod/held/{held}/approve"),
+            &[],
+            Some(&s.mo_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::NOT_FOUND);
+    assert_eq!(
+        count(
+            &s.f,
+            &format!("SELECT count(*) FROM posts WHERE author_id = {tomasz}")
+        )
+        .await,
+        3
+    );
+}
+
+#[sqlx::test]
+async fn holding_can_be_turned_off_and_staff_are_never_held(pool: PgPool) {
+    let s = setup(pool).await;
+    settings::set(&s.f.db, "messages", &MessageSettings::default())
+        .await
+        .unwrap();
+    let newbie = s.f.member("newbie", "user", None).await;
+    let cookie = s.f.session(newbie).await;
+    let newmod = s.f.member("newmod", "moderator", None).await;
+    let mod_cookie = s.f.session(newmod).await;
+    let response = ok(
+        &s.f,
+        "/c/games/new",
+        &[("title", "Staff thread"), ("body", "Hello")],
+        &mod_cookie,
+    )
+    .await;
+    assert!(!response.location().starts_with("/held/"));
+    // The admin turns holding off.
+    let page = s.f.page_as("/admin/moderation", &s.sam_cookie).await;
+    assert!(page.contains("name=\"hold_posts\""), "{page}");
+    let response =
+        s.f.submit(
+            "/admin/moderation",
+            &[("hold_posts", "0"), ("ip_retention_days", "90")],
+            Some(&s.mo_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+    ok(
+        &s.f,
+        "/admin/moderation",
+        &[("hold_posts", "0"), ("ip_retention_days", "90")],
+        &s.sam_cookie,
+    )
+    .await;
+    assert_eq!(
+        settings::moderation_settings(s.f.state.db()).await.unwrap(),
+        ModerationSettings {
+            hold_posts: 0,
+            ip_retention_days: 90
+        }
+    );
+    let response = ok(
+        &s.f,
+        "/c/games/new",
+        &[("title", "Straight up"), ("body", "Hello")],
+        &cookie,
+    )
+    .await;
+    assert!(!response.location().starts_with("/held/"));
+}
+
+#[sqlx::test]
+async fn new_members_post_more_slowly(pool: PgPool) {
+    let s = setup(pool).await;
+    // Accounts are new until they have five posts.
+    settings::set(
+        &s.f.db,
+        "messages",
+        &MessageSettings {
+            new_user_days: 0,
+            new_user_posts: 5,
+            ..MessageSettings::default()
+        },
+    )
+    .await
+    .unwrap();
+    settings::set(
+        &s.f.db,
+        "moderation",
+        &ModerationSettings {
+            hold_posts: 0,
+            ..ModerationSettings::default()
+        },
+    )
+    .await
+    .unwrap();
+    let t = s.f.thread(s.games, s.ruth, "Thread", "Opening").await;
+    for i in 0..4 {
+        s.f.post(t.thread_id, s.ruth, &format!("Established {i}"))
+            .await;
+    }
+    let newbie = s.f.member("newbie", "user", None).await;
+    let cookie = s.f.session(newbie).await;
+    let new_burst = parlour::ratelimit::rule(
+        parlour::ratelimit::Action::NewMemberPost,
+        parlour::ratelimit::Scope::User,
+    )
+    .burst;
+    let burst = parlour::ratelimit::rule(
+        parlour::ratelimit::Action::Post,
+        parlour::ratelimit::Scope::User,
+    )
+    .burst;
+    assert!(new_burst < burst);
+    for i in 0..new_burst {
+        ok(
+            &s.f,
+            &format!("/t/{}/reply", t.thread_id),
+            &[("body", &format!("post {i}"))],
+            &cookie,
+        )
+        .await;
+    }
+    let response =
+        s.f.submit(
+            &format!("/t/{}/reply", t.thread_id),
+            &[("body", "one too many")],
+            Some(&cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::TOO_MANY_REQUESTS);
+    // Established members aren't held to it.
+    for i in 0..=new_burst {
+        ok(
+            &s.f,
+            &format!("/t/{}/reply", t.thread_id),
+            &[("body", &format!("ruth {i}"))],
+            &s.ruth_cookie,
+        )
+        .await;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The member record: notes and addresses
+
+#[sqlx::test]
+async fn staff_keep_notes_and_see_shared_addresses(pool: PgPool) {
+    let s = setup(pool).await;
+    for (user, ip) in [
+        (s.jonah, "198.51.100.1"),
+        (s.maya, "198.51.100.1"),
+        (s.ruth, "198.51.100.2"),
+    ] {
+        parlour::sessions::create(&s.f.db, user, &axum::http::HeaderMap::new(), ip)
+            .await
+            .unwrap();
+    }
+    // Using the site records the address too.
+    let response =
+        s.f.request(
+            axum::http::Request::get("/")
+                .header(header::COOKIE, &s.jonah_cookie)
+                .header("x-forwarded-for", "192.0.2.77")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_status(&response, StatusCode::OK);
+    s.f.exec("UPDATE sessions SET last_seen_at = now() - interval '1 hour'")
+        .await;
+    s.f.request(
+        axum::http::Request::get("/")
+            .header(header::COOKIE, &s.jonah_cookie)
+            .header("x-forwarded-for", "192.0.2.77")
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await;
+    ok(
+        &s.f,
+        "/mod/users/jonah/notes",
+        &[("body", "Was warned about spoilers in March")],
+        &s.mo_cookie,
+    )
+    .await;
+    let page = s.f.page_as("/mod/users/jonah", &s.sam_cookie).await;
+    assert!(
+        page.contains("Was warned about spoilers in March"),
+        "{page}"
+    );
+    assert!(page.contains("198.51.100.1"), "{page}");
+    assert!(page.contains("192.0.2.77"), "{page}");
+    assert!(page.contains("/mod/users/maya"), "{page}");
+    assert!(page.contains("jonah@example.com"), "{page}");
+    // Notes are for staff only.
+    let profile = s.f.page_as("/u/jonah", &s.ruth_cookie).await;
+    assert!(!profile.contains("spoilers in March"));
+    assert!(!s.f.page("/moderation").await.contains("note"));
+    // Addresses older than the retention period are forgotten.
+    s.f.exec(
+        "UPDATE user_ips SET last_seen_at = now() - interval '100 days' WHERE ip = '198.51.100.1'",
+    )
+    .await;
+    let page = s.f.page_as("/mod/users/jonah", &s.sam_cookie).await;
+    assert!(!page.contains("198.51.100.1"), "{page}");
+    parlour::moderation::run_forget_ips(s.f.state.clone(), serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        count(
+            &s.f,
+            "SELECT count(*) FROM user_ips WHERE ip = '198.51.100.1'"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count(&s.f, "SELECT count(*) FROM jobs WHERE kind = 'forget_ips'").await,
+        1
+    );
+    // The member list finds people.
+    let list = s.f.page_as("/mod/users?q=jon", &s.mo_cookie).await;
+    assert!(list.contains("/mod/users/jonah"), "{list}");
+    assert!(!list.contains("/mod/users/maya"), "{list}");
+}
+
+// ---------------------------------------------------------------------------
+// The public log
+
+#[sqlx::test]
+async fn the_public_log_shows_only_public_content(pool: PgPool) {
+    let s = setup(pool).await;
+    let public = s.f.thread(s.games, s.jonah, "Open thread", "x").await;
+    let private =
+        s.f.thread(s.lounge, s.jonah, "Lounge secret title", "y")
+            .await;
+    // Warm the cache.
+    let before = s.f.get("/moderation").await;
+    assert_status(&before, StatusCode::OK);
+    assert!(before.header(header::SET_COOKIE).is_none());
+    for t in [&public, &private] {
+        ok(
+            &s.f,
+            &format!("/mod/p/{}", t.first_post_id),
+            &[
+                ("action", "hide"),
+                ("reason", &format!("reason for {}", t.thread_id)),
+            ],
+            &s.mo_cookie,
+        )
+        .await;
+    }
+    let log = s.f.page("/moderation").await;
+    assert!(log.contains("Open thread"), "{log}");
+    assert!(log.contains(&format!("reason for {}", public.thread_id)));
+    assert!(!log.contains("Lounge secret title"), "{log}");
+    assert!(!log.contains(&format!("reason for {}", private.thread_id)));
+    // Members see the same public log; staff see both in theirs.
+    let log = s.f.page_as("/moderation", &s.ruth_cookie).await;
+    assert!(!log.contains("Lounge secret title"));
+    let staff = s.f.page_as("/mod/log", &s.mo_cookie).await;
+    assert!(staff.contains("Lounge secret title"), "{staff}");
+    // Footer links to it from every page.
+    assert!(s.f.page("/").await.contains("href=\"/moderation\""));
+}

@@ -243,6 +243,8 @@ struct ThreadTemplate {
     divider_before: Option<i64>,
     /// How closely a logged-in viewer follows the thread.
     watch: Option<WatchLevel>,
+    /// Whether the viewer is staff, who see moderation links.
+    staff: bool,
 }
 
 impl ThreadTemplate {
@@ -357,6 +359,7 @@ pub async fn thread(
             reaction_types,
             divider_before,
             watch,
+            staff: viewer.is_staff(),
         },
         &deps,
     )
@@ -417,7 +420,13 @@ async fn conversation_or_not_found(
         Some(target) if target.conversation().is_some() => {
             Ok(Redirect::temporary(&target.href()).into_response())
         }
-        _ => web::not_found(state, viewer).await,
+        // A thread merged into another leads there.
+        _ => match content::moderation::merged_into(&state.db, viewer, id).await? {
+            Some((to, slug)) => {
+                Ok(Redirect::temporary(&format::thread_href(&to, &slug)).into_response())
+            }
+            None => web::not_found(state, viewer).await,
+        },
     }
 }
 

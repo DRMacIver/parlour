@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE threads SET locked = $2, version = version + 1 WHERE id = $1 AND locked <> $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c7f0c9764228e0bf03b5645e891a536945de3793eaf59c39cd9a29e21047d2ce"
+}

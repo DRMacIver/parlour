@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT p.id, p.seq, p.created_at, p.edited_at,\n               (p.deleted_at IS NOT NULL) AS \"deleted!\", (p.hidden_at IS NOT NULL) AS \"hidden!\",\n               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.body_html END AS body_html,\n               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.author_id END AS author_id,\n               r.id AS \"reply_id?\", r.seq AS \"reply_seq?\",\n               ru.id AS \"reply_user_id?\", ru.username AS \"reply_username?\", ru.display_name AS \"reply_display_name?\"\n        FROM posts p\n        LEFT JOIN posts r ON r.id = p.reply_to_post_id AND r.thread_id = p.thread_id\n        LEFT JOIN users ru ON ru.id = r.author_id AND r.deleted_at IS NULL AND r.hidden_at IS NULL\n        WHERE p.thread_id = $1 AND p.seq BETWEEN $2 AND $3\n        ORDER BY p.seq\n        ",
+  "query": "\n        SELECT p.id, p.seq, p.created_at, p.edited_at,\n               (p.deleted_at IS NOT NULL) AS \"deleted!\", (p.hidden_at IS NOT NULL) AS \"hidden!\",\n               (p.deleted_by IS NOT NULL AND p.deleted_by <> p.author_id) AS \"deleted_by_staff!\",\n               CASE WHEN p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $4) THEN p.body_html END AS body_html,\n               CASE WHEN p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $4) THEN p.author_id END AS author_id,\n               r.id AS \"reply_id?\", r.seq AS \"reply_seq?\",\n               ru.id AS \"reply_user_id?\", ru.username AS \"reply_username?\", ru.display_name AS \"reply_display_name?\"\n        FROM posts p\n        LEFT JOIN posts r ON r.id = p.reply_to_post_id AND r.thread_id = p.thread_id\n        LEFT JOIN users ru ON ru.id = r.author_id AND r.deleted_at IS NULL AND (r.hidden_at IS NULL OR $4)\n        WHERE p.thread_id = $1 AND p.seq BETWEEN $2 AND $3\n        ORDER BY p.seq\n        ",
   "describe": {
     "columns": [
       {
@@ -61,18 +61,24 @@
       },
       {
         "ordinal": 6,
+        "name": "deleted_by_staff!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
         "name": "body_html",
         "type_info": "Text",
         "origin": "Expression"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "author_id",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "reply_id?",
         "type_info": "Int8",
         "origin": {
@@ -83,7 +89,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "reply_seq?",
         "type_info": "Int4",
         "origin": {
@@ -94,7 +100,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "reply_user_id?",
         "type_info": "Int8",
         "origin": {
@@ -105,7 +111,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "reply_username?",
         "type_info": {
           "Custom": {
@@ -121,7 +127,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "reply_display_name?",
         "type_info": "Text",
         "origin": {
@@ -136,7 +142,8 @@
       "Left": [
         "Int8",
         "Int4",
-        "Int4"
+        "Int4",
+        "Bool"
       ]
     },
     "nullable": [
@@ -148,6 +155,7 @@
       null,
       null,
       null,
+      null,
       true,
       true,
       true,
@@ -155,5 +163,5 @@
       true
     ]
   },
-  "hash": "d06f56a972bfbddf313f7a25a344f928dad68bc68dc23622a63166b74fbdcd82"
+  "hash": "07bb53e35878ff57acf724b546e8e789b36dd6a46ac854b3d86884dff4abd1c1"
 }

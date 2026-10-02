@@ -97,6 +97,7 @@ async fn serve(db: sqlx::PgPool, config: Config) -> anyhow::Result<()> {
     if let Some(link) = setup::prepare(&state).await? {
         tracing::warn!("This forum has no admin account yet. To set it up, open {link}");
     }
+    parlour::moderation::schedule_forgetting(&state).await?;
     jobs::spawn_workers(&state, 2);
     tracing::info!(%bind, base_url = state.config().base_url, "parlour listening");
     axum::serve(

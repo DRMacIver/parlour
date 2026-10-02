@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE threads SET pinned = $2, version = version + 1 WHERE id = $1 AND pinned <> $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f5ac8e0e89a6f06cbb4c6d3fea19a633859507fcda58bd1ba3994d4627499cf3"
+}

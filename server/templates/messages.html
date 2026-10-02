@@ -45,6 +45,7 @@
       <h2 id="conversation-heading">{{ shown.page.conversation.name(shown.page.thread.title, viewer_id.clone()) }}{% if shown.page.conversation.staff_message %} <span class="flag flag-staff">Staff message</span>{% endif %}</h2>
       <p class="row-meta">{{ shown.page.conversation.people(viewer_id.clone()) }}</p>
     </div>
+    {% if shown.participant %}
     <div class="conversation-actions">
       {% if shown.page.conversation.is_group() && shown.refusal.is_none() && ctx.start_refusal.is_none() %}
       <form class="form-inline add-person" method="post" action="/messages/{{ shown.page.thread.id }}/people">
@@ -60,15 +61,17 @@
       <form class="form-inline" method="post" action="/messages/{{ shown.page.thread.id }}/leave"><button class="button button-small button-quiet" type="submit">Leave</button></form>
       {% if let Some(other) = shown.blockable %}<a class="button button-small button-quiet" href="/u/{{ other.username }}/block">Block…</a>{% endif %}
     </div>
+    {% endif %}
   </header>
+  {% if !shown.participant %}<div class="notice" role="status"><p>You can read this conversation because one of its messages was reported. Its other conversations stay private.</p></div>{% endif %}
   {% call f::errors(self.errors()) %}{% endcall %}
   {% call m::pagination(shown.pagination, "Pages of this conversation") %}{% endcall %}
   <div class="messages">
   {% for post in shown.page.posts %}
   {% if self.divider_is(post.id) %}<div class="unread-divider" role="separator" id="unread">New</div>{% endif %}
   {% match post.body %}
-  {% when PostBody::Live { author, body_html, edited_at } %}
-  <article class="message" id="p{{ post.id }}">
+  {% when PostBody::Live { author, body_html, edited_at, hidden } %}
+  <article class="message{% if *hidden %} post-hidden{% endif %}" id="p{{ post.id }}">
     {% call m::avatar(author.user, "avatar-small") %}{% endcall %}
     <div class="message-main">
       <header class="message-info">
@@ -79,8 +82,10 @@
         {% if let Some(edited) = edited_at %}<a class="edited" href="/p/{{ post.id }}/revisions">edited {% call m::time(edited) %}{% endcall %}</a>{% endif %}
         <span class="spacer"></span>
         <span class="post-actions">
-          {%- if shown.refusal.is_none() %}<a href="/t/{{ shown.page.thread.id }}/reply?to={{ post.id }}">reply</a> · <a href="/t/{{ shown.page.thread.id }}/reply?quote={{ post.id }}">quote</a>{% endif -%}
-          {%- if self.is_mine(author.user.id) %}{% if shown.refusal.is_none() %} · {% endif %}<a href="/p/{{ post.id }}/edit">edit</a> · <a href="/p/{{ post.id }}/delete">delete</a>{% endif -%}
+          {%- if *hidden %}<span class="flag flag-hidden">Hidden</span> · {% endif -%}
+          {%- if shown.refusal.is_none() && !*hidden %}<a href="/t/{{ shown.page.thread.id }}/reply?to={{ post.id }}">reply</a> · <a href="/t/{{ shown.page.thread.id }}/reply?quote={{ post.id }}">quote</a> · {% endif -%}
+          {%- if self.is_mine(author.user.id) %}{% if !*hidden %}<a href="/p/{{ post.id }}/edit">edit</a> · {% endif %}<a href="/p/{{ post.id }}/delete">delete</a>{% else if shown.participant %}<a href="/p/{{ post.id }}/report">report</a>{% endif -%}
+          {%- if shown.staff %} · <a href="/mod/p/{{ post.id }}">moderate</a>{% endif -%}
         </span>
       </header>
       {% if post.from_blocked %}
@@ -112,8 +117,10 @@
       {% endif %}
     </div>
   </article>
-  {% when PostBody::Deleted %}
-  <article class="message message-tombstone" id="p{{ post.id }}"><a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a> <span>Message deleted by its author</span> {% call m::time(post.created_at) %}{% endcall %}</article>
+  {% when PostBody::Deleted { by_moderator } %}
+  <article class="message message-tombstone" id="p{{ post.id }}"><a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a> <span>{% if *by_moderator %}Message deleted by a moderator{% else %}Message deleted by its author{% endif %}</span> {% call m::time(post.created_at) %}{% endcall %}</article>
+  {% when PostBody::Moved { to } %}
+  <article class="message message-tombstone" id="p{{ post.id }}"><a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a> <span>Message moved elsewhere</span> {% call m::time(post.created_at) %}{% endcall %}</article>
   {% when PostBody::Hidden %}
   <article class="message message-tombstone" id="p{{ post.id }}"><a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a> <span>Message hidden by a moderator</span> {% call m::time(post.created_at) %}{% endcall %}</article>
   {% endmatch %}

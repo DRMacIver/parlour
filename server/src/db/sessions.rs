@@ -75,13 +75,15 @@ pub async fn create<'c>(
     )
     .execute(&mut *tx)
     .await?;
+    crate::db::moderation::record_ip(&mut *tx, user_id, ip).await?;
     tx.commit().await?;
     Ok(token)
 }
 
 /// The user a session token belongs to, if it is a current session of an
-/// account that hasn't been deleted.
-pub async fn lookup(db: &Db, token: &str) -> sqlx::Result<Option<UserCtx>> {
+/// account that hasn't been deleted. Every few minutes this counts as a
+/// visit from `ip`, which is recorded for moderators (DESIGN.md §8).
+pub async fn lookup(db: &Db, token: &str, ip: &str) -> sqlx::Result<Option<UserCtx>> {
     if !tokens::plausible(token) {
         return Ok(None);
     }
@@ -111,6 +113,7 @@ pub async fn lookup(db: &Db, token: &str) -> sqlx::Result<Option<UserCtx>> {
         )
         .execute(db.pool())
         .await?;
+        crate::db::moderation::record_ip(db, user.id, ip).await?;
     }
     Ok(Some(user))
 }
@@ -143,7 +146,7 @@ pub async fn still_current(db: &Db, token: &str) -> sqlx::Result<Option<UserCtx>
 pub async fn user_ctx(db: &Db, user_id: i64) -> sqlx::Result<Option<UserCtx>> {
     let row = sqlx::query!(
         r#"SELECT u.id, u.username, u.display_name, u.email, u.email_verified_at IS NOT NULL AS "verified!",
-                  u.role, u.created_at,
+                  u.role, u.created_at, u.silenced_until, u.suspended_until,
                   array(SELECT m.group_id FROM group_members m WHERE m.user_id = u.id ORDER BY 1)
                       AS "group_ids!",
                   array(SELECT DISTINCT cg.category_id FROM category_groups cg
@@ -165,6 +168,8 @@ pub async fn user_ctx(db: &Db, user_id: i64) -> sqlx::Result<Option<UserCtx>> {
         created_at: row.created_at,
         group_ids: row.group_ids,
         group_category_ids: row.group_category_ids,
+        silenced_until: row.silenced_until,
+        suspended_until: row.suspended_until,
     }))
 }
 
@@ -207,7 +212,12 @@ pub async fn middleware(
 ) -> Response {
     let mut clear = false;
     if let Some(token) = session_cookie(request.headers()).map(str::to_owned) {
-        match lookup(state.db(), &token).await {
+        let peer = request
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|axum::extract::ConnectInfo(addr)| *addr);
+        let ip = crate::client::client_ip(state.config().trust_proxy, request.headers(), peer);
+        match lookup(state.db(), &token, &ip).await {
             Ok(Some(user)) => {
                 request.extensions_mut().insert(Viewer::User(user));
             }

@@ -19,7 +19,7 @@
       <input class="input-short" id="max_recipients" name="max_recipients" type="number" min="1" max="100" value="{{ messages.max_recipients }}">
     </div>
     <fieldset class="field">
-      <legend>New members can’t start conversations until</legend>
+      <legend>Members count as new, and can’t start conversations, until</legend>
       <label class="choice choice-wrap">their account is <input class="input-short" name="new_user_days" type="number" min="0" max="365" aria-label="Days" value="{{ messages.new_user_days }}"> days old</label>
       <label class="choice choice-wrap">and they have written <input class="input-short" name="new_user_posts" type="number" min="0" max="1000" aria-label="Posts" value="{{ messages.new_user_posts }}"> posts</label>
     </fieldset>

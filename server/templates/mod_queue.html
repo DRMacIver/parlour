@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{%- import "_mod.html" as md -%}
+{% block title %}Moderation queue · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Moderation</h1>
+  <span class="spacer"></span>
+  <span class="lede">{% if items.is_empty() %}Nothing needs attention.{% else %}{{ crate::format::plural(items.len() as i64, "item needs", "items need") }} attention. Oldest first.{% endif %}</span>
+</div>
+{% call md::mod_nav("queue") %}{% endcall %}
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+<div class="with-sidebar mod-layout">
+<div class="queue">
+{% if items.is_empty() %}<section class="panel"><p class="empty">The queue is empty.</p></section>{% endif %}
+{% for item in items %}
+{% let n = loop.index %}
+{% match item.kind %}
+{% when QueueKind::Post { post, author, reports } %}
+<article class="panel queue-item" aria-labelledby="q-{{ n }}">
+  <header class="queue-head">
+    <span class="queue-kind" id="q-{{ n }}">{% if post.thread.conversation().is_some() %}Report on a message{% else %}Report{% endif %}</span>
+    <span class="queue-where">{% match post.thread.place %}{% when crate::content::Place::Category(c) %}{{ c.category.name }} › <a href="/p/{{ post.post_id }}">“{{ post.thread.thread.title }}”, № {{ post.seq }}</a>{% when crate::content::Place::Conversation(conv) %}<a href="/p/{{ post.post_id }}">Private conversation between {{ conv.people(None) }}</a>{% endmatch %}</span>
+    <span class="spacer"></span>
+    {% call m::time(item.first_at) %}{% endcall %}
+  </header>
+  <div class="queue-body">
+    <p class="queue-reason"><strong>{{ self.main_reason(reports) }}</strong> <span class="row-meta">· {{ self.reporters(reports) }}</span></p>
+    {% for r in reports %}{% if !r.details.is_empty() %}<p class="queue-detail">{% if let Some(who) = r.reporter %}{{ who.username }}: {% endif %}“{{ r.details }}”</p>{% endif %}{% endfor %}
+    <blockquote class="queue-excerpt">
+      <div class="row-meta"><strong><a href="/mod/users/{{ author.user.username }}">{{ author.user.username }}</a></strong> · joined {{ crate::format::date(author.created_at) }} · {{ crate::format::plural(author.posts, "post", "posts") }}{% if author.is_suspended() %} · <span class="flag">Suspended</span>{% else if author.is_silenced() %} · <span class="flag">Silenced</span>{% endif %}</div>
+      {% if post.hidden %}<span class="flag flag-hidden">Hidden</span> {% endif %}{{ self.excerpt(post) }}
+    </blockquote>
+    <ul class="queue-context">
+      {% if post.thread.conversation().is_some() %}<li>Reporting shared only this conversation with moderators</li>{% endif %}
+      {% if let Some(inviter) = author.invited_by %}<li>Invited by <a href="/mod/users/{{ inviter.username }}">{{ inviter.username }}</a></li>{% endif %}
+      {% if let Some(c) = post.thread.category() %}{% if let Some(access) = crate::format::access_label(c.read_level, c.group_names) %}<li>{{ access }}</li>{% endif %}{% endif %}
+    </ul>
+    {% let report = reports[0].id %}
+    <form class="queue-actions" method="post" action="/mod/reports/{{ report }}/dismiss">
+      <input type="hidden" name="report" value="{{ report }}">
+      <input type="hidden" name="back" value="/mod/queue?done=1">
+      {% call md::reason_field(format!("reason-{}", n), self.main_reason(reports)) %}{% endcall %}
+      {% call md::days_field(format!("days-{}", n), durations, 7) %}{% endcall %}
+      <span class="queue-buttons">
+        {% if !post.hidden %}<button class="button button-small" type="submit" formaction="/mod/p/{{ post.post_id }}" name="action" value="hide">Hide post</button>{% endif %}
+        <button class="button button-small" type="submit" formaction="/mod/p/{{ post.post_id }}" name="action" value="delete">Delete post</button>
+        {% if !author.role.is_staff() %}
+        <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ author.user.username }}/silence">Silence {{ author.user.username }}</button>
+        <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ author.user.username }}/suspend">Suspend</button>
+        <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ author.user.username }}/suspend-branch">Suspend invite branch</button>
+        <button class="button button-small button-danger" type="submit" formaction="/mod/users/{{ author.user.username }}/spammer">Delete as spammer</button>
+        {% endif %}
+        {% if post.thread.conversation().is_none() %}<a class="button button-small button-quiet" href="/p/{{ post.post_id }}/edit">Edit…</a>{% endif %}
+        <button class="button button-small button-quiet" type="submit">Dismiss</button>
+      </span>
+    </form>
+  </div>
+</article>
+{% when QueueKind::PostGone { post_id, reports } %}
+<article class="panel queue-item">
+  <header class="queue-head"><span class="queue-kind">Report</span><span class="queue-where">A post that has since been removed</span><span class="spacer"></span>{% call m::time(item.first_at) %}{% endcall %}</header>
+  <div class="queue-body">
+    <p class="queue-reason"><strong>{{ self.main_reason(reports) }}</strong> <span class="row-meta">· {{ self.reporters(reports) }}</span></p>
+    {% let report = reports[0].id %}
+    <form class="queue-actions" method="post" action="/mod/reports/{{ report }}/dismiss">
+      <input type="hidden" name="back" value="/mod/queue?done=1">
+      {% call md::reason_field(format!("reason-{}", n), "Already removed") %}{% endcall %}
+      <span class="queue-buttons"><button class="button button-small button-quiet" type="submit">Dismiss</button></span>
+    </form>
+  </div>
+</article>
+{% when QueueKind::Member { member, reports } %}
+<article class="panel queue-item">
+  <header class="queue-head"><span class="queue-kind">Report on a member</span><span class="queue-where"><a href="/mod/users/{{ member.user.username }}">{{ member.user.display_name }} (@{{ member.user.username }})</a></span><span class="spacer"></span>{% call m::time(item.first_at) %}{% endcall %}</header>
+  <div class="queue-body">
+    <p class="queue-reason"><strong>{{ self.main_reason(reports) }}</strong> <span class="row-meta">· {{ self.reporters(reports) }}</span></p>
+    {% for r in reports %}{% if !r.details.is_empty() %}<p class="queue-detail">{% if let Some(who) = r.reporter %}{{ who.username }}: {% endif %}“{{ r.details }}”</p>{% endif %}{% endfor %}
+    <ul class="queue-context">
+      <li>Joined {{ crate::format::date(member.created_at) }} · {{ crate::format::plural(member.posts, "post", "posts") }}</li>
+      {% if let Some(inviter) = member.invited_by %}<li>Invited by <a href="/mod/users/{{ inviter.username }}">{{ inviter.username }}</a></li>{% endif %}
+    </ul>
+    {% let report = reports[0].id %}
+    <form class="queue-actions" method="post" action="/mod/reports/{{ report }}/dismiss">
+      <input type="hidden" name="report" value="{{ report }}">
+      <input type="hidden" name="back" value="/mod/queue?done=1">
+      {% call md::reason_field(format!("reason-{}", n), self.main_reason(reports)) %}{% endcall %}
+      {% call md::days_field(format!("days-{}", n), durations, 7) %}{% endcall %}
+      <span class="queue-buttons">
+        {% if !member.role.is_staff() %}
+        <button class="button button-small" type="submit" formaction="/mod/users/{{ member.user.username }}/silence">Silence</button>
+        <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/suspend">Suspend</button>
+        <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ member.user.username }}/suspend-branch">Suspend invite branch</button>
+        <button class="button button-small button-danger" type="submit" formaction="/mod/users/{{ member.user.username }}/spammer">Delete as spammer</button>
+        {% endif %}
+        <button class="button button-small button-quiet" type="submit">Dismiss</button>
+      </span>
+    </form>
+  </div>
+</article>
+{% when QueueKind::Contact { report } %}
+<article class="panel queue-item">
+  <header class="queue-head"><span class="queue-kind">Message to the moderators</span><span class="queue-where">{% if let Some(who) = report.reporter %}from <a href="/mod/users/{{ who.username }}">{{ who.username }}</a>{% else %}from a visitor{% endif %}{% if let Some(email) = report.contact_email %} · <a href="mailto:{{ email }}">{{ email }}</a>{% endif %}</span><span class="spacer"></span>{% call m::time(item.first_at) %}{% endcall %}</header>
+  <div class="queue-body">
+    <blockquote class="queue-excerpt queue-message">{{ report.details }}</blockquote>
+    <form class="queue-actions" method="post" action="/mod/reports/{{ report.id }}/dismiss">
+      <input type="hidden" name="back" value="/mod/queue?done=1">
+      {% call md::reason_field(format!("reason-{}", n), "Handled") %}{% endcall %}
+      <span class="queue-buttons"><button class="button button-small button-quiet" type="submit">Mark handled</button></span>
+    </form>
+  </div>
+</article>
+{% when QueueKind::Appeal { report, action, member } %}
+<article class="panel queue-item">
+  <header class="queue-head"><span class="queue-kind">Appeal</span><span class="queue-where">{% if let Some(m) = member %}<a href="/mod/users/{{ m.user.username }}">{{ m.user.username }}</a> contests a decision{% else %}A decision is contested{% endif %}</span><span class="spacer"></span>{% call m::time(item.first_at) %}{% endcall %}</header>
+  <div class="queue-body">
+    <ol class="log-list">{% call md::log_entry(action, true) %}{% endcall %}</ol>
+    <blockquote class="queue-excerpt queue-message">{{ report.details }}</blockquote>
+    <form class="queue-actions" method="post" action="/mod/appeals/{{ report.id }}">
+      <input type="hidden" name="back" value="/mod/queue?done=1">
+      {% call md::reason_field(format!("reason-{}", n), "") %}{% endcall %}
+      <span class="queue-buttons">
+        <button class="button button-small" type="submit" name="decision" value="overturn">Reverse the decision</button>
+        <button class="button button-small button-quiet" type="submit" name="decision" value="uphold">Keep it</button>
+      </span>
+    </form>
+  </div>
+</article>
+{% when QueueKind::Held { held, author, place } %}
+<article class="panel queue-item">
+  <header class="queue-head"><span class="queue-kind queue-kind-held">Held for approval</span><span class="queue-where"><a href="{{ place.1 }}">{{ place.0 }}</a></span><span class="spacer"></span>{% call m::time(item.first_at) %}{% endcall %}</header>
+  <div class="queue-body">
+    <p class="queue-reason"><strong>A new member’s post</strong> <span class="row-meta">· new members’ first posts are read before they appear</span></p>
+    <blockquote class="queue-excerpt">
+      <div class="row-meta"><strong><a href="/mod/users/{{ author.user.username }}">{{ author.user.username }}</a></strong> · joined {{ crate::format::date(author.created_at) }}{% if let Some(inviter) = author.invited_by %} · invited by {{ inviter.username }}{% endif %}</div>
+      {{ crate::mod_pages::excerpt(held.body_md) }} <a href="/held/{{ held.id }}">Read it all</a>
+    </blockquote>
+    <form class="queue-actions" method="post" action="/mod/held/{{ held.id }}/approve">
+      <input type="hidden" name="back" value="/mod/queue?done=1">
+      {% call md::reason_field(format!("reason-{}", n), "Not suitable") %}{% endcall %}
+      {% call md::days_field(format!("days-{}", n), durations, 7) %}{% endcall %}
+      <span class="queue-buttons">
+        <button class="button button-small" type="submit">Approve</button>
+        <button class="button button-small button-quiet" type="submit" formaction="/mod/held/{{ held.id }}/reject">Reject</button>
+        {% if !author.role.is_staff() %}<button class="button button-small button-danger" type="submit" formaction="/mod/users/{{ author.user.username }}/spammer">Delete as spammer</button>{% endif %}
+      </span>
+    </form>
+  </div>
+</article>
+{% endmatch %}
+{% endfor %}
+</div>
+<aside class="panel mod-recent" aria-labelledby="recent-heading">
+  <h2 class="panel-bar" id="recent-heading">Recent actions</h2>
+  {% if recent.is_empty() %}<p class="empty">None yet.</p>{% else %}
+  <ol class="log-list">{% for entry in recent %}{% call md::log_entry(entry, true) %}{% endcall %}{% endfor %}</ol>
+  {% endif %}
+  <p class="panel-foot">Actions on public content appear in the <a href="/moderation">public moderation log</a>. Actions involving private areas or messages are visible to staff only.</p>
+</aside>
+</div>
+{% endblock %}

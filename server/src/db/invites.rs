@@ -76,6 +76,11 @@ pub fn may_invite(
 
 /// Whether this member may invite people now, and if not why not.
 pub async fn check_may_invite(db: &Db, user: &UserCtx) -> sqlx::Result<Result<(), String>> {
+    if !user.may_write() {
+        return Ok(Err(
+            "Your account is silenced or suspended for now, so you can’t invite anyone.".to_owned(),
+        ));
+    }
     let policy = settings::invite_policy(db).await?;
     let mode = settings::registration_mode(db).await?;
     Ok(may_invite(

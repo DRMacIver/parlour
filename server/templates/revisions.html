@@ -15,6 +15,14 @@
     <div class="diff">{% for segment in segments %}{% match segment %}{% when Segment::Same(text) %}{{ text }}{% when Segment::Added(text) %}<ins>{{ text }}</ins>{% when Segment::Removed(text) %}<del>{{ text }}</del>{% endmatch %}{% endfor %}</div>
     {% if compared_with.is_some() %}<p class="panel-foot diff-key"><del>removed</del> <ins>added</ins> · shown as Markdown source</p>{% endif %}
     {% endif %}
+    {% if self.redactable() %}
+    <form class="panel-foot form-inline-row" method="post" action="/mod/p/{{ post.post_id }}/revisions/{{ selected }}/redact">
+      <label for="redact-reason">Redact version {{ selected }}</label>
+      <input class="mod-reason" id="redact-reason" name="reason" type="text" maxlength="500" placeholder="Reason" required>
+      <button class="button button-small button-danger" type="submit">Redact</button>
+      <span class="field-hint">Removes its text for everyone, for good. To change the current version, edit the post.</span>
+    </form>
+    {% endif %}
   </section>
   <section class="panel" aria-labelledby="versions-heading">
     <h2 class="panel-bar" id="versions-heading">Versions</h2>

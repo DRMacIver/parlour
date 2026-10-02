@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT n.id, n.kind, n.created_at, n.read_at IS NOT NULL AS \"read!\", n.message,\n               a.id AS \"actor_id?\", a.username AS \"actor_username?\", a.display_name AS \"actor_name?\",\n               p.id AS \"post_id?\", p.seq AS \"seq?\", t.id AS \"thread_id?\", t.title AS \"title?\",\n               t.slug AS \"slug?\", t.visibility = 'private' AS \"private?\"\n        FROM notifications n\n        LEFT JOIN users a ON a.id = n.actor_id\n        LEFT JOIN posts p ON p.id = n.post_id\n        LEFT JOIN threads t ON t.id = p.thread_id\n        WHERE n.user_id = $1\n          AND (n.post_id IS NULL\n               OR (p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL\n                   AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $1))))\n          AND NOT EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id\n                          WHERE b.user_id = $1 AND b.blocked_user_id = n.actor_id AND bu.role = 'user')\n        ORDER BY n.created_at DESC, n.id DESC\n        LIMIT $4 OFFSET $5\n        ",
+  "query": "\n        SELECT n.id, n.kind, n.created_at, n.read_at IS NOT NULL AS \"read!\", n.message, n.mod_action_id,\n               a.id AS \"actor_id?\", a.username AS \"actor_username?\", a.display_name AS \"actor_name?\",\n               p.id AS \"post_id?\", p.seq AS \"seq?\", t.id AS \"thread_id?\", t.title AS \"title?\",\n               t.slug AS \"slug?\", t.visibility = 'private' AS \"private?\"\n        FROM notifications n\n        LEFT JOIN users a ON a.id = n.actor_id\n        LEFT JOIN posts p ON p.id = n.post_id\n        LEFT JOIN threads t ON t.id = p.thread_id\n        WHERE n.user_id = $1\n          AND (n.post_id IS NULL\n               OR (p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL\n                   AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $6))))\n          AND NOT EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id\n                          WHERE b.user_id = $1 AND b.blocked_user_id = n.actor_id AND bu.role = 'user')\n        ORDER BY n.created_at DESC, n.id DESC\n        LIMIT $4 OFFSET $5\n        ",
   "describe": {
     "columns": [
       {
@@ -55,6 +55,17 @@
       },
       {
         "ordinal": 5,
+        "name": "mod_action_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "notifications",
+            "name": "mod_action_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
         "name": "actor_id?",
         "type_info": "Int8",
         "origin": {
@@ -65,7 +76,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "actor_username?",
         "type_info": {
           "Custom": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "actor_name?",
         "type_info": "Text",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "post_id?",
         "type_info": "Int8",
         "origin": {
@@ -103,7 +114,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "seq?",
         "type_info": "Int4",
         "origin": {
@@ -114,7 +125,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "thread_id?",
         "type_info": "Int8",
         "origin": {
@@ -125,7 +136,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "title?",
         "type_info": "Text",
         "origin": {
@@ -136,7 +147,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "slug?",
         "type_info": "Text",
         "origin": {
@@ -147,7 +158,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "private?",
         "type_info": "Bool",
         "origin": "Expression"
@@ -159,6 +170,7 @@
         "TextArray",
         "Int8Array",
         "Int8",
+        "Int8",
         "Int8"
       ]
     },
@@ -167,6 +179,7 @@
       false,
       false,
       null,
+      true,
       true,
       false,
       false,
@@ -179,5 +192,5 @@
       null
     ]
   },
-  "hash": "2f8d368d214749c5b28d7fd5c680c1bb92fac6260fbe9123184ead462eaf2419"
+  "hash": "d78acd45665524f756ba3caa4ec46dc764b421f36ae7f8815b9041e8e4ec0078"
 }

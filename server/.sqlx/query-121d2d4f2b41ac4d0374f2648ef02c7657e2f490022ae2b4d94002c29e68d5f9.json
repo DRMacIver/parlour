@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT u.id, u.username, u.display_name, u.email, u.email_verified_at IS NOT NULL AS \"verified!\",\n                  u.role, u.created_at,\n                  array(SELECT m.group_id FROM group_members m WHERE m.user_id = u.id ORDER BY 1)\n                      AS \"group_ids!\",\n                  array(SELECT DISTINCT cg.category_id FROM category_groups cg\n                        JOIN group_members m ON m.group_id = cg.group_id\n                        WHERE m.user_id = u.id AND cg.access = 'read' ORDER BY 1) AS \"group_category_ids!\"\n           FROM users u\n           WHERE u.id = $1 AND u.deleted_at IS NULL",
+  "query": "SELECT u.id, u.username AS \"username!: String\", u.display_name, u.role, u.created_at,\n                  u.silenced_until, u.suspended_until,\n                  (SELECT count(*) FROM reports r WHERE r.status = 'open' AND r.user_id = u.id\n                     AND r.kind IN ('post', 'user')) AS \"open_reports!\"\n           FROM users u\n           WHERE u.deleted_at IS NULL\n             AND (u.username::text ILIKE $1 OR u.display_name ILIKE $1)\n             AND (NOT $2 OR u.silenced_until > now() OR u.suspended_until > now())\n           ORDER BY u.created_at DESC, u.id DESC\n           LIMIT $3 OFFSET $4",
   "describe": {
     "columns": [
       {
@@ -16,7 +16,7 @@
       },
       {
         "ordinal": 1,
-        "name": "username",
+        "name": "username!: String",
         "type_info": {
           "Custom": {
             "name": "citext",
@@ -43,28 +43,6 @@
       },
       {
         "ordinal": 3,
-        "name": "email",
-        "type_info": {
-          "Custom": {
-            "name": "citext",
-            "kind": "Simple"
-          }
-        },
-        "origin": {
-          "Table": {
-            "table": "users",
-            "name": "email"
-          }
-        }
-      },
-      {
-        "ordinal": 4,
-        "name": "verified!",
-        "type_info": "Bool",
-        "origin": "Expression"
-      },
-      {
-        "ordinal": 5,
         "name": "role",
         "type_info": "Text",
         "origin": {
@@ -75,7 +53,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 4,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -86,20 +64,39 @@
         }
       },
       {
-        "ordinal": 7,
-        "name": "group_ids!",
-        "type_info": "Int8Array",
-        "origin": "Expression"
+        "ordinal": 5,
+        "name": "silenced_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "silenced_until"
+          }
+        }
       },
       {
-        "ordinal": 8,
-        "name": "group_category_ids!",
-        "type_info": "Int8Array",
+        "ordinal": 6,
+        "name": "suspended_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "suspended_until"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "open_reports!",
+        "type_info": "Int8",
         "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
+        "Text",
+        "Bool",
+        "Int8",
         "Int8"
       ]
     },
@@ -108,12 +105,11 @@
       false,
       false,
       false,
-      null,
       false,
-      false,
-      null,
+      true,
+      true,
       null
     ]
   },
-  "hash": "5bf2785646cf72ec504a67011f6bcd3c81956f498ae0593b9376c343a82664d0"
+  "hash": "121d2d4f2b41ac4d0374f2648ef02c7657e2f490022ae2b4d94002c29e68d5f9"
 }

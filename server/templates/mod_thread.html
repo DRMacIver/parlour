@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{%- import "_mod.html" as md -%}
+{% block title %}Moderate “{{ thread.thread.title }}” · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+{% call m::post_crumbs(thread) %}{% endcall %}
+<h1 class="page-title">Moderate the thread</h1>
+{% call md::mod_nav("") %}{% endcall %}
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+<p class="lede"><a href="{{ thread.href() }}">{{ thread.thread.title }}</a> · {{ crate::format::plural(thread.last_seq, "post", "posts") }}{% if thread.locked %} · <span class="flag">Locked</span>{% endif %}{% if pinned %} · <span class="flag">Pinned</span>{% endif %}</p>
+
+<form class="panel" method="post" action="/mod/t/{{ thread.thread.id }}">
+  <h2 class="panel-bar">Lock, pin or delete</h2>
+  <div class="form">
+    <div class="field"><label for="reason-state">Reason</label><input id="reason-state" name="reason" type="text" maxlength="500" required></div>
+    <div class="form-actions">
+      {% if thread.locked %}<button class="button" type="submit" name="action" value="unlock">Unlock</button>{% else %}<button class="button" type="submit" name="action" value="lock">Lock</button>{% endif %}
+      {% if pinned %}<button class="button button-quiet" type="submit" name="action" value="unpin">Unpin</button>{% else %}<button class="button button-quiet" type="submit" name="action" value="pin">Pin</button>{% endif %}
+      <button class="button button-danger" type="submit" name="action" value="delete">Delete the thread</button>
+    </div>
+  </div>
+</form>
+
+<form class="panel" method="post" action="/mod/t/{{ thread.thread.id }}">
+  <h2 class="panel-bar">Rename or move</h2>
+  <div class="form">
+    <div class="field"><label for="title">Title</label><input id="title" name="title" type="text" maxlength="150" value="{{ thread.thread.title }}"></div>
+    <div class="field"><label for="category">Category</label>
+      <select id="category" name="category">{% for c in categories %}<option value="{{ c.category.slug }}"{% if self.current_category(c.category.slug) %} selected{% endif %}>{{ c.category.name }}{% if let Some(access) = crate::format::access_label(c.read_level, c.group_names) %} ({{ access }}){% endif %}</option>{% endfor %}</select>
+    </div>
+    <div class="field"><label for="reason-edit">Reason</label><input id="reason-edit" name="reason" type="text" maxlength="500" required></div>
+    <div class="form-actions">
+      <button class="button" type="submit" name="action" value="rename">Rename</button>
+      <button class="button button-quiet" type="submit" name="action" value="move">Move to that category</button>
+    </div>
+    <p class="form-note">Moving a thread somewhere more public shows it to everyone who can read there.</p>
+  </div>
+</form>
+
+<form class="panel" method="post" action="/mod/t/{{ thread.thread.id }}/move-posts">
+  <h2 class="panel-bar">Move posts</h2>
+  <div class="form">
+    <p class="form-note">Moved posts go to the end of the other thread, in order, and take its next numbers. Their old places here say where they went, so no page of either thread shifts, and every post’s link still finds it. Move them all to merge this thread into the other; it then leads there.</p>
+    <div class="field"><label for="numbers">Post numbers</label><input id="numbers" name="numbers" type="text" placeholder="12, 14-20" required><span class="field-hint">For example “12, 14-20”.</span></div>
+    <fieldset class="field">
+      <legend>To</legend>
+      <label class="choice choice-wrap"><input type="radio" name="to" value="new" checked> a new thread titled <input class="input-inline" name="title" type="text" maxlength="150" aria-label="New thread’s title"> in <select name="category" aria-label="New thread’s category">{% for c in categories %}<option value="{{ c.category.slug }}"{% if self.current_category(c.category.slug) %} selected{% endif %}>{{ c.category.name }}</option>{% endfor %}</select></label>
+      <label class="choice choice-wrap"><input type="radio" name="to" value="existing"> the thread <input class="input-inline" name="thread" type="text" placeholder="number or link" aria-label="Thread number or link"></label>
+    </fieldset>
+    <div class="field"><label for="reason-move">Reason</label><input id="reason-move" name="reason" type="text" maxlength="500" required></div>
+    <div class="form-actions"><button class="button" type="submit">Move posts</button></div>
+  </div>
+</form>
+</div>
+{% endblock %}

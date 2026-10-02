@@ -15,6 +15,7 @@
 <div class="toolbar">
   {% if self.can_reply() %}<a class="button" href="#reply">Post reply</a>{% endif %}
   {% if self.logged_in() %}<a href="/t/{{ thread.thread.id }}/unread">First unread</a>{% endif %}
+  {% if staff %}<a href="/mod/t/{{ thread.thread.id }}">Moderate thread</a>{% endif %}
   {% if let Some(level) = watch %}{% call m::watch_form(self.watch_action(), level, "thread") %}{% endcall %}{% endif %}
   <span class="spacer"></span>
   {% call m::pagination(pagination, "Pages") %}{% endcall %}
@@ -52,8 +53,8 @@
   {% for post in thread.posts %}
   {% if self.divider_is(post.id) %}<div class="unread-divider" role="separator" id="unread">New since your last visit</div>{% endif %}
   {% match post.body %}
-  {% when PostBody::Live { author, body_html, edited_at } %}
-  <article class="post" id="p{{ post.id }}">
+  {% when PostBody::Live { author, body_html, edited_at, hidden } %}
+  <article class="post{% if *hidden %} post-hidden{% endif %}" id="p{{ post.id }}">
     <aside class="post-author" aria-label="About {{ author.user.display_name }}">
       {% call m::avatar(author.user, "") %}{% endcall %}
       <div class="author-names">
@@ -74,13 +75,17 @@
         <span class="reply-to">in reply to <a href="{{ self.reply_href(reply.post_id, reply.seq) }}" title="№ {{ reply.seq }}">{% if let Some(who) = reply.author %}@{{ who.username }}{% else %}№ {{ reply.seq }}{% endif %} ↑</a></span>
         {% endif %}
         {% if let Some(edited) = edited_at %}<a class="edited" href="/p/{{ post.id }}/revisions">edited {% call m::time(edited) %}{% endcall %}</a>{% endif %}
-        {% if self.logged_in() %}
         <span class="spacer"></span>
+        {% if self.logged_in() %}
         <span class="post-actions">
-          {%- if self.can_reply() %}<a href="/t/{{ thread.thread.id }}/reply?to={{ post.id }}">reply</a> · <a href="/t/{{ thread.thread.id }}/reply?quote={{ post.id }}">quote</a> · {% endif -%}
-          <a href="/p/{{ post.id }}/fork">Quote in new thread</a>
-          {%- if self.is_mine(author.user.id) %}{% if can_edit %} · <a href="/p/{{ post.id }}/edit">edit</a>{% endif %} · <a href="/p/{{ post.id }}/delete">delete</a>{% endif -%}
+          {%- if *hidden %}<span class="flag flag-hidden">Hidden from members</span> · {% endif -%}
+          {%- if self.can_reply() && !*hidden %}<a href="/t/{{ thread.thread.id }}/reply?to={{ post.id }}">reply</a> · <a href="/t/{{ thread.thread.id }}/reply?quote={{ post.id }}">quote</a> · {% endif -%}
+          {%- if !*hidden %}<a href="/p/{{ post.id }}/fork">Quote in new thread</a>{% endif -%}
+          {%- if self.is_mine(author.user.id) %}{% if can_edit && !*hidden %} · <a href="/p/{{ post.id }}/edit">edit</a>{% endif %} · <a href="/p/{{ post.id }}/delete">delete</a>{% else %} · <a href="/p/{{ post.id }}/report">report</a>{% endif -%}
+          {%- if staff %} · <a href="/mod/p/{{ post.id }}">moderate</a>{% endif -%}
         </span>
+        {% else %}
+        <span class="post-actions"><a href="/contact?post={{ post.id }}" rel="nofollow">report</a></span>
         {% endif %}
       </header>
       {% if post.from_blocked %}
@@ -120,10 +125,16 @@
       {% endif %}
     </div>
   </article>
-  {% when PostBody::Deleted %}
+  {% when PostBody::Deleted { by_moderator } %}
   <article class="post post-tombstone" id="p{{ post.id }}">
     <a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a>
-    <span>Post deleted by its author</span>
+    <span>{% if *by_moderator %}Post deleted by a moderator{% else %}Post deleted by its author{% endif %}</span>
+    {% call m::time(post.created_at) %}{% endcall %}
+  </article>
+  {% when PostBody::Moved { to } %}
+  <article class="post post-tombstone" id="p{{ post.id }}">
+    <a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a>
+    <span>{% if let Some(dest) = to %}Moved to <a href="/p/{{ post.id }}">{{ dest.title }}</a>{% else %}Moved to another thread{% endif %}</span>
     {% call m::time(post.created_at) %}{% endcall %}
   </article>
   {% when PostBody::Hidden %}

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE reports SET status = CASE WHEN $4 THEN 'dismissed' ELSE 'resolved' END,\n                  resolved_by = $5, resolution = $6, resolved_at = now()\n           WHERE status = 'open'\n             AND ((kind = 'post' AND post_id = $1) OR (kind = 'user' AND user_id = $2) OR id = $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Bool",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9218ee42023a4a44f8ac44a31f4e1c36fdbfa259653cd80db9c34edfb868209f"
+}

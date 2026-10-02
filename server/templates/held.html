@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Waiting for approval · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">{% if held.status == "held" %}Waiting for approval{% else if held.status == "approved" %}Approved{% else %}Not approved{% endif %}</h1>
+{% if held.status == "held" %}
+<p class="lede">New members’ first posts are read by a moderator before they appear. You’ll get a notification when yours is up.</p>
+{% else if held.status == "approved" %}
+<p class="lede">{% if let Some(post_id) = held.post_id %}<a href="/p/{{ post_id }}">See it in its thread.</a>{% endif %}</p>
+{% else %}
+<p class="lede">A moderator decided not to post this. Your notifications say why.</p>
+{% endif %}
+<section class="panel">
+  <h2 class="panel-bar">{{ place.0 }}</h2>
+  <div class="post-body">{{ html|safe }}</div>
+  <p class="panel-foot">By {{ held.author.display_name }} · <time datetime="{{ crate::format::iso(held.created_at) }}">{{ crate::format::datetime(held.created_at) }}</time></p>
+</section>
+{% if staff && held.status == "held" %}<p><a href="/mod/queue">Decide in the moderation queue</a></p>{% endif %}
+</div>
+{% endblock %}

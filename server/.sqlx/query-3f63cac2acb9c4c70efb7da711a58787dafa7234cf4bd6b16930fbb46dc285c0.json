@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET silenced_until = CASE WHEN $2 THEN silenced_until ELSE $3 END,\n                            suspended_until = CASE WHEN $2 THEN $3 ELSE suspended_until END\n           WHERE id = ANY($1) AND role = 'user' AND deleted_at IS NULL\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Bool",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3f63cac2acb9c4c70efb7da711a58787dafa7234cf4bd6b16930fbb46dc285c0"
+}

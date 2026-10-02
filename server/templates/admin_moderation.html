@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{%- import "_admin_nav.html" as an -%}
+{% block title %}Moderation settings · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Moderation settings</h1>
+{% call an::admin_nav("moderation") %}{% endcall %}
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+{% call f::errors(errors) %}{% endcall %}
+<form method="post" action="/admin/moderation">
+<section class="panel" aria-labelledby="new-heading">
+  <h2 class="panel-bar" id="new-heading">New members</h2>
+  <div class="form">
+    <div class="field">
+      <label class="choice-wrap" for="hold_posts">Hold a new member’s first <input class="input-short" id="hold_posts" name="hold_posts" type="number" min="0" max="100" value="{{ settings.hold_posts }}"> posts for a moderator to approve</label>
+      <span class="field-hint">0 turns this off. Who counts as new is set under <a href="/admin/messages">Messages and email</a>; new members also post and message more slowly, and can’t start conversations. Messages are never held.</span>
+    </div>
+  </div>
+</section>
+<section class="panel" aria-labelledby="ip-heading">
+  <h2 class="panel-bar" id="ip-heading">Addresses</h2>
+  <div class="form">
+    <div class="field">
+      <label class="choice-wrap" for="ip_retention_days">Keep the addresses members use for <input class="input-short" id="ip_retention_days" name="ip_retention_days" type="number" min="1" max="3650" value="{{ settings.ip_retention_days }}"> days</label>
+      <span class="field-hint">Moderators see them, with other accounts that used the same one. Older ones are deleted.</span>
+    </div>
+  </div>
+</section>
+<div class="form-actions form-actions-page"><button class="button" type="submit">Save settings</button></div>
+</form>
+</div>
+{% endblock %}

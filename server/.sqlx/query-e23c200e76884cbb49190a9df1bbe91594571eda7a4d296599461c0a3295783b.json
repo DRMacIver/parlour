@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rev FROM post_revisions WHERE post_id = $1 AND redacted_at IS NULL ORDER BY rev",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rev",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "post_revisions",
+            "name": "rev"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e23c200e76884cbb49190a9df1bbe91594571eda7a4d296599461c0a3295783b"
+}

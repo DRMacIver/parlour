@@ -22,6 +22,7 @@ pub mod invites;
 pub mod jobs;
 pub mod login_tokens;
 pub mod members;
+pub mod moderation;
 pub mod notifications;
 pub mod seed;
 pub mod sessions;

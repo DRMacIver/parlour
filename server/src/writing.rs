@@ -12,12 +12,13 @@ use crate::changes::Change;
 use crate::content::{self, CategoryTarget, Place, PostTarget, ThreadTarget};
 use crate::error::AppError;
 use crate::markdown;
+use crate::mod_records::{self, HeldPlace};
 use crate::notify;
 use crate::permissions::{at_most_as_visible, may_post, may_reply};
 use crate::ratelimit::{Action, Scope};
 use crate::social::{self, WatchLevel, Watched};
 use crate::store::{self, Edited, NewPost, NewThread};
-use crate::viewer::Viewer;
+use crate::viewer::{UserCtx, Viewer};
 
 pub const MAX_TITLE_CHARS: usize = 150;
 pub const MAX_BODY_CHARS: usize = 50_000;
@@ -48,6 +49,91 @@ pub type Outcome<T> = Result<Result<T, Refused>, AppError>;
 pub struct Posted {
     pub thread_id: i64,
     pub post_id: i64,
+}
+
+/// What became of a new post: posted, or held for a moderator to approve
+/// (as the held post with this id).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Written {
+    Posted(Posted),
+    Held(i64),
+}
+
+pub const SILENCED: &str = "A moderator has silenced your account for now, so you can read but not post, edit, react or send messages.";
+pub const SUSPENDED: &str = "Your account is suspended for now.";
+
+/// Why a member may not write at all just now, if they may not.
+pub fn restriction(user: &UserCtx) -> Option<&'static str> {
+    if user.is_suspended() {
+        Some(SUSPENDED)
+    } else if user.is_silenced() {
+        Some(SILENCED)
+    } else {
+        None
+    }
+}
+
+/// Whether a member is new (DESIGN.md §7): until their account is old
+/// enough and they have written enough, whichever comes later, with the
+/// thresholds in the message settings. New members get lower posting and
+/// message rates, can't start conversations, and have their first posts
+/// held for approval.
+pub struct Newness {
+    pub new: bool,
+    /// Their published posts in categories.
+    pub posts: i64,
+}
+
+pub async fn newness(state: &AppState, user: &UserCtx) -> Result<Newness, AppError> {
+    if user.is_staff() {
+        return Ok(Newness {
+            new: false,
+            posts: 0,
+        });
+    }
+    let rules = crate::settings::message_settings(state.db()).await?;
+    let standing = social::standing(state.db(), user.id).await?;
+    Ok(Newness {
+        new: standing.days < i64::from(rules.new_user_days)
+            || standing.posts < i64::from(rules.new_user_posts),
+        posts: standing.posts,
+    })
+}
+
+/// Whether a member's next post in a category must wait for a moderator:
+/// they are new and fewer than the site's number of their posts have been
+/// published.
+pub async fn must_hold(state: &AppState, user: &UserCtx) -> Result<bool, AppError> {
+    let hold = crate::settings::moderation_settings(state.db())
+        .await?
+        .hold_posts;
+    if hold == 0 || user.is_staff() {
+        return Ok(false);
+    }
+    let newness = newness(state, user).await?;
+    Ok(newness.new && newness.posts < i64::from(hold))
+}
+
+/// Uses up some of a member's allowance for posting (or, in a
+/// conversation, messaging), with the lower allowance for new members on
+/// top.
+async fn allowed_to_post(
+    state: &AppState,
+    user: &UserCtx,
+    action: Action,
+) -> Result<bool, AppError> {
+    let key = user.id.to_string();
+    if !state.limiter().check(action, Scope::User, &key) {
+        return Ok(false);
+    }
+    if newness(state, user).await?.new {
+        let stricter = match action {
+            Action::Message => Action::NewMemberMessage,
+            _ => Action::NewMemberPost,
+        };
+        return Ok(state.limiter().check(stricter, Scope::User, &key));
+    }
+    Ok(true)
 }
 
 /// Browsers send line breaks as CRLF. Leading blank lines and trailing
@@ -120,13 +206,15 @@ pub async fn reply_refusal(
     viewer: &Viewer,
     thread: &ThreadTarget,
 ) -> Result<Option<&'static str>, AppError> {
-    if viewer.user().is_none() {
+    let Some(user) = viewer.user() else {
         return Ok(Some("Log in to reply."));
-    }
+    };
     Ok(match &thread.place {
         Place::Conversation(_) => crate::messages::send_refusal(state, viewer, thread).await?,
         Place::Category(category) => {
-            if !may_post_in(viewer, category) {
+            if let Some(why) = restriction(user) {
+                Some(why)
+            } else if !may_post_in(viewer, category) {
                 Some("You can’t post in this category.")
             } else if !may_reply_in(viewer, category, thread.locked) {
                 Some("This thread is locked.")
@@ -137,16 +225,35 @@ pub async fn reply_refusal(
     })
 }
 
-/// Whether the viewer may edit or delete a post: it is theirs and live,
-/// and (to edit) its thread isn't locked unless they are staff.
+/// Whether the viewer may edit a post: it is theirs and live, they aren't
+/// silenced, and its thread isn't locked unless they are staff. Staff may
+/// also edit other people's posts that aren't deleted, giving a reason
+/// (see [`edit`]).
 pub fn may_edit(viewer: &Viewer, post: &PostTarget) -> bool {
-    viewer.user_id() == Some(post.author.id)
-        && post.is_live()
-        && (!post.thread.locked || viewer.is_staff())
+    let Some(user) = viewer.user() else {
+        return false;
+    };
+    if !user.may_write() {
+        return false;
+    }
+    if viewer.is_staff() {
+        return post.body.is_some();
+    }
+    user.id == post.author.id && post.is_live() && !post.thread.locked
 }
 
+/// Whether a staff member is editing someone else's post.
+pub fn editing_as_moderator(viewer: &Viewer, post: &PostTarget) -> bool {
+    viewer.is_staff() && viewer.user_id() != Some(post.author.id)
+}
+
+/// Whether the viewer may delete a post: it is theirs and live, and they
+/// aren't suspended. (Staff delete other people's posts as moderation.)
 pub fn may_delete(viewer: &Viewer, post: &PostTarget) -> bool {
-    viewer.user_id() == Some(post.author.id) && post.is_live()
+    viewer
+        .user()
+        .is_some_and(|user| user.id == post.author.id && user.may_act())
+        && post.is_live()
 }
 
 // ---------------------------------------------------------------------------
@@ -157,13 +264,16 @@ pub async fn new_thread(
     category_slug: &str,
     title: &str,
     body: &str,
-) -> Outcome<Posted> {
+) -> Outcome<Written> {
     let Some(user) = viewer.user() else {
         return Ok(Err(Refused::LogIn));
     };
     let Some(category) = content::category_target(state.db(), viewer, category_slug).await? else {
         return Ok(Err(Refused::NotFound));
     };
+    if let Some(why) = restriction(user) {
+        return Ok(Err(Refused::NotAllowed(why)));
+    }
     if !may_post_in(viewer, &category) {
         return Ok(Err(Refused::NotAllowed("You can’t post in this category.")));
     }
@@ -174,8 +284,17 @@ pub async fn new_thread(
     if !problems.is_empty() {
         return Ok(Err(Refused::Invalid(problems)));
     }
-    if !allowed(state, viewer, Action::Post) {
+    if !allowed_to_post(state, user, Action::Post).await? {
         return Ok(Err(Refused::RateLimited));
+    }
+    if must_hold(state, user).await? {
+        let place = HeldPlace::Thread {
+            category_id: category.category.id,
+            title,
+            forked_from_post_id: None,
+        };
+        let id = mod_records::hold(state.db(), user.id, &place, &body).await?;
+        return Ok(Ok(Written::Held(id)));
     }
     let created = create_thread(
         state,
@@ -191,10 +310,10 @@ pub async fn new_thread(
         },
     )
     .await?;
-    Ok(Ok(Posted {
+    Ok(Ok(Written::Posted(Posted {
         thread_id: created.thread_id,
         post_id: created.first_post_id,
-    }))
+    })))
 }
 
 pub async fn reply(
@@ -203,7 +322,7 @@ pub async fn reply(
     thread_id: i64,
     body: &str,
     reply_to: Option<i64>,
-) -> Outcome<Posted> {
+) -> Outcome<Written> {
     let Some(user) = viewer.user() else {
         return Ok(Err(Refused::LogIn));
     };
@@ -229,15 +348,36 @@ pub async fn reply(
         Place::Category(_) => Action::Post,
         Place::Conversation(_) => Action::Message,
     };
-    if !allowed(state, viewer, action) {
+    if !allowed_to_post(state, user, action).await? {
         return Ok(Err(Refused::RateLimited));
     }
+    // Messages are never held: moderators don't read conversations.
+    if action == Action::Post && must_hold(state, user).await? {
+        let place = HeldPlace::Reply {
+            thread_id,
+            reply_to_post_id: reply_to,
+        };
+        let id = mod_records::hold(state.db(), user.id, &place, &body).await?;
+        return Ok(Ok(Written::Held(id)));
+    }
+    let post_id = publish_reply(state, thread_id, user.id, body, reply_to).await?;
+    Ok(Ok(Written::Posted(Posted { thread_id, post_id })))
+}
+
+/// Adds a reply to a thread and queues the notifications about it.
+pub(crate) async fn publish_reply(
+    state: &AppState,
+    thread_id: i64,
+    author_id: i64,
+    body: String,
+    reply_to: Option<i64>,
+) -> Result<i64, AppError> {
     let mut tx = state.db().begin().await?;
     let post_id = store::create_post(
         &mut tx,
         &NewPost {
             thread_id,
-            author_id: user.id,
+            author_id,
             body_md: body,
             reply_to_post_id: reply_to,
             created_at: None,
@@ -248,29 +388,46 @@ pub async fn reply(
     tx.commit().await?;
     state.jobs().wake();
     state.changed(Change::PostCreated { post_id }).await?;
-    Ok(Ok(Posted { thread_id, post_id }))
+    Ok(post_id)
 }
 
-pub async fn edit(state: &AppState, viewer: &Viewer, post_id: i64, body: &str) -> Outcome<Posted> {
+/// Changes a post's text. A staff member editing someone else's post gives
+/// a `reason`, which goes in the moderation log, and its author is told.
+pub async fn edit(
+    state: &AppState,
+    viewer: &Viewer,
+    post_id: i64,
+    body: &str,
+    reason: Option<&str>,
+) -> Outcome<Posted> {
     let Some(user) = viewer.user() else {
         return Ok(Err(Refused::LogIn));
     };
     let Some(post) = content::post_target(state.db(), viewer, post_id).await? else {
         return Ok(Err(Refused::NotFound));
     };
-    if !post.is_live() {
+    if post.body.is_none() || (!post.is_live() && !viewer.is_staff()) {
         return Ok(Err(Refused::NotFound));
     }
     if !may_edit(viewer, &post) {
-        return Ok(Err(Refused::NotAllowed(if post.thread.locked {
-            "This thread is locked."
-        } else {
-            "You can only edit your own posts."
-        })));
+        return Ok(Err(Refused::NotAllowed(
+            if let Some(why) = restriction(user) {
+                why
+            } else if post.thread.locked {
+                "This thread is locked."
+            } else {
+                "You can only edit your own posts."
+            },
+        )));
     }
     let body = clean_body(body);
     let mut problems = Vec::new();
     check_body(&body, &mut problems);
+    let as_moderator = editing_as_moderator(viewer, &post);
+    let reason = reason.map(str::trim).unwrap_or_default();
+    if as_moderator {
+        crate::moderation::check_reason(reason, &mut problems);
+    }
     if !problems.is_empty() {
         return Ok(Err(Refused::Invalid(problems)));
     }
@@ -279,6 +436,9 @@ pub async fn edit(state: &AppState, viewer: &Viewer, post_id: i64, body: &str) -
     }
     let edited = store::edit_post(state.db(), post_id, user.id, &body).await?;
     if edited != Edited::Unchanged {
+        if as_moderator {
+            crate::moderation::edited_post(state, user, &post, reason).await?;
+        }
         state.changed(Change::PostEdited { post_id }).await?;
     }
     Ok(Ok(Posted {
@@ -299,7 +459,11 @@ pub async fn delete(state: &AppState, viewer: &Viewer, post_id: i64) -> Outcome<
     }
     if !may_delete(viewer, &post) {
         return Ok(Err(Refused::NotAllowed(
-            "You can only delete your own posts.",
+            if viewer.user().is_some_and(UserCtx::is_suspended) {
+                SUSPENDED
+            } else {
+                "You can only delete your own posts."
+            },
         )));
     }
     if store::delete_post(state.db(), post_id).await? {
@@ -327,6 +491,9 @@ pub async fn react(
     };
     if !post.is_live() {
         return Ok(Err(Refused::NotFound));
+    }
+    if let Some(why) = restriction(user) {
+        return Ok(Err(Refused::NotAllowed(why)));
     }
     let enabled = content::reaction_types(state.db(), true).await?;
     if add && !enabled.iter().any(|t| t.emoji == emoji) {
@@ -374,7 +541,7 @@ pub async fn fork(
     category_slug: &str,
     title: &str,
     body: &str,
-) -> Outcome<Posted> {
+) -> Outcome<Written> {
     let Some(user) = viewer.user() else {
         return Ok(Err(Refused::LogIn));
     };
@@ -383,6 +550,9 @@ pub async fn fork(
     };
     if !source.is_live() {
         return Ok(Err(Refused::NotFound));
+    }
+    if let Some(why) = restriction(user) {
+        return Ok(Err(Refused::NotAllowed(why)));
     }
     let (title, body) = (clean_title(title), clean_body(body));
     let mut problems = Vec::new();
@@ -401,8 +571,17 @@ pub async fn fork(
     let Some(destination) = destination.filter(|_| problems.is_empty()) else {
         return Ok(Err(Refused::Invalid(problems)));
     };
-    if !allowed(state, viewer, Action::Post) {
+    if !allowed_to_post(state, user, Action::Post).await? {
         return Ok(Err(Refused::RateLimited));
+    }
+    if must_hold(state, user).await? {
+        let place = HeldPlace::Thread {
+            category_id: destination.category.id,
+            title,
+            forked_from_post_id: Some(post_id),
+        };
+        let id = mod_records::hold(state.db(), user.id, &place, &body).await?;
+        return Ok(Ok(Written::Held(id)));
     }
     let created = create_thread(
         state,
@@ -418,15 +597,15 @@ pub async fn fork(
         },
     )
     .await?;
-    Ok(Ok(Posted {
+    Ok(Ok(Written::Posted(Posted {
         thread_id: created.thread_id,
         post_id: created.first_post_id,
-    }))
+    })))
 }
 
 /// Creates a category thread with its first post, has its author watch it,
 /// and queues the notifications about it.
-async fn create_thread(
+pub(crate) async fn create_thread(
     state: &AppState,
     thread: &NewThread,
 ) -> Result<store::CreatedThread, AppError> {

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE posts SET hidden_at = CASE WHEN $2::bigint IS NULL THEN NULL ELSE now() END, hidden_by = $2\n         WHERE id = $1 AND deleted_at IS NULL AND (hidden_at IS NULL) = ($2::bigint IS NOT NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a3ea724d7fb5c374239072102409311b699eb42620a27a2d039582c28c712953"
+}

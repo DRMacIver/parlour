@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE threads SET deleted_at = now(), merged_into_thread_id = $2\n           WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM posts WHERE thread_id = $1)\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "02e2b8108f8b4fe6ac5b877f3d25fa0fa5a90d942e5975419283b25370f54d21"
+}

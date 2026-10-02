@@ -19,6 +19,8 @@ pub mod mail;
 pub mod markdown;
 mod message_pages;
 pub mod messages;
+mod mod_pages;
+pub mod moderation;
 mod notification_pages;
 pub mod notify;
 mod pages;
@@ -33,8 +35,8 @@ mod write_pages;
 pub mod writing;
 
 pub use db::{
-    changes, content, groups, invites, jobs, login_tokens, members, notifications, seed, sessions,
-    settings, social, store, users,
+    changes, content, groups, invites, jobs, login_tokens, members, moderation as mod_records,
+    notifications, seed, sessions, settings, social, store, users,
 };
 
 use std::sync::{Arc, Mutex};
@@ -89,6 +91,7 @@ impl AppState {
         jobs.scrub_on_failure(mail::JOB_KIND, mail::scrub);
         jobs.register(notify::POST_JOB, notify::run_post_job);
         jobs.register(notify::EMAIL_JOB, notify::run_email_job);
+        jobs.register(moderation::FORGET_IPS_JOB, moderation::run_forget_ips);
         AppState {
             db: Db::new(db),
             cache: Arc::new(cache),
@@ -253,6 +256,55 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/admin/messages/test-email",
             post(notification_pages::test_email),
+        )
+        // Moderation
+        .route(
+            "/p/{id}/report",
+            get(mod_pages::report_post_page).post(mod_pages::report_post),
+        )
+        .route(
+            "/u/{username}/report",
+            get(mod_pages::report_member_page).post(mod_pages::report_member),
+        )
+        .route(
+            "/contact",
+            get(mod_pages::contact_page).post(mod_pages::contact),
+        )
+        .route("/held/{id}", get(mod_pages::held_page))
+        .route(
+            "/appeal/{id}",
+            get(mod_pages::appeal_page).post(mod_pages::appeal),
+        )
+        .route("/moderation", get(mod_pages::public_log))
+        .route("/mod", get(mod_pages::mod_index))
+        .route("/mod/queue", get(mod_pages::queue))
+        .route("/mod/log", get(mod_pages::staff_log))
+        .route("/mod/users", get(mod_pages::users_page))
+        .route("/mod/users/{username}", get(mod_pages::user_page))
+        .route(
+            "/mod/users/{username}/{action}",
+            post(mod_pages::user_action),
+        )
+        .route(
+            "/mod/p/{id}",
+            get(mod_pages::post_page).post(mod_pages::moderate_post),
+        )
+        .route(
+            "/mod/p/{id}/revisions/{rev}/redact",
+            post(mod_pages::redact),
+        )
+        .route(
+            "/mod/t/{id}",
+            get(mod_pages::thread_page).post(mod_pages::moderate_thread),
+        )
+        .route("/mod/t/{id}/move-posts", post(mod_pages::move_posts))
+        .route("/mod/held/{id}/approve", post(mod_pages::approve))
+        .route("/mod/held/{id}/reject", post(mod_pages::reject))
+        .route("/mod/reports/{id}/dismiss", post(mod_pages::dismiss))
+        .route("/mod/appeals/{id}", post(mod_pages::decide_appeal))
+        .route(
+            "/admin/moderation",
+            get(mod_pages::admin_page).post(mod_pages::save_admin),
         )
         .route("/events/t/{id}", get(live::thread_events))
         .route("/events/notifications", get(live::notification_events))

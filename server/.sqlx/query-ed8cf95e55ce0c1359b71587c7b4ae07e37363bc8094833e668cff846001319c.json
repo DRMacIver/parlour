@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE invites SET revoked_at = now() WHERE created_by = ANY($1) AND revoked_at IS NULL\n           AND invite_status(revoked_at, uses, max_uses, expires_at) = 'valid'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ed8cf95e55ce0c1359b71587c7b4ae07e37363bc8094833e668cff846001319c"
+}

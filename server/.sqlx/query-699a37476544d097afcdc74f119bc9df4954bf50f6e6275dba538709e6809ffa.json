@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO notifications (user_id, kind, actor_id, message)\n           VALUES ($1, 'moderation', $2, $3) RETURNING id",
+  "query": "SELECT id FROM threads WHERE id = ANY($1) ORDER BY id FOR UPDATE",
   "describe": {
     "columns": [
       {
@@ -9,7 +9,7 @@
         "type_info": "Int8",
         "origin": {
           "Table": {
-            "table": "notifications",
+            "table": "threads",
             "name": "id"
           }
         }
@@ -17,14 +17,12 @@
     ],
     "parameters": {
       "Left": [
-        "Int8",
-        "Int8",
-        "Text"
+        "Int8Array"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "c76eaf52993f26be723683e9d342315726f0464f0566355c82d748aac5c75021"
+  "hash": "699a37476544d097afcdc74f119bc9df4954bf50f6e6275dba538709e6809ffa"
 }

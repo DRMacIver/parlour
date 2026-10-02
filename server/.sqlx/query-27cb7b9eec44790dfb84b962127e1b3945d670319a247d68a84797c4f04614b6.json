@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE held_posts SET status = CASE WHEN $3::bigint IS NULL THEN 'rejected' ELSE 'approved' END,\n                  post_id = $3, decided_by = $2, decided_at = now()\n           WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "27cb7b9eec44790dfb84b962127e1b3945d670319a247d68a84797c4f04614b6"
+}

@@ -10,7 +10,8 @@ use parlour::store::NewThread;
 use sqlx::PgPool;
 
 /// A forum with a public category `games`, member ruth (with a session)
-/// and member jonah.
+/// and member jonah, neither of whom counts as new (the limits on new
+/// members are tested in `moderation.rs`).
 struct Setup {
     f: Forum,
     games: i64,
@@ -22,6 +23,7 @@ struct Setup {
 
 async fn setup(pool: PgPool) -> Setup {
     let f = Forum::new(pool);
+    f.no_new_members().await;
     let games = f.category("games", "public", None, 0).await;
     let ruth = f.member("ruth", "user", None).await;
     let jonah = f.member("jonah", "user", None).await;
@@ -1264,6 +1266,7 @@ fn forks_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle, db: &
         .unwrap();
     });
     let f = Forum::new(db.clone());
+    rt.block_on(f.no_new_members());
     let levels = vec!["public", "members", "groups"];
     let writes = vec!["members", "groups", "staff"];
     let count = tc.draw(gs::integers::<usize>().min_value(1).max_value(5));

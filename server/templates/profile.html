@@ -22,6 +22,8 @@
       {% else if actions.can_block %}
       <a class="button button-small button-quiet" href="/u/{{ profile.user.username }}/block">Block…</a>
       {% endif %}
+      <a class="button button-small button-quiet" href="/u/{{ profile.user.username }}/report">Report…</a>
+      {% if actions.staff %}<a class="button button-small button-quiet" href="/mod/users/{{ profile.user.username }}">Moderate</a>{% endif %}
     </div>
     {% endif %}
   </div>

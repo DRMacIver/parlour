@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{% block title %}Contest a decision · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Contest a decision</h1>
+{% if let Some(entry) = entry %}
+<section class="panel">
+  <h2 class="panel-bar">The decision</h2>
+  <p class="panel-text">A moderator {% for bit in entry.bits %}{% match bit %}{% when crate::content::moderation::Bit::Text(t) %}{{ t }}{% when crate::content::moderation::Bit::Link { href, text } %}<a href="{{ href }}">{{ text }}</a>{% endmatch %}{% endfor %}, on <time datetime="{{ crate::format::iso(entry.created_at) }}">{{ crate::format::datetime(entry.created_at) }}</time>.</p>
+  {% if !entry.reason.is_empty() %}<p class="panel-text">Their reason: {{ entry.reason }}</p>{% endif %}
+</section>
+{% endif %}
+<p class="lede">Tell the moderators why you think they got it wrong. Another look is taken by the moderators together, and you’ll hear what they decide.</p>
+{% call f::errors(errors) %}{% endcall %}
+<form class="panel" method="post" action="/appeal/{{ action_id }}">
+  <h2 class="panel-bar">Your case</h2>
+  <div class="form">
+    <div class="field">
+      <label for="details">Why it should be reversed</label>
+      <textarea id="details" name="details" rows="6" maxlength="2000" required>{{ details }}</textarea>
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Send</button><a href="/notifications">Cancel</a></div>
+  </div>
+</form>
+</div>
+{% endblock %}

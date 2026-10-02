@@ -35,6 +35,8 @@ pub enum Change {
     InviteChanged { invite_id: i64 },
     /// Site settings or sections changed.
     SiteChanged,
+    /// A moderator's action was recorded in the moderation log.
+    ModLogged,
 }
 
 /// The tags to clear for a change.
@@ -112,6 +114,7 @@ pub async fn tags_for(db: &Db, change: Change) -> sqlx::Result<Vec<Tag>> {
         }
         Change::InviteChanged { invite_id } => tags.push(Tag::Invite(invite_id)),
         Change::SiteChanged => tags.push(Tag::Site),
+        Change::ModLogged => tags.push(Tag::ModLog),
     }
     Ok(tags)
 }

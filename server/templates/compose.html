@@ -55,6 +55,13 @@
       <textarea id="body" name="body" rows="12" required>{{ body }}</textarea>
       <span class="field-hint">Markdown: *italic*, **bold**, &gt; quote, `code`, [link](https://…), tables and ~~strikethrough~~. Mention someone with @username.</span>
     </div>
+    {% if let Some(reason) = mod_reason %}
+    <div class="field">
+      <label for="reason">Why you are editing this post</label>
+      <input type="text" id="reason" name="reason" value="{{ reason }}" maxlength="500" required>
+      <span class="field-hint">You are editing someone else’s post as a moderator. The reason goes in the moderation log, and its author is told.</span>
+    </div>
+    {% endif %}
     <div class="form-actions">
       <button class="button" type="submit">{{ submit }}</button>
       <button class="button button-quiet" type="submit" name="preview" value="1">Preview</button>

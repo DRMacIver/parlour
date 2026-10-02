@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{%- import "_mod.html" as md -%}
+{% block title %}Members · Moderation · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Members</h1>
+{% call md::mod_nav("users") %}{% endcall %}
+<form class="form-inline mod-search" method="get" action="/mod/users">
+  <label class="visually-hidden" for="q">Find a member</label>
+  <input id="q" name="q" type="search" value="{{ search }}" placeholder="Name or username">
+  <label class="choice"><input type="checkbox" name="restricted" value="1"{% if restricted %} checked{% endif %}> Only silenced or suspended</label>
+  <button class="button button-small" type="submit">Find</button>
+</form>
+<section class="panel" aria-labelledby="members-heading">
+  <h2 class="panel-bar" id="members-heading">{{ crate::format::plural(total, "member", "members") }}</h2>
+  {% if members.is_empty() %}<p class="empty">Nobody matches.</p>{% else %}
+  <ul class="member-list">
+  {% for member in members %}
+    <li>
+      {% call m::avatar(member.user, "avatar-tiny") %}{% endcall %}
+      <span class="tree-names">
+        <a href="/mod/users/{{ member.user.username }}">{{ member.user.display_name }}</a>
+        <span class="tree-username">@{{ member.user.username }}</span>
+        {% if let Some(badge) = member.role.badge() %}<span class="badge">{{ badge }}</span>{% endif %}
+        {% if member.is_suspended() %}<span class="flag">Suspended</span>{% else if member.is_silenced() %}<span class="flag">Silenced</span>{% endif %}
+        <span class="row-meta">joined {{ crate::format::date(member.created_at) }}{% if member.open_reports > 0 %} · {{ crate::format::plural(member.open_reports, "open report", "open reports") }}{% endif %}</span>
+      </span>
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% call m::pagination(pagination, "Pages of members") %}{% endcall %}
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{%- import "_forms.html" as f -%}
+{% block title %}{{ heading }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+{% if let Some(post) = post %}{% call m::post_crumbs(post.thread) %}{% endcall %}{% endif %}
+<h1 class="page-title">{{ heading }}</h1>
+<p class="lede">Reports go to the moderators, and nobody else is told who sent them.</p>
+{% call f::errors(errors) %}{% endcall %}
+{% if let Some(post) = post %}{% if let Some(text) = post.body %}
+<section class="panel"><div class="post-body">{{ text.html|safe }}</div></section>
+{% endif %}{% endif %}
+{% if private %}<div class="notice" role="status"><p>Reporting a message lets the moderators read this conversation, so that they can see what happened. Your other conversations stay private.</p></div>{% endif %}
+<form class="panel" method="post" action="{{ action }}">
+  <h2 class="panel-bar">Report</h2>
+  <div class="form">
+    <fieldset class="field">
+      <legend>What’s wrong?</legend>
+      {% for (key, label) in reasons %}
+      <label class="choice"><input type="radio" name="reason" value="{{ key }}"{% if reason == *key %} checked{% endif %} required> {{ label }}</label>
+      {% endfor %}
+    </fieldset>
+    <div class="field">
+      <label for="details">Anything the moderators should know</label>
+      <textarea id="details" name="details" rows="4" maxlength="2000">{{ details }}</textarea>
+    </div>
+    <div class="form-actions">
+      <button class="button" type="submit">Send report</button>
+      <a href="{{ cancel }}">Cancel</a>
+    </div>
+  </div>
+</form>
+</div>
+{% endblock %}

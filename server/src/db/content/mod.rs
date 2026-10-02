@@ -9,6 +9,7 @@
 //! private category), because a later change could make them visible.
 
 pub mod messages;
+pub mod moderation;
 pub mod notifications;
 
 use std::collections::{BTreeSet, HashMap};
@@ -539,9 +540,16 @@ pub enum PostBody {
         author: Box<AuthorInfo>,
         body_html: String,
         edited_at: Option<DateTime<Utc>>,
+        /// A moderator hid it: only staff are shown it, marked as hidden.
+        hidden: bool,
     },
-    Deleted,
+    /// Deleted by its author, or by a moderator.
+    Deleted { by_moderator: bool },
+    /// Hidden by a moderator, as everyone but staff sees it.
     Hidden,
+    /// Moved to another thread, which is given if the viewer can read it.
+    /// The post keeps its id, so its permalink leads there.
+    Moved { to: Option<ThreadRef> },
 }
 
 pub struct ReplyTo {
@@ -597,7 +605,7 @@ pub async fn thread_page(
         thread_id,
         &filter.visibilities,
         &filter.group_category_ids,
-        viewer.user_id(),
+        filter.dm_viewer,
     )
     .fetch_optional(db.pool())
     .await?
@@ -658,23 +666,27 @@ pub(super) async fn posts_on_page(
         .and_then(|offset| Some((offset.checked_add(1)?, offset.checked_add(POSTS_PER_PAGE)?)))
         .and_then(|(first, last)| Some((i32::try_from(first).ok()?, i32::try_from(last).ok()?)));
     let (first, last) = seq_range.unwrap_or((1, 0));
+    // Staff read hidden posts, marked as hidden; nobody reads deleted ones.
+    let staff = viewer.is_staff();
     let rows = sqlx::query!(
         r#"
         SELECT p.id, p.seq, p.created_at, p.edited_at,
                (p.deleted_at IS NOT NULL) AS "deleted!", (p.hidden_at IS NOT NULL) AS "hidden!",
-               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.body_html END AS body_html,
-               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.author_id END AS author_id,
+               (p.deleted_by IS NOT NULL AND p.deleted_by <> p.author_id) AS "deleted_by_staff!",
+               CASE WHEN p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $4) THEN p.body_html END AS body_html,
+               CASE WHEN p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $4) THEN p.author_id END AS author_id,
                r.id AS "reply_id?", r.seq AS "reply_seq?",
                ru.id AS "reply_user_id?", ru.username AS "reply_username?", ru.display_name AS "reply_display_name?"
         FROM posts p
         LEFT JOIN posts r ON r.id = p.reply_to_post_id AND r.thread_id = p.thread_id
-        LEFT JOIN users ru ON ru.id = r.author_id AND r.deleted_at IS NULL AND r.hidden_at IS NULL
+        LEFT JOIN users ru ON ru.id = r.author_id AND r.deleted_at IS NULL AND (r.hidden_at IS NULL OR $4)
         WHERE p.thread_id = $1 AND p.seq BETWEEN $2 AND $3
         ORDER BY p.seq
         "#,
         thread_id,
         first,
         last,
+        staff,
     )
     .fetch_all(db.pool())
     .await?;
@@ -696,12 +708,14 @@ pub(super) async fn posts_on_page(
         .collect();
     let mut reactions = reactions_for(db, viewer, &live_ids).await?;
 
-    Ok(rows
+    let mut posts: Vec<PostView> = rows
         .into_iter()
         .map(|row| {
             let body = if row.deleted {
-                PostBody::Deleted
-            } else if row.hidden {
+                PostBody::Deleted {
+                    by_moderator: row.deleted_by_staff,
+                }
+            } else if row.hidden && !staff {
                 PostBody::Hidden
             } else {
                 let author_id = row.author_id.expect("live posts have authors");
@@ -709,6 +723,7 @@ pub(super) async fn posts_on_page(
                     author: Box::new(authors.get(&author_id).cloned().expect("author loaded")),
                     body_html: row.body_html.unwrap_or_default(),
                     edited_at: row.edited_at,
+                    hidden: row.hidden,
                 }
             };
             let reply_to = match (row.reply_id, row.reply_seq) {
@@ -738,7 +753,49 @@ pub(super) async fn posts_on_page(
                 reply_to,
             }
         })
-        .collect())
+        .collect();
+
+    // The places of posts moved to other threads keep their numbers here.
+    let filter = viewer.filter();
+    let moves = sqlx::query!(
+        r#"
+        SELECT m.post_id, m.from_seq, m.moved_at, t.id AS thread_id, t.title, t.slug,
+               t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $4, $5) AS "readable!"
+        FROM post_moves m
+        JOIN posts p ON p.id = m.post_id
+        JOIN threads t ON t.id = p.thread_id
+        WHERE m.from_thread_id = $1 AND m.from_seq BETWEEN $2 AND $3
+        "#,
+        thread_id,
+        first,
+        last,
+        &filter.visibilities,
+        &filter.group_category_ids,
+    )
+    .fetch_all(db.pool())
+    .await?;
+    for row in moves {
+        // Where it is now may change without this thread changing.
+        deps.add(Tag::Thread(row.thread_id));
+        posts.push(PostView {
+            id: row.post_id,
+            seq: i64::from(row.from_seq),
+            created_at: row.moved_at,
+            body: PostBody::Moved {
+                to: row.readable.then_some(ThreadRef {
+                    id: row.thread_id,
+                    title: row.title,
+                    slug: row.slug,
+                }),
+            },
+            reply_to: None,
+            forks: Vec::new(),
+            reactions: Vec::new(),
+            from_blocked: false,
+        });
+    }
+    posts.sort_by_key(|post| post.seq);
+    Ok(posts)
 }
 
 /// The members whose posts the viewer has asked not to see: those they
@@ -1024,7 +1081,7 @@ pub async fn post_location(
         post_id,
         &filter.visibilities,
         &filter.group_category_ids,
-        viewer.user_id(),
+        filter.dm_viewer,
     )
     .fetch_optional(db.pool())
     .await?;
@@ -1276,7 +1333,7 @@ pub async fn thread_target(
         thread_id,
         &filter.visibilities,
         &filter.group_category_ids,
-        viewer.user_id(),
+        filter.dm_viewer,
     )
     .fetch_optional(db.pool())
     .await?
@@ -1322,8 +1379,10 @@ pub struct PostTarget {
     pub author: UserRef,
     pub created_at: DateTime<Utc>,
     pub edited_at: Option<DateTime<Utc>>,
-    /// The text, as Markdown and as HTML, unless the post was deleted or
-    /// hidden.
+    /// Whether a moderator hid it.
+    pub hidden: bool,
+    /// The text, as Markdown and as HTML, unless the post was deleted, or
+    /// hidden and the viewer isn't staff.
     pub body: Option<PostText>,
 }
 
@@ -1334,8 +1393,10 @@ pub struct PostText {
 }
 
 impl PostTarget {
+    /// Whether it is there for everyone who can read its thread: neither
+    /// deleted nor hidden.
     pub fn is_live(&self) -> bool {
-        self.body.is_some()
+        self.body.is_some() && !self.hidden
     }
 }
 
@@ -1347,9 +1408,9 @@ pub async fn post_target(
     let filter = viewer.filter();
     let Some(row) = sqlx::query!(
         r#"
-        SELECT p.id, p.seq, p.thread_id, p.created_at, p.edited_at,
-               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.body_md END AS body_md,
-               CASE WHEN p.deleted_at IS NULL AND p.hidden_at IS NULL THEN p.body_html END AS body_html,
+        SELECT p.id, p.seq, p.thread_id, p.created_at, p.edited_at, p.hidden_at IS NOT NULL AS "hidden!",
+               CASE WHEN p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $5) THEN p.body_md END AS body_md,
+               CASE WHEN p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $5) THEN p.body_html END AS body_html,
                u.id AS author_id, u.username, u.display_name
         FROM posts p
         JOIN threads t ON t.id = p.thread_id
@@ -1360,7 +1421,8 @@ pub async fn post_target(
         post_id,
         &filter.visibilities,
         &filter.group_category_ids,
-        viewer.user_id(),
+        filter.dm_viewer,
+        viewer.is_staff(),
     )
     .fetch_optional(db.pool())
     .await?
@@ -1381,6 +1443,7 @@ pub async fn post_target(
         },
         created_at: row.created_at,
         edited_at: row.edited_at,
+        hidden: row.hidden,
         body: match (row.body_md, row.body_html) {
             (Some(markdown), Some(html)) => Some(PostText { markdown, html }),
             _ => None,
@@ -1421,17 +1484,24 @@ pub async fn first_unread(
         r#"
         SELECT p.id, p.seq, t.slug, t.visibility = 'private' AS "private!"
         FROM threads t
-        JOIN posts p ON p.thread_id = t.id
-          AND p.seq = least(t.last_seq,
-                            coalesce((SELECT tr.last_read_seq FROM thread_reads tr
-                                      WHERE tr.thread_id = t.id AND tr.user_id = $4), 0) + 1)
+        CROSS JOIN LATERAL (
+            SELECT coalesce((SELECT tr.last_read_seq FROM thread_reads tr
+                             WHERE tr.thread_id = t.id AND tr.user_id = $4), 0) + 1 AS seq
+        ) wanted
+        -- The first post from there on, or the last post if there is none:
+        -- the places of posts moved elsewhere have no post.
+        JOIN LATERAL (
+            SELECT p.id, p.seq FROM posts p WHERE p.thread_id = t.id
+            ORDER BY p.seq >= wanted.seq DESC, CASE WHEN p.seq >= wanted.seq THEN p.seq END, p.seq DESC
+            LIMIT 1
+        ) p ON true
         WHERE t.id = $1 AND t.deleted_at IS NULL
           AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
         "#,
         thread_id,
         &filter.visibilities,
         &filter.group_category_ids,
-        viewer.user_id(),
+        filter.dm_viewer,
     )
     .fetch_optional(db.pool())
     .await?;

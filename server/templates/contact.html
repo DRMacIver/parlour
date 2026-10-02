@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{% block title %}Contact the moderators · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<h1 class="page-title">Contact the moderators</h1>
+{% if sent %}
+<div class="notice notice-success" role="status"><p>Thank you. Your message has gone to the moderators.</p></div>
+<p><a href="/">Back to the forum index</a></p>
+{% else %}
+<p class="lede">To report something, or ask the moderators anything. You don’t need an account. If you want a reply, leave an email address; only the moderators see it.</p>
+{% call f::errors(errors) %}{% endcall %}
+<form class="panel" method="post" action="/contact">
+  <h2 class="panel-bar">Your message</h2>
+  <div class="form">
+    {% if !logged_in %}
+    <div class="field">
+      <label for="email">Your email address <span class="field-hint">(optional)</span></label>
+      <input type="email" id="email" name="email" value="{{ email }}" maxlength="254" autocomplete="email">
+    </div>
+    {% endif %}
+    <div class="field">
+      <label for="message">Message</label>
+      <textarea id="message" name="message" rows="8" maxlength="2000" required>{{ message }}</textarea>
+      <span class="field-hint">If it’s about a post, include its link.</span>
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Send to the moderators</button></div>
+  </div>
+</form>
+{% endif %}
+</div>
+{% endblock %}

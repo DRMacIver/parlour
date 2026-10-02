@@ -1,7 +1,9 @@
 //! Conversations (direct messages, DESIGN.md §3.7), as the people in them
 //! see them. A conversation is a thread with no category whose visibility
 //! is `private`; only its current participants can read it, which the
-//! shared `dm_readable` SQL function checks. Staff are no exception.
+//! shared `dm_readable` SQL function checks. Staff are no exception, until
+//! a participant reports a message in it: then staff can read that
+//! conversation (and only that one) too.
 //!
 //! Lists of category threads (the index, `/latest`, category pages,
 //! profiles' post counts) use `thread_readable`, which never matches a
@@ -193,7 +195,7 @@ fn snippet(text: &str) -> String {
 /// The viewer's conversations, most recently active first. Visitors have
 /// none.
 pub async fn conversations(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<ConversationList> {
-    let Some(user_id) = viewer.user_id() else {
+    let Some(user_id) = viewer.filter().dm_viewer else {
         return Ok(ConversationList {
             total: 0,
             rows: Vec::new(),
@@ -278,7 +280,7 @@ pub async fn conversations(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<
 
 /// How many of the viewer's conversations have messages they haven't read.
 pub async fn unread_conversations(db: &Db, viewer: &Viewer) -> sqlx::Result<i64> {
-    let Some(user_id) = viewer.user_id() else {
+    let Some(user_id) = viewer.filter().dm_viewer else {
         return Ok(0);
     };
     sqlx::query_scalar!(
@@ -312,7 +314,7 @@ pub async fn conversation_page(
     page: i64,
     deps: &mut Deps,
 ) -> sqlx::Result<Option<ConversationPage>> {
-    let Some(user_id) = viewer.user_id() else {
+    let Some(user_id) = viewer.filter().dm_viewer else {
         return Ok(None);
     };
     let Some(row) = sqlx::query!(

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{%- import "_mod.html" as md -%}
+{% block title %}Moderation log · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Moderation log</h1>
+{% if staff %}{% if staff_view %}{% call md::mod_nav("log") %}{% endcall %}{% else %}{% call md::mod_nav("public") %}{% endcall %}{% endif %}{% endif %}
+<p class="lede">{% if staff_view %}Everything the moderators have done. Entries marked “Staff only” are about members-only, group or private content, or are staff business, and don’t appear in the public log.{% else %}What the moderators have done about public content and members, and why. Actions in members-only and private areas aren’t listed here.{% endif %}</p>
+<section class="panel" aria-labelledby="log-heading">
+  <h2 class="panel-bar" id="log-heading">{% if staff_view %}All actions{% else %}Public actions{% endif %}</h2>
+  {% if entries.is_empty() %}
+  <p class="empty">Nothing yet.</p>
+  {% else %}
+  <ol class="log-list">
+    {% for entry in entries %}{% if staff_view %}{% call md::log_entry(entry, true) %}{% endcall %}{% else %}{% call md::log_entry(entry, false) %}{% endcall %}{% endif %}{% endfor %}
+  </ol>
+  {% endif %}
+</section>
+{% call m::pagination(pagination, "Pages of the log") %}{% endcall %}
+<p class="panel-foot">To report something, use the report link on a post or profile, or <a href="/contact">write to the moderators</a>.</p>
+{% endblock %}

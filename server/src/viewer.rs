@@ -46,6 +46,41 @@ pub struct UserCtx {
     /// The categories those groups may read. They matter only while a
     /// category's read level is `groups`.
     pub group_category_ids: Vec<i64>,
+    /// Until when a moderator has silenced this member: they can read but
+    /// not write (DESIGN.md §8).
+    pub silenced_until: Option<DateTime<Utc>>,
+    /// Until when they are suspended: they read only what visitors read,
+    /// and can do nothing but contest it.
+    pub suspended_until: Option<DateTime<Utc>>,
+}
+
+impl UserCtx {
+    /// Whether the member is suspended now.
+    pub fn is_suspended(&self) -> bool {
+        self.suspended_until.is_some_and(|until| until > Utc::now())
+    }
+
+    /// Whether the member is silenced now, or suspended, which includes it.
+    pub fn is_silenced(&self) -> bool {
+        self.is_suspended() || self.silenced_until.is_some_and(|until| until > Utc::now())
+    }
+
+    /// Whether the member may do anything beyond reading and contesting
+    /// moderators' actions: not while suspended.
+    pub fn may_act(&self) -> bool {
+        !self.is_suspended()
+    }
+
+    /// Whether the member may write things others read: posts, edits,
+    /// messages, reactions and invites. Not while silenced or suspended.
+    pub fn may_write(&self) -> bool {
+        !self.is_silenced()
+    }
+
+    /// Whether the member is a moderator or admin, and not suspended.
+    pub fn is_staff(&self) -> bool {
+        self.role.is_staff() && !self.is_suspended()
+    }
 }
 
 /// The bind parameters for the visibility condition in SQL.
@@ -55,21 +90,27 @@ pub struct ReadFilter {
     pub visibilities: Vec<String>,
     /// Group-restricted categories this viewer may read.
     pub group_category_ids: Vec<i64>,
+    /// Who the viewer is, for `dm_readable`: `None` for visitors and for
+    /// suspended members, who read no conversations.
+    pub dm_viewer: Option<i64>,
 }
 
 impl Viewer {
     pub fn filter(&self) -> ReadFilter {
-        let levels: &[&str] = match self {
-            Viewer::Anonymous => &["public"],
-            Viewer::User(user) if user.role.is_staff() => &["public", "members", "groups"],
-            Viewer::User(_) => &["public", "members"],
+        // A suspended member reads only what visitors read (DESIGN.md
+        // §3.1: members-only means members who are not suspended).
+        let user = self.user().filter(|user| !user.is_suspended());
+        let levels: &[&str] = match user {
+            None => &["public"],
+            Some(user) if user.role.is_staff() => &["public", "members", "groups"],
+            Some(_) => &["public", "members"],
         };
         ReadFilter {
             visibilities: levels.iter().map(|level| (*level).to_owned()).collect(),
-            group_category_ids: match self {
-                Viewer::User(user) => user.group_category_ids.clone(),
-                Viewer::Anonymous => Vec::new(),
-            },
+            group_category_ids: user
+                .map(|user| user.group_category_ids.clone())
+                .unwrap_or_default(),
+            dm_viewer: user.map(|user| user.id),
         }
     }
 
@@ -84,12 +125,14 @@ impl Viewer {
         self.user().map(|user| user.id)
     }
 
+    /// Whether the viewer is a moderator or admin who isn't suspended.
     pub fn is_staff(&self) -> bool {
-        self.user().is_some_and(|user| user.role.is_staff())
+        self.user().is_some_and(UserCtx::is_staff)
     }
 
     pub fn is_admin(&self) -> bool {
-        self.user().is_some_and(|user| user.role == Role::Admin)
+        self.user()
+            .is_some_and(|user| user.role == Role::Admin && !user.is_suspended())
     }
 }
 
@@ -147,6 +190,8 @@ mod tests {
             created_at: Utc::now(),
             group_ids: Vec::new(),
             group_category_ids: Vec::new(),
+            silenced_until: None,
+            suspended_until: None,
         })
     }
 
@@ -175,7 +220,8 @@ mod tests {
             Viewer::Anonymous.filter(),
             ReadFilter {
                 visibilities: vec!["public".into()],
-                group_category_ids: vec![]
+                group_category_ids: vec![],
+                dm_viewer: None,
             }
         );
     }
@@ -203,10 +249,41 @@ mod tests {
             ReadFilter {
                 visibilities: vec!["public".into(), "members".into()],
                 group_category_ids: vec![7, 9],
+                dm_viewer: Some(1),
             }
         );
         assert!(user(Role::Moderator).is_staff());
         assert!(!user(Role::Moderator).is_admin());
         assert!(user(Role::Admin).is_admin());
+    }
+
+    #[test]
+    fn suspended_members_read_what_visitors_read() {
+        for role in [Role::User, Role::Moderator, Role::Admin] {
+            let Viewer::User(mut ctx) = user(role) else {
+                unreachable!()
+            };
+            ctx.group_category_ids = vec![7];
+            ctx.suspended_until = Some(Utc::now() + chrono::Duration::days(1));
+            let viewer = Viewer::User(ctx.clone());
+            assert_eq!(viewer.filter(), Viewer::Anonymous.filter());
+            assert!(!viewer.is_staff() && !viewer.is_admin());
+            assert!(ctx.is_silenced() && !ctx.may_write() && !ctx.may_act());
+            // Once it has run out, it no longer applies.
+            ctx.suspended_until = Some(Utc::now() - chrono::Duration::seconds(1));
+            assert!(!ctx.is_suspended() && ctx.may_act() && ctx.may_write());
+            assert_eq!(Viewer::User(ctx).filter().dm_viewer, Some(1));
+        }
+    }
+
+    #[test]
+    fn silenced_members_read_but_dont_write() {
+        let Viewer::User(mut ctx) = user(Role::User) else {
+            unreachable!()
+        };
+        let before = Viewer::User(ctx.clone()).filter();
+        ctx.silenced_until = Some(Utc::now() + chrono::Duration::hours(1));
+        assert_eq!(Viewer::User(ctx.clone()).filter(), before);
+        assert!(ctx.is_silenced() && !ctx.may_write() && ctx.may_act());
     }
 }

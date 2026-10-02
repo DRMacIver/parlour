@@ -146,14 +146,16 @@ pub async fn insert_moderation<'c>(
     user_id: i64,
     actor_id: Option<i64>,
     message: &str,
+    action_id: Option<i64>,
 ) -> sqlx::Result<i64> {
     let mut conn = db.open(KEY).acquire().await?;
     sqlx::query_scalar!(
-        r#"INSERT INTO notifications (user_id, kind, actor_id, message)
-           VALUES ($1, 'moderation', $2, $3) RETURNING id"#,
+        r#"INSERT INTO notifications (user_id, kind, actor_id, message, mod_action_id)
+           VALUES ($1, 'moderation', $2, $3, $4) RETURNING id"#,
         user_id,
         actor_id,
         message,
+        action_id,
     )
     .fetch_one(&mut *conn)
     .await

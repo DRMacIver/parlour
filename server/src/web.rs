@@ -26,6 +26,7 @@ pub enum Nav {
     Invites,
     Account,
     Admin,
+    Moderation,
     Login,
     None,
 }
@@ -38,6 +39,16 @@ pub struct NavUser {
     pub notifications: i64,
     /// Conversations with messages they haven't read.
     pub messages: i64,
+    /// For staff, how many things are waiting in the moderation queue.
+    pub queue: Option<i64>,
+}
+
+/// What every page tells a silenced or suspended member.
+pub struct RestrictionNotice {
+    pub suspended: bool,
+    pub until: chrono::DateTime<chrono::Utc>,
+    /// The action to contest, if there is one.
+    pub action_id: Option<i64>,
 }
 
 /// Fields every page needs for the shared layout in `base.html`.
@@ -45,6 +56,7 @@ pub struct Layout {
     pub site_name: String,
     pub nav: Nav,
     pub user: Option<NavUser>,
+    pub restriction: Option<RestrictionNotice>,
 }
 
 impl Layout {
@@ -58,12 +70,34 @@ impl Layout {
                     .await?,
                 messages: crate::content::messages::unread_conversations(state.db(), viewer)
                     .await?,
+                queue: if viewer.is_staff() {
+                    Some(crate::mod_records::queue_size(state.db()).await?)
+                } else {
+                    None
+                },
             }),
+        };
+        let restriction = match viewer.user() {
+            Some(user) if user.is_silenced() => {
+                let suspended = user.is_suspended();
+                let until = if suspended {
+                    user.suspended_until
+                } else {
+                    user.silenced_until
+                };
+                Some(RestrictionNotice {
+                    suspended,
+                    until: until.unwrap_or_default(),
+                    action_id: crate::mod_records::current_restriction(state.db(), user.id).await?,
+                })
+            }
+            _ => None,
         };
         Ok(Layout {
             site_name: settings::site_name(state.db()).await?,
             nav,
             user,
+            restriction,
         })
     }
 }

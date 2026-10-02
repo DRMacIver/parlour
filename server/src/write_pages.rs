@@ -24,7 +24,7 @@ use crate::pages::parse_id;
 use crate::store;
 use crate::viewer::Viewer;
 use crate::web::{self, Layout, Nav, cacheable, render, see_other};
-use crate::writing::{self, MAX_REACTIONS, Posted, Refused};
+use crate::writing::{self, MAX_REACTIONS, Posted, Refused, Written};
 
 type Fields = Vec<(String, String)>;
 
@@ -85,11 +85,14 @@ struct Draft {
     body: String,
     reply_to: Option<i64>,
     category: String,
+    /// A moderator's reason for editing someone else's post.
+    reason: String,
 }
 
 impl Draft {
     fn from_fields(fields: &Fields) -> Draft {
         Draft {
+            reason: field(fields, "reason").unwrap_or_default().to_owned(),
             title: field(fields, "title").unwrap_or_default().to_owned(),
             body: field(fields, "body").unwrap_or_default().to_owned(),
             reply_to: field(fields, "reply_to").and_then(|v| v.trim().parse().ok()),
@@ -133,6 +136,8 @@ struct ComposeTemplate {
     source: Option<PostTarget>,
     preview: Option<String>,
     errors: Vec<String>,
+    /// For a moderator editing someone else's post, the reason so far.
+    mod_reason: Option<String>,
 }
 
 fn category_crumbs(category: &CategoryTarget) -> Vec<Crumb> {
@@ -203,6 +208,7 @@ async fn render_compose(
     };
     let template = match compose {
         Compose::NewThread(category) => ComposeTemplate {
+            mod_reason: None,
             heading: format!("New thread in {}", category.category.name),
             form_label: "New thread",
             action: format!("/c/{}/new", category.category.slug),
@@ -232,6 +238,7 @@ async fn render_compose(
                 None => None,
             };
             ComposeTemplate {
+                mod_reason: None,
                 heading: format!("Reply to {}", thread.name.clone()),
                 form_label: "Reply",
                 action: format!("/t/{}/reply", thread.thread.id),
@@ -250,6 +257,7 @@ async fn render_compose(
             }
         }
         Compose::Edit(post) => ComposeTemplate {
+            mod_reason: writing::editing_as_moderator(viewer, &post).then(|| draft.reason.clone()),
             heading: format!("Edit № {}", post.seq),
             form_label: "Edit post",
             action: format!("/p/{}/edit", post.post_id),
@@ -277,6 +285,7 @@ async fn render_compose(
                 draft.category.clone()
             };
             ComposeTemplate {
+                mod_reason: None,
                 heading: format!("Start a new thread from № {}", source.seq),
                 form_label: "New thread",
                 action: format!("/p/{}/fork", source.post_id),
@@ -430,6 +439,19 @@ async fn posted(state: &AppState, viewer: &Viewer, posted: Posted) -> Result<Res
     Ok(see_other(&post_href(state, viewer, posted.post_id).await?))
 }
 
+/// After a new post: to it, or if it was held for approval, to the page
+/// that says so.
+async fn written(
+    state: &AppState,
+    viewer: &Viewer,
+    written: Written,
+) -> Result<Response, AppError> {
+    match written {
+        Written::Posted(done) => posted(state, viewer, done).await,
+        Written::Held(id) => Ok(see_other(&format!("/held/{id}"))),
+    }
+}
+
 // -- New threads
 
 async fn new_thread_target(
@@ -501,7 +523,7 @@ pub async fn new_thread(
         };
     }
     match writing::new_thread(&state, &viewer, &slug, &draft.title, &draft.body).await? {
-        Ok(done) => posted(&state, &viewer, done).await,
+        Ok(done) => written(&state, &viewer, done).await,
         Err(refusal) => {
             let compose = match new_thread_target(&state, &viewer, &slug).await? {
                 Ok(category) => Typed::Form(Box::new(Compose::NewThread(category)), draft),
@@ -643,7 +665,7 @@ pub async fn reply(
         writing::reply(&state, &viewer, thread_id, &draft.body, draft.reply_to).await?
     };
     match outcome {
-        Ok(done) => posted(&state, &viewer, done).await,
+        Ok(done) => written(&state, &viewer, done).await,
         Err(refusal) => {
             let compose = match reply_target(&state, &viewer, thread_id).await? {
                 Ok(thread) => Typed::Form(Box::new(Compose::Reply(thread)), draft),
@@ -666,7 +688,7 @@ async fn edit_target(
 ) -> Result<Result<PostTarget, Refused>, AppError> {
     let Some(post) = content::post_target(state.db(), viewer, post_id)
         .await?
-        .filter(PostTarget::is_live)
+        .filter(|post| post.is_live() || (viewer.is_staff() && post.body.is_some()))
     else {
         return Ok(Err(Refused::NotFound));
     };
@@ -748,7 +770,7 @@ pub async fn edit(
             Err(refusal) => refused(&state, &viewer, refusal, &back, Typed::Text(draft)).await,
         };
     }
-    match writing::edit(&state, &viewer, post_id, &draft.body).await? {
+    match writing::edit(&state, &viewer, post_id, &draft.body, Some(&draft.reason)).await? {
         Ok(done) => posted(&state, &viewer, done).await,
         Err(refusal) => {
             let compose = match edit_target(&state, &viewer, post_id).await? {
@@ -829,9 +851,16 @@ struct RevisionsTemplate {
     /// The selected version's text, as changes from the one before.
     segments: Vec<Segment>,
     redacted: bool,
+    /// Whether the viewer is staff, who can redact earlier versions.
+    staff: bool,
 }
 
 impl RevisionsTemplate {
+    /// Whether the version shown is an earlier one that can be redacted.
+    fn redactable(&self) -> bool {
+        self.staff && !self.redacted && self.selected < self.history.versions.len() as i64
+    }
+
     fn version_href(&self, number: &i64) -> String {
         let latest = self.history.versions.len() as i64;
         if *number == latest {
@@ -934,6 +963,7 @@ pub async fn revisions(
             note,
             segments,
             redacted,
+            staff: viewer.is_staff(),
         },
         &deps,
     )
@@ -1093,7 +1123,7 @@ pub async fn fork(
     )
     .await?
     {
-        Ok(done) => posted(&state, &viewer, done).await,
+        Ok(done) => written(&state, &viewer, done).await,
         Err(refusal) => {
             let compose = match fork_target(&state, &viewer, post_id).await? {
                 Some((source, destinations)) => {

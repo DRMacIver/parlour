@@ -130,6 +130,11 @@ struct Shown {
     /// Why the viewer can't send here, if they can't.
     refusal: Option<&'static str>,
     muted: bool,
+    /// Whether the viewer is in it, rather than staff reading a reported
+    /// conversation.
+    participant: bool,
+    /// Whether the viewer is staff, who can moderate its messages.
+    staff: bool,
     /// The one other person, in a conversation between two, if they can
     /// be blocked.
     blockable: Option<content::UserRef>,
@@ -224,7 +229,8 @@ async fn render_conversation(
             .find(|post| post.seq > marker)
             .map(|post| post.id)
     });
-    if let Some(last) = conversation.posts.last() {
+    let participant = conversation.conversation.includes(user.id);
+    if participant && let Some(last) = conversation.posts.last() {
         store::mark_read(state.db(), user.id, id, last.seq).await?;
         notify::seen_thread(state, user.id, id, last.seq).await?;
     }
@@ -249,6 +255,8 @@ async fn render_conversation(
         reaction_types: content::reaction_types(state.db(), true).await?,
         refusal,
         muted,
+        participant,
+        staff: viewer.is_staff(),
         blockable,
         errors,
         draft,

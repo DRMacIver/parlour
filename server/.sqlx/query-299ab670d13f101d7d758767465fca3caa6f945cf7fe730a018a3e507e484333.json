@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE threads t SET title = $2, slug = $3, version = t.version + 1\n           FROM threads old WHERE old.id = t.id AND t.id = $1 AND old.title <> $2\n           RETURNING old.title",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "title"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "299ab670d13f101d7d758767465fca3caa6f945cf7fe730a018a3e507e484333"
+}

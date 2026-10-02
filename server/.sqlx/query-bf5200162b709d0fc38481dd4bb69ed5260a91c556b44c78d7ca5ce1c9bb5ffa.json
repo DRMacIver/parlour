@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT mine.ip, mine.first_seen_at, mine.last_seen_at,\n                  array_remove(array_agg(o.id ORDER BY o.id), NULL) AS \"other_ids!\",\n                  array_remove(array_agg(o.username::text ORDER BY o.id), NULL) AS \"other_usernames!\",\n                  array_remove(array_agg(o.display_name ORDER BY o.id), NULL) AS \"other_names!\"\n           FROM user_ips mine\n           LEFT JOIN user_ips theirs ON theirs.ip = mine.ip AND theirs.user_id <> mine.user_id\n             AND theirs.last_seen_at > now() - make_interval(days => $2)\n           LEFT JOIN users o ON o.id = theirs.user_id\n           WHERE mine.user_id = $1 AND mine.last_seen_at > now() - make_interval(days => $2)\n           GROUP BY mine.ip, mine.first_seen_at, mine.last_seen_at\n           ORDER BY mine.last_seen_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ip",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user_ips",
+            "name": "ip"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "first_seen_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "user_ips",
+            "name": "first_seen_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "last_seen_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "user_ips",
+            "name": "last_seen_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "other_ids!",
+        "type_info": "Int8Array",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "other_usernames!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "other_names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "bf5200162b709d0fc38481dd4bb69ed5260a91c556b44c78d7ca5ce1c9bb5ffa"
+}

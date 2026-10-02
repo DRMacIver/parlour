@@ -162,6 +162,41 @@ impl Forum {
         self.request(request.body(Body::from(body)).unwrap()).await
     }
 
+    /// Lifts every rate limit, for tests about something else that write
+    /// a lot.
+    pub fn without_rate_limits(mut self) -> Forum {
+        fn generous(
+            _: parlour::ratelimit::Action,
+            _: parlour::ratelimit::Scope,
+        ) -> parlour::ratelimit::Rule {
+            parlour::ratelimit::Rule {
+                burst: 1_000_000,
+                interval: std::time::Duration::from_millis(1),
+            }
+        }
+        self.state = self
+            .state
+            .clone()
+            .with_limiter(parlour::ratelimit::RateLimiter::new(generous));
+        self
+    }
+
+    /// A member invited by `inviter`.
+    pub async fn invitee(&self, username: &str, inviter: i64) -> i64 {
+        store::create_user(
+            &self.db,
+            &NewUser {
+                username: username.into(),
+                display_name: capitalise(username),
+                email: format!("{username}@example.com"),
+                invited_by_user_id: Some(inviter),
+                ..NewUser::default()
+            },
+        )
+        .await
+        .unwrap()
+    }
+
     /// A member with a confirmed email address and, optionally, a password.
     pub async fn member(&self, username: &str, role: &str, password: Option<&str>) -> i64 {
         let id = store::create_user(
@@ -377,6 +412,23 @@ impl Forum {
             Some(id) => id,
             None => self.member("root", "admin", None).await,
         }
+    }
+
+    /// Counts nobody as a new member (DESIGN.md §7), so that nobody's posts
+    /// are held for approval or limited to new members' rates. Tests of
+    /// those limits leave them on.
+    pub async fn no_new_members(&self) {
+        parlour::settings::set(
+            &self.db,
+            "messages",
+            &parlour::settings::MessageSettings {
+                new_user_days: 0,
+                new_user_posts: 0,
+                ..parlour::settings::MessageSettings::default()
+            },
+        )
+        .await
+        .unwrap();
     }
 
     pub async fn exec(&self, sql: &str) {

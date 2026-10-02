@@ -78,9 +78,12 @@ impl WriteLevel {
 /// the destination of a write.
 pub fn user_can_read(user: &UserCtx, audience: &Audience) -> bool {
     match audience {
-        Audience::Public | Audience::Members => true,
+        Audience::Public => true,
+        // A suspended member reads only what visitors read.
+        Audience::Members => !user.is_suspended(),
         Audience::Groups(groups) => {
-            user.role.is_staff() || user.group_ids.iter().any(|g| groups.contains(g))
+            user.is_staff()
+                || (!user.is_suspended() && user.group_ids.iter().any(|g| groups.contains(g)))
         }
         // DMs (M6) check their participant list instead.
         Audience::Private => false,
@@ -88,18 +91,19 @@ pub fn user_can_read(user: &UserCtx, audience: &Audience) -> bool {
 }
 
 /// Whether the viewer may start threads and reply in a category that they
-/// can read.
+/// can read. Silenced and suspended members may not post anywhere.
 pub fn may_post(viewer: &Viewer, read: &Audience, write: &WriteLevel) -> bool {
     let Some(user) = viewer.user() else {
         return false;
     };
-    user_can_read(user, read)
+    user.may_write()
+        && user_can_read(user, read)
         && match write {
             WriteLevel::Members => true,
             WriteLevel::Groups(groups) => {
-                user.role.is_staff() || user.group_ids.iter().any(|g| groups.contains(g))
+                user.is_staff() || user.group_ids.iter().any(|g| groups.contains(g))
             }
-            WriteLevel::Staff => user.role.is_staff(),
+            WriteLevel::Staff => user.is_staff(),
         }
 }
 
@@ -290,6 +294,8 @@ mod tests {
             created_at: Utc::now(),
             group_ids: groups.into_iter().collect(),
             group_category_ids: Vec::new(),
+            silenced_until: None,
+            suspended_until: None,
         }
     }
 
@@ -310,18 +316,40 @@ mod tests {
         let role = [Role::User, Role::Moderator, Role::Admin]
             [tc.draw(gs::integers::<usize>().max_value(2))];
         let member_groups = tc.draw(group_ids());
-        let viewer = Viewer::User(user(role, member_groups.clone()));
-        let person = Person::Member {
-            id: 1,
-            staff: role.is_staff(),
-            groups: member_groups.clone(),
+        // 0: in good standing; 1: silenced; 2: suspended; 3: either, but
+        // it has run out.
+        let restriction = tc.draw(gs::integers::<u8>().max_value(3));
+        let mut ctx = user(role, member_groups.clone());
+        let later = Some(Utc::now() + chrono::Duration::hours(1));
+        let earlier = Some(Utc::now() - chrono::Duration::hours(1));
+        match restriction {
+            1 => ctx.silenced_until = later,
+            2 => ctx.suspended_until = later,
+            3 => {
+                ctx.silenced_until = earlier;
+                ctx.suspended_until = earlier;
+            }
+            _ => {}
+        }
+        let viewer = Viewer::User(ctx);
+        let restricted = matches!(restriction, 1 | 2);
+        let person = if restriction == 2 {
+            // Suspended members read what visitors read.
+            Person::Anonymous
+        } else {
+            Person::Member {
+                id: 1,
+                staff: role.is_staff(),
+                groups: member_groups.clone(),
+            }
         };
         let place = Place {
             audience: read.clone(),
             participants: BTreeSet::new(),
         };
         let allowed = may_post(&viewer, &read, &write);
-        let expected = sees(&person, &place)
+        let expected = !restricted
+            && sees(&person, &place)
             && match &write {
                 WriteLevel::Members => true,
                 WriteLevel::Groups(g) => role.is_staff() || !g.is_disjoint(&member_groups),
@@ -329,13 +357,20 @@ mod tests {
             };
         assert_eq!(
             allowed, expected,
-            "{role:?} {member_groups:?} {read:?} {write:?}"
+            "{role:?} {member_groups:?} {restriction} {read:?} {write:?}"
         );
+        if read != Audience::Private {
+            assert_eq!(
+                user_can_read(viewer.user().unwrap(), &read),
+                sees(&person, &place),
+                "{role:?} {member_groups:?} {restriction} {read:?}"
+            );
+        }
         assert!(!may_post(&Viewer::Anonymous, &read, &write));
         let locked = tc.draw(gs::booleans());
         assert_eq!(
             may_reply(&viewer, &read, &write, locked),
-            allowed && (!locked || role.is_staff())
+            allowed && (!locked || (role.is_staff() && restriction != 2))
         );
     }
 

@@ -22,7 +22,7 @@
         {% when Some(about) %}
         {% if let Some(actor) = n.actor %}<strong>{{ actor.display_name }}</strong> {% endif %}{{ n.kind.phrase() }} <a href="/notifications/{{ n.id }}">{{ about.title }}</a>
         {% when None %}
-        <strong>From the moderators:</strong> {% if let Some(message) = n.message %}{{ message }}{% endif %}{% if !n.read %} <a href="/notifications/{{ n.id }}">Mark read</a>{% endif %}
+        <strong>From the moderators:</strong> {% if let Some(message) = n.message %}{{ message }}{% endif %}{% if let Some(action) = n.mod_action_id %} <a href="/appeal/{{ action }}">Contest this</a>{% endif %}{% if !n.read %} <a href="/notifications/{{ n.id }}">Mark read</a>{% endif %}
         {% endmatch %}
         <span class="row-meta">{% call m::time(n.created_at) %}{% endcall %}</span>
       </span>
