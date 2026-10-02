@@ -866,14 +866,8 @@ p.quick-reply { font-style: italic; }
 .conversation-current { background: var(--panel-alt); box-shadow: inset 3px 0 0 var(--accent); }
 .conversation-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .conversation-top, .conversation-bottom { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.conversation-name {
-  flex: 1;
-  min-width: 0;
-  font-weight: 700;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.conversation-name { flex: 1; min-width: 0; font-weight: 700; }
+.conversation-top .row-meta { flex-shrink: 0; }
 .conversation-unread .conversation-name { color: var(--accent); }
 .conversation-people { font-size: var(--font-size-small); color: var(--ink-muted); font-style: italic; }
 .conversation-snippet {

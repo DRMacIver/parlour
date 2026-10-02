@@ -1073,6 +1073,12 @@ impl Seeder<'_> {
             )
             .await?;
         }
+        // Each notification dates from its post.
+        sqlx::query!(
+            "UPDATE notifications n SET created_at = p.created_at FROM posts p WHERE p.id = n.post_id"
+        )
+        .execute(&mut *self.db)
+        .await?;
         Ok(())
     }
 
