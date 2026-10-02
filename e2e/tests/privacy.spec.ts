@@ -74,6 +74,14 @@ test("an admin gives a new group a category of its own", async ({ page, browser 
   await expect(page.locator(`.admin-members a[href='/u/${member()}']`)).toBeVisible();
   await expectFits(page);
 
+  // Deleting the group asks first, on a page of its own.
+  const groupPath = new URL(page.url()).pathname;
+  await page.locator(`a[href='${groupPath}/delete']`).click();
+  await expect(page.locator("h1")).toHaveText(`Delete ${groupName}?`);
+  await expectFits(page);
+  await page.locator("form a", { hasText: "Keep it" }).click();
+  await expect(page.locator("h1")).toHaveText(groupName);
+
   await page.goto("/admin/categories/new");
   await page.fill("#name", `Private ${project}`);
   await page.fill("#slug", slug);

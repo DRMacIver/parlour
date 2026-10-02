@@ -245,6 +245,11 @@ pub struct GroupCategory {
     pub name: String,
     pub read: bool,
     pub write: bool,
+    /// The category is group-restricted and this is the only group that
+    /// may read it, so without the group only staff could.
+    pub only_readers: bool,
+    /// Likewise for posting.
+    pub only_writers: bool,
 }
 
 /// A group in full, for its admin page.
@@ -252,6 +257,8 @@ pub struct GroupDetail {
     pub group: GroupSummary,
     pub members: Vec<GroupMember>,
     pub categories: Vec<GroupCategory>,
+    /// Invites that can still be used and add people to the group.
+    pub usable_invites: i64,
 }
 
 pub async fn detail(db: &Db, id: i64) -> sqlx::Result<Option<GroupDetail>> {
@@ -291,7 +298,15 @@ pub async fn detail(db: &Db, id: i64) -> sqlx::Result<Option<GroupDetail>> {
     .collect();
     let categories = sqlx::query!(
         r#"SELECT c.slug, c.name,
-                  bool_or(cg.access = 'read') AS "read!", bool_or(cg.access = 'write') AS "write!"
+                  bool_or(cg.access = 'read') AS "read!", bool_or(cg.access = 'write') AS "write!",
+                  bool_or(cg.access = 'read' AND c.read_level = 'groups' AND NOT EXISTS (
+                      SELECT 1 FROM category_groups o
+                      WHERE o.category_id = c.id AND o.access = 'read' AND o.group_id <> $1
+                  )) AS "only_readers!",
+                  bool_or(cg.access = 'write' AND c.write_level = 'groups' AND NOT EXISTS (
+                      SELECT 1 FROM category_groups o
+                      WHERE o.category_id = c.id AND o.access = 'write' AND o.group_id <> $1
+                  )) AS "only_writers!"
            FROM category_groups cg JOIN categories c ON c.id = cg.category_id
            WHERE cg.group_id = $1
            GROUP BY c.id
@@ -306,12 +321,23 @@ pub async fn detail(db: &Db, id: i64) -> sqlx::Result<Option<GroupDetail>> {
         name: row.name,
         read: row.read,
         write: row.write,
+        only_readers: row.only_readers,
+        only_writers: row.only_writers,
     })
     .collect();
+    let usable_invites = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM invites
+           WHERE $1 = ANY(grant_group_ids) AND revoked_at IS NULL
+             AND expires_at > now() AND uses < max_uses"#,
+        id
+    )
+    .fetch_one(db.pool())
+    .await?;
     Ok(Some(GroupDetail {
         group,
         members,
         categories,
+        usable_invites,
     }))
 }
 

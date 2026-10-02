@@ -25,9 +25,7 @@
       <input class="input-short" id="section-position-{{ section.id }}" name="position" type="number" value="{{ section.position }}">
       <button class="button button-small" type="submit">Save</button>
     </form>
-    <form class="form-inline" method="post" action="/admin/sections/{{ section.id }}/delete">
-      <button class="button button-small button-quiet" type="submit">Delete section</button>
-    </form>
+    <a class="button button-small button-quiet" href="/admin/sections/{{ section.id }}/delete">Delete section…</a>
   </div>
   {% else %}
   <h2 class="panel-bar">Outside any section</h2>

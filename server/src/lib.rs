@@ -254,7 +254,7 @@ pub fn app(state: AppState) -> Router {
         .route("/admin/sections/{id}", post(admin_forum::update_section))
         .route(
             "/admin/sections/{id}/delete",
-            post(admin_forum::delete_section),
+            get(admin_forum::delete_section_page).post(admin_forum::delete_section),
         )
         .route(
             "/admin/groups",
@@ -264,7 +264,10 @@ pub fn app(state: AppState) -> Router {
             "/admin/groups/{id}",
             get(admin_forum::group_page).post(admin_forum::update_group),
         )
-        .route("/admin/groups/{id}/delete", post(admin_forum::delete_group))
+        .route(
+            "/admin/groups/{id}/delete",
+            get(admin_forum::delete_group_page).post(admin_forum::delete_group),
+        )
         .route("/admin/groups/{id}/members", post(admin_forum::add_member))
         .route(
             "/admin/groups/{id}/members/{user_id}/remove",

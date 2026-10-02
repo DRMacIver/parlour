@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Delete {{ section.name }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/admin/categories">Categories</a> › {{ section.name }}</nav>
+<h1 class="page-title">Delete the {{ section.name }} section?</h1>
+<p>The heading goes from the index. Its categories and their threads stay, listed outside any section until you put them in another. This can’t be undone.</p>
+<section class="panel" aria-labelledby="categories-heading">
+  <h2 class="panel-bar" id="categories-heading">Categories in it</h2>
+  {% if categories.is_empty() %}
+  <p class="empty">No categories in this section.</p>
+  {% else %}
+  <ul class="member-list">
+  {% for category in categories %}
+    <li><a href="/admin/categories/{{ category.category.id }}">{{ category.category.name }}</a> <span class="row-meta">/c/{{ category.category.slug }}</span></li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+<form class="form-actions form-actions-page" method="post" action="/admin/sections/{{ section.id }}/delete">
+  <button class="button" type="submit">Delete the section</button>
+  <a href="/admin/categories">Keep it</a>
+</form>
+</div>
+{% endblock %}

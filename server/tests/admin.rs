@@ -548,12 +548,15 @@ async fn only_admins_manage_categories_and_groups(db: PgPool) {
     let cookie = forum.session(ruth).await;
     let games = forum.category("games", "public", None, 0).await;
     let group = forum.group("organisers", "Organisers").await;
+    let section = forum.section("Hobbies", 0).await;
     let pages = [
         "/admin/categories".to_owned(),
         "/admin/categories/new".to_owned(),
         format!("/admin/categories/{games}"),
         "/admin/groups".to_owned(),
         format!("/admin/groups/{group}"),
+        format!("/admin/groups/{group}/delete"),
+        format!("/admin/sections/{section}/delete"),
     ];
     for path in &pages {
         assert_eq!(
@@ -600,6 +603,10 @@ async fn unknown_categories_and_groups_are_not_found(db: PgPool) {
         "/admin/categories/x",
         "/admin/groups/999",
         "/admin/groups/x",
+        "/admin/groups/999/delete",
+        "/admin/groups/x/delete",
+        "/admin/sections/999/delete",
+        "/admin/sections/x/delete",
     ] {
         assert_eq!(
             a.forum.get_as(path, Some(&a.cookie)).await.status,
@@ -629,4 +636,91 @@ async fn unknown_categories_and_groups_are_not_found(db: PgPool) {
             .await;
         assert_eq!(response.status, StatusCode::NOT_FOUND, "{path}");
     }
+}
+
+#[sqlx::test]
+async fn deleting_a_group_asks_first_and_says_what_it_will_change(db: PgPool) {
+    let a = admin(db).await;
+    let sam = a.id("SELECT id FROM users WHERE username = 'sam'").await;
+    let ruth = a.forum.member("ruth", "user", None).await;
+    let organisers = a.forum.group("organisers", "Organisers").await;
+    let board = a.forum.group("board", "Board").await;
+    a.forum.join_group(organisers, ruth).await;
+    // Only the organisers read Planning; the board reads Accounts too.
+    let planning = a.forum.category("planning", "public", None, 0).await;
+    a.forum
+        .restrict(planning, &[organisers], Some(&[organisers]))
+        .await;
+    let accounts = a.forum.category("accounts", "public", None, 1).await;
+    a.forum
+        .restrict(accounts, &[organisers, board], Some(&[board]))
+        .await;
+    a.forum
+        .exec(&format!(
+            "INSERT INTO invites (code_hash, created_by, max_uses, expires_at, grant_group_ids)
+             VALUES ('\\x01', {sam}, 5, now() + interval '7 days', ARRAY[{organisers}]::bigint[])"
+        ))
+        .await;
+
+    // The group's page links to a page that asks, rather than deleting.
+    let path = format!("/admin/groups/{organisers}");
+    let delete_path = format!("{path}/delete");
+    let page = a.page(&path).await;
+    assert!(page.contains(&format!("href=\"{delete_path}\"")));
+    assert!(!page.contains(&format!("action=\"{delete_path}\"")));
+
+    let confirm = a.page(&delete_path).await;
+    assert!(confirm.contains(&format!("action=\"{delete_path}\"")));
+    assert!(confirm.contains(&format!("href=\"{path}\"")));
+    assert!(confirm.contains("can’t be undone"));
+    assert!(confirm.contains("1 member"));
+    assert!(confirm.contains("1 invite"));
+    // Planning will be left to staff; Accounts keeps the board.
+    let planning_row = confirm
+        .split("<li")
+        .find(|row| row.contains("href=\"/c/planning\""))
+        .expect("Planning is listed");
+    assert!(planning_row.contains("only staff will be able to read it"));
+    assert!(planning_row.contains("only staff will be able to post in it"));
+    let accounts_row = confirm
+        .split("<li")
+        .find(|row| row.contains("href=\"/c/accounts\""))
+        .expect("Accounts is listed");
+    assert!(!accounts_row.contains("only staff"));
+    // Asking changes nothing.
+    assert_eq!(
+        a.id("SELECT count(*) FROM groups").await,
+        2,
+        "the confirmation page deleted the group"
+    );
+
+    let response = a.submit(&delete_path, &[]).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(a.id("SELECT count(*) FROM groups").await, 1);
+}
+
+#[sqlx::test]
+async fn deleting_a_section_asks_first_and_names_its_categories(db: PgPool) {
+    let a = admin(db).await;
+    let hobbies = a.forum.section("Hobbies", 0).await;
+    a.forum
+        .category("board-games", "public", Some(hobbies), 0)
+        .await;
+    let delete_path = format!("/admin/sections/{hobbies}/delete");
+
+    let page = a.page("/admin/categories").await;
+    assert!(page.contains(&format!("href=\"{delete_path}\"")));
+    assert!(!page.contains(&format!("action=\"{delete_path}\"")));
+
+    let confirm = a.page(&delete_path).await;
+    assert!(confirm.contains("Hobbies"));
+    assert!(confirm.contains("Board games"));
+    assert!(confirm.contains(&format!("action=\"{delete_path}\"")));
+    assert!(confirm.contains("href=\"/admin/categories\""));
+    assert_eq!(a.id("SELECT count(*) FROM sections").await, 1);
+
+    let response = a.submit(&delete_path, &[]).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(a.id("SELECT count(*) FROM sections").await, 0);
+    assert_eq!(a.id("SELECT count(*) FROM categories").await, 1);
 }

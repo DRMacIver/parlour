@@ -215,6 +215,48 @@ pub async fn update_section(
     }
 }
 
+#[derive(Template)]
+#[template(path = "admin_delete_section.html")]
+struct DeleteSectionTemplate {
+    layout: Layout,
+    section: Section,
+    categories: Vec<CategoryTarget>,
+}
+
+/// Asks before deleting a section, naming the categories that will be
+/// left outside any section.
+pub async fn delete_section_page(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    admins_only!(state, viewer, "/admin/categories");
+    let db = state.db();
+    let section = match parse_id(&id) {
+        Some(id) => content::sections(db)
+            .await?
+            .into_iter()
+            .find(|section| section.id == id),
+        None => None,
+    };
+    let Some(section) = section else {
+        return web::not_found(&state, &viewer).await;
+    };
+    let categories = content::readable_categories(db, &viewer)
+        .await?
+        .into_iter()
+        .filter(|category| category.section_id == Some(section.id))
+        .collect();
+    render(
+        StatusCode::OK,
+        &DeleteSectionTemplate {
+            layout: Layout::load(&state, &viewer, Nav::Admin).await?,
+            section,
+            categories,
+        },
+    )
+}
+
 pub async fn delete_section(
     State(state): State<AppState>,
     viewer: Viewer,
@@ -753,6 +795,33 @@ pub async fn update_group(
             render_group(&state, &viewer, StatusCode::BAD_REQUEST, detail, outcome).await
         }
     }
+}
+
+#[derive(Template)]
+#[template(path = "admin_delete_group.html")]
+struct DeleteGroupTemplate {
+    layout: Layout,
+    detail: GroupDetail,
+}
+
+/// Asks before deleting a group, saying who and what it will affect.
+pub async fn delete_group_page(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    admins_only!(state, viewer, "/admin/groups");
+    let detail = match find_group(&state, &viewer, &id).await? {
+        Ok(detail) => detail,
+        Err(response) => return Ok(response),
+    };
+    render(
+        StatusCode::OK,
+        &DeleteGroupTemplate {
+            layout: Layout::load(&state, &viewer, Nav::Admin).await?,
+            detail,
+        },
+    )
 }
 
 pub async fn delete_group(

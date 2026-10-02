@@ -75,9 +75,7 @@
       <h2 class="panel-bar" id="delete-heading">Delete</h2>
       <div class="form">
         <p class="form-note">Deleting the group takes its members out of it and takes it off every category and invite.</p>
-        <form class="form-inline" method="post" action="/admin/groups/{{ detail.group.id }}/delete">
-          <button class="button button-quiet" type="submit">Delete this group</button>
-        </form>
+        <p><a class="button button-quiet" href="/admin/groups/{{ detail.group.id }}/delete">Delete this group…</a></p>
       </div>
     </section>
   </div>

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Delete {{ detail.group.name }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/admin/groups">Groups</a> › <a href="/admin/groups/{{ detail.group.id }}">{{ detail.group.name }}</a></nav>
+<h1 class="page-title">Delete {{ detail.group.name }}?</h1>
+<p>Deleting the group takes {{ crate::format::plural(detail.members.len() as i64, "member", "members") }} out of it, and takes it off every category and invite. This can’t be undone: making a group with the same name later won’t bring any of that back.</p>
+{% if detail.usable_invites > 0 %}
+<p>{{ crate::format::plural(detail.usable_invites, "invite", "invites") }} that can still be used will no longer add people to the group.</p>
+{% endif %}
+<section class="panel" aria-labelledby="categories-heading">
+  <h2 class="panel-bar" id="categories-heading">Categories it changes</h2>
+  {% if detail.categories.is_empty() %}
+  <p class="empty">No category names this group.</p>
+  {% else %}
+  <ul class="member-list">
+  {% for category in detail.categories %}
+    <li><a href="/c/{{ category.slug }}">{{ category.name }}</a>
+      <span class="row-meta">
+      {%- if category.read %}{% if category.only_readers %}only staff will be able to read it{% else %}its other groups can still read it{% endif %}{% endif -%}
+      {%- if category.read && category.write %}; {% endif -%}
+      {%- if category.write %}{% if category.only_writers %}only staff will be able to post in it{% else %}its other groups can still post in it{% endif %}{% endif -%}
+      </span>
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+<form class="form-actions form-actions-page" method="post" action="/admin/groups/{{ detail.group.id }}/delete">
+  <button class="button" type="submit">Delete the group</button>
+  <a href="/admin/groups/{{ detail.group.id }}">Keep it</a>
+</form>
+</div>
+{% endblock %}
