@@ -315,3 +315,50 @@ pub async fn create_first_admin(
         Err(err) => Err(err),
     }
 }
+
+// ---------------------------------------------------------------------------
+// The post-info column
+
+/// What a member shows beside their posts, as they last saved it.
+pub async fn profile_fields<'c>(
+    db: impl Handle<'c>,
+    user_id: i64,
+) -> sqlx::Result<crate::accounts::ProfileFields> {
+    let mut conn = db.open(KEY).acquire().await?;
+    let row = sqlx::query!(
+        "SELECT display_name, title, pronouns, status_line, location FROM users WHERE id = $1",
+        user_id
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(crate::accounts::ProfileFields {
+        display_name: row.display_name,
+        title: row.title,
+        pronouns: row.pronouns,
+        status_line: row.status_line,
+        location: row.location,
+    })
+}
+
+/// Saves a member's post-info column, which the caller has checked with
+/// [`crate::accounts::ProfileFields::clean`].
+pub async fn update_profile<'c>(
+    db: impl Handle<'c>,
+    user_id: i64,
+    fields: &crate::accounts::ProfileFields,
+) -> sqlx::Result<()> {
+    let mut conn = db.open(KEY).acquire().await?;
+    sqlx::query!(
+        "UPDATE users SET display_name = $2, title = $3, pronouns = $4, status_line = $5, location = $6
+         WHERE id = $1",
+        user_id,
+        fields.display_name,
+        fields.title,
+        fields.pronouns,
+        fields.status_line,
+        fields.location,
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}

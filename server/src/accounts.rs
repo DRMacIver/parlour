@@ -116,6 +116,92 @@ pub fn clean_display_name(name: &str) -> Result<String, &'static str> {
     Ok(name)
 }
 
+/// The longest status line, in characters (DESIGN.md §2).
+pub const MAX_STATUS_CHARS: usize = 60;
+pub const MAX_TITLE_CHARS: usize = 40;
+pub const MAX_PRONOUNS_CHARS: usize = 30;
+pub const MAX_LOCATION_CHARS: usize = 40;
+
+/// What a member shows of themselves beside their posts: the post-info
+/// column (DESIGN.md §2). Every field is one line of plain text.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProfileFields {
+    pub display_name: String,
+    pub title: Option<String>,
+    pub pronouns: Option<String>,
+    pub status_line: Option<String>,
+    pub location: Option<String>,
+}
+
+/// Tidies one optional field: runs of whitespace become one space, and a
+/// blank field is no field.
+fn clean_line(
+    text: &str,
+    max: usize,
+    too_long: &str,
+    problems: &mut Vec<String>,
+) -> Option<String> {
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    if text.chars().count() > max {
+        problems.push(too_long.to_owned());
+    } else if text.chars().any(char::is_control) {
+        problems.push("Profile fields can't contain control characters.".to_owned());
+    }
+    Some(text)
+}
+
+impl ProfileFields {
+    /// Tidies and checks what a member typed. The fields are returned
+    /// tidied either way, so that a form can show them again.
+    pub fn clean(
+        display_name: &str,
+        title: &str,
+        pronouns: &str,
+        status_line: &str,
+        location: &str,
+    ) -> (ProfileFields, Vec<String>) {
+        let mut problems = Vec::new();
+        let display_name = match clean_display_name(display_name) {
+            Ok(name) => name,
+            Err(problem) => {
+                problems.push(problem.to_owned());
+                display_name.trim().to_owned()
+            }
+        };
+        let fields = ProfileFields {
+            display_name,
+            title: clean_line(
+                title,
+                MAX_TITLE_CHARS,
+                "Titles are at most 40 characters long.",
+                &mut problems,
+            ),
+            pronouns: clean_line(
+                pronouns,
+                MAX_PRONOUNS_CHARS,
+                "Pronouns are at most 30 characters long.",
+                &mut problems,
+            ),
+            status_line: clean_line(
+                status_line,
+                MAX_STATUS_CHARS,
+                "Status lines are at most 60 characters long.",
+                &mut problems,
+            ),
+            location: clean_line(
+                location,
+                MAX_LOCATION_CHARS,
+                "Locations are at most 40 characters long.",
+                &mut problems,
+            ),
+        };
+        (fields, problems)
+    }
+}
+
 /// Tidies and checks an email address.
 pub fn clean_email(email: &str) -> Result<String, &'static str> {
     let email = email.trim();
@@ -233,6 +319,48 @@ mod tests {
             assert!(!clean.contains("  "));
             assert_eq!(clean_display_name(&clean), Ok(clean.clone()));
         }
+    }
+
+    #[hegel::test]
+    fn accepted_profiles_are_tidy_and_short(tc: TestCase) {
+        let raw: Vec<String> = (0..5).map(|_| tc.draw(gs::text().max_size(70))).collect();
+        let (fields, problems) = ProfileFields::clean(&raw[0], &raw[1], &raw[2], &raw[3], &raw[4]);
+        if problems.is_empty() {
+            for (value, max) in [
+                (&fields.title, MAX_TITLE_CHARS),
+                (&fields.pronouns, MAX_PRONOUNS_CHARS),
+                (&fields.status_line, MAX_STATUS_CHARS),
+                (&fields.location, MAX_LOCATION_CHARS),
+            ] {
+                if let Some(value) = value {
+                    assert!(!value.is_empty() && value.chars().count() <= max);
+                    assert!(!value.chars().any(|c| c.is_control() || c == '\n'));
+                    assert_eq!(value.trim(), value);
+                }
+            }
+            // Cleaning again changes nothing.
+            let again = ProfileFields::clean(
+                &fields.display_name,
+                fields.title.as_deref().unwrap_or_default(),
+                fields.pronouns.as_deref().unwrap_or_default(),
+                fields.status_line.as_deref().unwrap_or_default(),
+                fields.location.as_deref().unwrap_or_default(),
+            );
+            assert_eq!(again, (fields, Vec::new()));
+        }
+    }
+
+    #[test]
+    fn status_lines_are_at_most_sixty_characters() {
+        let ok = "é".repeat(60);
+        let (fields, problems) = ProfileFields::clean("Ruth", "", "", &ok, "");
+        assert!(problems.is_empty());
+        assert_eq!(fields.status_line.as_deref(), Some(ok.as_str()));
+        let (_, problems) = ProfileFields::clean("Ruth", "", "", &"é".repeat(61), "");
+        assert_eq!(problems.len(), 1);
+        let (fields, problems) = ProfileFields::clean("Ruth", " a \n b ", "", "", "");
+        assert!(problems.is_empty());
+        assert_eq!(fields.title.as_deref(), Some("a b"));
     }
 
     #[test]

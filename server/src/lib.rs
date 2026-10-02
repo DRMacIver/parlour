@@ -337,6 +337,7 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/settings", get(auth_pages::settings_page))
         .route("/settings/password", post(auth_pages::change_password))
+        .route("/settings/profile", post(auth_pages::save_profile))
         .route("/settings/email", post(auth_pages::change_email))
         .route("/settings/verify", post(auth_pages::resend_verification))
         .route("/settings/sessions", post(auth_pages::log_out_elsewhere))

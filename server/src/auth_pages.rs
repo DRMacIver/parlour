@@ -699,6 +699,7 @@ struct SettingsTemplate<'a> {
     dm_policy: crate::social::DmPolicy,
     email_prefs: crate::social::EmailPrefs,
     blocked: Vec<crate::content::UserRef>,
+    profile: accounts::ProfileFields,
 }
 
 #[derive(Deserialize, Default)]
@@ -721,6 +722,7 @@ fn notice_for(done: &str) -> Option<&'static str> {
         "messages" => Some("Saved who can message you."),
         "email-prefs" => Some("Saved which emails you get."),
         "unblocked" => Some("Unblocked."),
+        "profile" => Some("Your profile has been saved."),
         "welcome" => {
             Some("Welcome! You’re a member now. This page is where you manage your account.")
         }
@@ -735,6 +737,8 @@ struct SettingsOutcome {
     errors: Vec<String>,
     /// The new address typed into the change-email form.
     new_email: String,
+    /// What was typed into the profile form, when it is shown again.
+    profile: Option<accounts::ProfileFields>,
 }
 
 impl SettingsOutcome {
@@ -744,6 +748,7 @@ impl SettingsOutcome {
             notice,
             errors: Vec::new(),
             new_email: String::new(),
+            profile: None,
         }
     }
 
@@ -753,6 +758,7 @@ impl SettingsOutcome {
             notice: None,
             errors,
             new_email,
+            profile: None,
         }
     }
 }
@@ -778,6 +784,10 @@ async fn render_settings(
             dm_policy: crate::social::dm_policy(state.db(), user.id).await?,
             email_prefs: crate::social::email_prefs(state.db(), user.id).await?,
             blocked: crate::social::blocked_members(state.db(), user.id).await?,
+            profile: match outcome.profile {
+                Some(typed) => typed,
+                None => users::profile_fields(state.db(), user.id).await?,
+            },
         },
     )
 }
@@ -799,6 +809,52 @@ pub async fn settings_page(
         SettingsOutcome::notice(notice_for(&query.done)),
     )
     .await
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct ProfileForm {
+    display_name: String,
+    title: String,
+    pronouns: String,
+    status_line: String,
+    location: String,
+}
+
+/// Saves the member's name and post-info column (DESIGN.md §2).
+pub async fn save_profile(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    headers: HeaderMap,
+    Form(form): Form<ProfileForm>,
+) -> Result<Response, AppError> {
+    let Some(user) = viewer.user() else {
+        return Ok(web::login_first("/settings"));
+    };
+    // Others read it beside every post, so it is writing like a post is.
+    if let Some(why) = crate::writing::restriction(user) {
+        return crate::write_pages::not_allowed(&state, &viewer, why).await;
+    }
+    if !user_allows(&state, Action::Edit, user.id) {
+        return web::rate_limited(&state, &viewer).await;
+    }
+    let (fields, problems) = accounts::ProfileFields::clean(
+        &form.display_name,
+        &form.title,
+        &form.pronouns,
+        &form.status_line,
+        &form.location,
+    );
+    if !problems.is_empty() {
+        let mut outcome = SettingsOutcome::problems(problems, String::new());
+        outcome.profile = Some(fields);
+        return render_settings(&state, &viewer, user, session_cookie(&headers), outcome).await;
+    }
+    users::update_profile(state.db(), user.id, &fields).await?;
+    state
+        .changed(crate::changes::Change::UserChanged { user_id: user.id })
+        .await?;
+    Ok(see_other("/settings?done=profile"))
 }
 
 #[derive(Deserialize, Default)]

@@ -22,6 +22,36 @@
   </dl>
 </section>
 
+<section class="panel" id="profile" aria-labelledby="profile-heading">
+  <h2 class="panel-bar" id="profile-heading">Your profile</h2>
+  <form class="form" method="post" action="/settings/profile">
+    <p class="form-note">These show beside each of your posts and on <a href="/u/{{ user.username }}">your profile</a>. Each is one line of plain text; leave any of them blank.</p>
+    <div class="field">
+      <label for="display_name">Name</label>
+      <input id="display_name" name="display_name" type="text" maxlength="50" required value="{{ profile.display_name }}">
+    </div>
+    <div class="field">
+      <label for="profile-title">Title</label>
+      <input id="profile-title" name="title" type="text" maxlength="40" value="{{ profile.title.as_deref().unwrap_or_default() }}">
+      <span class="field-hint">Up to 40 characters, such as “Organiser” or “Rules lawyer”.</span>
+    </div>
+    <div class="field">
+      <label for="pronouns">Pronouns</label>
+      <input id="pronouns" name="pronouns" type="text" maxlength="30" value="{{ profile.pronouns.as_deref().unwrap_or_default() }}">
+    </div>
+    <div class="field">
+      <label for="status_line">Status</label>
+      <input id="status_line" name="status_line" type="text" maxlength="60" value="{{ profile.status_line.as_deref().unwrap_or_default() }}">
+      <span class="field-hint">Up to 60 characters. Links aren’t links here.</span>
+    </div>
+    <div class="field">
+      <label for="location">Location</label>
+      <input id="location" name="location" type="text" maxlength="40" value="{{ profile.location.as_deref().unwrap_or_default() }}">
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Save profile</button></div>
+  </form>
+</section>
+
 <section class="panel" aria-labelledby="password-heading">
   <h2 class="panel-bar" id="password-heading">{% if has_password %}Change your password{% else %}Set a password{% endif %}</h2>
   <form class="form" method="post" action="/settings/password">
