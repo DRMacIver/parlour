@@ -206,6 +206,15 @@ pub async fn smtp_settings(state: &AppState) -> sqlx::Result<Option<SmtpSettings
         .or_else(|| state.config().smtp.clone()))
 }
 
+/// Whether email can be sent at all: false when no SMTP server is set up,
+/// either in the environment or by an admin.
+pub async fn can_send(state: &AppState) -> sqlx::Result<bool> {
+    Ok(match state.mailer() {
+        Mailer::Capture(_) => true,
+        Mailer::Smtp => smtp_settings(state).await?.is_some(),
+    })
+}
+
 pub async fn saved_smtp_settings(db: &Db) -> sqlx::Result<Option<SmtpSettings>> {
     settings::get(db, "smtp").await
 }

@@ -559,3 +559,41 @@ async fn setup_ends_by_pointing_at_categories_and_held_posts(db: PgPool) {
     assert!(!page.contains("first 0 posts"), "{page}");
     assert!(page.contains("aren’t held"), "{page}");
 }
+
+#[sqlx::test]
+async fn setup_wont_email_invites_without_a_mail_server(db: PgPool) {
+    let mut forum = Forum::new(db);
+    forum.state = forum.state.clone().with_mailer(parlour::mail::Mailer::Smtp);
+    let sam = forum.member("sam", "admin", None).await;
+    let cookie = forum.session(sam).await;
+    let page = forum.page_as("/setup/invites", &cookie).await;
+    assert!(page.contains("no mail server"), "{page}");
+    assert!(page.contains("href=\"/setup/email\""));
+
+    let response = forum
+        .submit(
+            "/setup/invites",
+            &[("emails", "ruth@example.com"), ("uses", "5")],
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        response.body
+    );
+    assert!(!response.body.contains("Emailing an invitation"));
+    assert!(
+        response.body.contains("ruth@example.com: "),
+        "{}",
+        response.body
+    );
+    // The link is still made, and the address is kept to try again.
+    assert_eq!(response.body.matches("class=\"link-box\"").count(), 1);
+    let emailed: i64 = sqlx::query_scalar("SELECT count(*) FROM invites WHERE email IS NOT NULL")
+        .fetch_one(&forum.db)
+        .await
+        .unwrap();
+    assert_eq!(emailed, 0);
+}

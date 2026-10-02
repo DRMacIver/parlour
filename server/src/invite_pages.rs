@@ -44,6 +44,10 @@ struct InvitesTemplate {
     form: InviteForm,
     /// The groups staff can have an invite add people to.
     groups: Vec<GroupSummary>,
+    /// Whether email can be sent: without it, invitations can't be emailed
+    /// and nobody can finish joining with a link.
+    can_email: bool,
+    is_admin: bool,
 }
 
 impl InvitesTemplate {
@@ -105,6 +109,8 @@ async fn render_invites(
             } else {
                 Vec::new()
             },
+            can_email: crate::mail::can_send(state).await?,
+            is_admin: user.role == crate::accounts::Role::Admin,
         },
     )
 }

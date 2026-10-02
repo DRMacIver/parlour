@@ -380,6 +380,9 @@ struct SetupInvitesTemplate {
     uses: String,
     /// How many of a new member's posts are held for approval.
     hold_posts: u32,
+    /// Whether email can be sent: without it, invitations can't be emailed
+    /// and nobody can finish joining with a link.
+    can_email: bool,
 }
 
 impl SetupInvitesTemplate {
@@ -402,6 +405,7 @@ pub async fn invites_page(
         emails: String::new(),
         uses: String::new(),
         hold_posts: settings::moderation_settings(state.db()).await?.hold_posts,
+        can_email: mail::can_send(&state).await?,
     })
 }
 
@@ -491,6 +495,7 @@ pub async fn create_invites(
                 emails: failed.join("\n"),
                 uses: String::new(),
                 hold_posts: settings::moderation_settings(state.db()).await?.hold_posts,
+                can_email: mail::can_send(&state).await?,
             },
         );
     }
@@ -503,6 +508,7 @@ pub async fn create_invites(
             emails: form.emails,
             uses: form.uses,
             hold_posts: settings::moderation_settings(state.db()).await?.hold_posts,
+            can_email: mail::can_send(&state).await?,
         },
     )
 }

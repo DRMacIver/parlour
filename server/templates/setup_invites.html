@@ -7,6 +7,7 @@
 <h1 class="page-title">Invite the first members</h1>
 {% call st::steps(3) %}{% endcall %}
 <p class="lede">Invite people by email, or make a link that several people can use. Everyone who joins appears under you in the invite tree. You can make more invites at any time from the Invites page.</p>
+{% if !can_email %}<div class="notice" role="status"><p>There is no mail server set up, so invitations can’t be emailed, and people joining with a link can’t get the email that confirms their address. <a href="/setup/email">Set up email</a> first.</p></div>{% endif %}
 {% if !created.is_empty() %}
 <div class="notice notice-success" role="status">
   <p>Invitations made:</p>

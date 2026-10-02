@@ -155,6 +155,16 @@ pub async fn create(
             "Each invite can be used once.".to_owned()
         });
     }
+    if email.is_some() && !mail::can_send(state).await? {
+        problems.push(format!(
+            "There is no mail server set up, so the invitation can’t be emailed. {}",
+            if creator.role == Role::Admin {
+                "Set one up in Admin → Settings, or leave the address blank to get a link to send yourself."
+            } else {
+                "Leave the address blank to get a link to send yourself."
+            }
+        ));
+    }
     if email.is_some() && new.max_uses != 1 {
         problems.push("An invite sent to an email address can only be used once.".to_owned());
     }
@@ -520,6 +530,14 @@ pub async fn redeem(
             String::new()
         }),
     };
+    // Joining with a link is finished from an email to the address typed
+    // in, so it can't be done until the forum can send one.
+    if invite.email.is_none() && !mail::can_send(state).await? {
+        problems.push(
+            "This forum can’t send email yet, so it can’t confirm your address. Let whoever invited you know."
+                .to_owned(),
+        );
+    }
     // Usernames are public, so saying one is taken gives nothing away.
     if problems.is_empty() && username_taken(&mut tx, &username).await? {
         problems.push(TAKEN_USERNAME.to_owned());

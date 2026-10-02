@@ -6,6 +6,7 @@
 <h1 class="page-title">Invites</h1>
 <p class="lede">Everyone here was invited by someone, and <a href="/users/tree">the invite tree</a> is public. Only invite people you’d be happy to vouch for.</p>
 {% if closed %}<div class="notice" role="status"><p>Registration is closed at the moment, so invitations can’t be used until it reopens.</p></div>{% endif %}
+{% if !can_email %}<div class="notice" role="status"><p>There is no mail server set up, so invitations can’t be emailed, and people joining with a link can’t get the email that confirms their address.{% if is_admin %} <a href="/admin/settings">Set one up in the admin settings.</a>{% else %} An admin needs to set one up.{% endif %}</p></div>{% endif %}
 {% if let Some(created) = created %}
 <div class="notice notice-success" role="status">
   {% if let Some(email) = created.emailed_to %}

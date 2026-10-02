@@ -1493,3 +1493,72 @@ async fn the_deleted_prefix_is_reserved(db: PgPool) {
         .await;
     assert_eq!(response.status, StatusCode::OK, "{}", response.body);
 }
+
+/// A forum with no mail server: neither the environment nor the admin has
+/// given it one.
+fn without_mail(forum: Forum) -> Forum {
+    let state = forum.state.clone().with_mailer(parlour::mail::Mailer::Smtp);
+    assert!(state.config().smtp.is_none());
+    Forum { state, ..forum }
+}
+
+#[sqlx::test]
+async fn without_a_mail_server_invites_arent_emailed(db: PgPool) {
+    let Inviter { forum, cookie, .. } = setup(db, "admin").await;
+    let forum = without_mail(forum);
+    let page = forum.page_as("/invites", &cookie).await;
+    assert!(page.contains("no mail server"), "{page}");
+
+    let response = forum
+        .submit(
+            "/invites",
+            &[("email", "alex@example.com"), ("days", "7"), ("uses", "1")],
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        response.body
+    );
+    assert!(
+        response.body.contains("no mail server"),
+        "{}",
+        response.body
+    );
+    let (invites, jobs): (i64, i64) =
+        sqlx::query_as("SELECT (SELECT count(*) FROM invites), (SELECT count(*) FROM jobs)")
+            .fetch_one(&forum.db)
+            .await
+            .unwrap();
+    assert_eq!((invites, jobs), (0, 0));
+
+    // A link can still be made, but joining with it needs an email to
+    // confirm the address, so the joiner is told it can't be sent rather
+    // than told to wait for one that never comes.
+    let link = make_invite(
+        &forum,
+        &cookie,
+        &[("email", ""), ("days", "7"), ("uses", "1")],
+    )
+    .await;
+    let response = join_start(&forum, &link, "alex", "alex@example.com").await;
+    assert_eq!(
+        response.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        response.body
+    );
+    assert!(!response.body.contains("Check your email"));
+    assert!(
+        response.body.contains("can’t send email"),
+        "{}",
+        response.body
+    );
+    let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs")
+        .fetch_one(&forum.db)
+        .await
+        .unwrap();
+    assert_eq!(jobs, 0);
+}
