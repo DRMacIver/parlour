@@ -255,3 +255,14 @@ async fn every_accepted_profile_can_be_saved(pool: PgPool) {
         .await
         .unwrap();
 }
+
+/// The settings page's title is plain text: the browser shows it in tabs,
+/// history and bookmarks, and screen readers announce it.
+#[sqlx::test]
+async fn the_settings_page_title_is_plain_text(pool: PgPool) {
+    let s = setup(pool).await;
+    let settings = s.f.page_as("/settings", &s.cookie).await;
+    let start = settings.find("<title>").unwrap() + "<title>".len();
+    let end = start + settings[start..].find("</title>").unwrap();
+    assert_eq!(&settings[start..end], "Your account · Parlour");
+}

@@ -20,12 +20,12 @@ const SQL: &[&str] = &[
     "Transaction<",
 ];
 
-fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+fn files_with(extension: &str, dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     for entry in fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
         if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
+            files_with(extension, &path, out);
+        } else if path.extension().is_some_and(|e| e == extension) {
             out.push(path);
         }
     }
@@ -35,7 +35,7 @@ fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 fn only_the_db_modules_run_sql() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
-    rust_files(&src, &mut files);
+    files_with("rs", &src, &mut files);
     assert!(files.len() > 10, "found only {files:?}");
     let mut offences = Vec::new();
     for file in files {
@@ -56,6 +56,33 @@ fn only_the_db_modules_run_sql() {
     assert!(
         offences.is_empty(),
         "SQL outside src/db:\n{}",
+        offences.join("\n")
+    );
+}
+
+/// Every template's `title` block is text, not markup: what's in it ends
+/// up in `<title>`, where tags would show as raw text.
+#[test]
+fn page_titles_hold_no_markup() {
+    let templates = Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
+    let mut files = Vec::new();
+    files_with("html", &templates, &mut files);
+    assert!(files.len() > 10, "found only {files:?}");
+    let mut offences = Vec::new();
+    for path in files {
+        let text = fs::read_to_string(&path).unwrap();
+        let Some(start) = text.find("{% block title %}") else {
+            continue;
+        };
+        let rest = &text[start + "{% block title %}".len()..];
+        let block = &rest[..rest.find("{% endblock %}").unwrap()];
+        if block.contains('<') || block.contains('\n') {
+            offences.push(format!("{}: {block}", path.display()));
+        }
+    }
+    assert!(
+        offences.is_empty(),
+        "titles with markup:\n{}",
         offences.join("\n")
     );
 }
