@@ -1212,3 +1212,120 @@ async fn posting_is_rate_limited(pool: PgPool) {
         .await;
     assert_status(&response, StatusCode::SEE_OTHER);
 }
+
+// ---------------------------------------------------------------------------
+// The "at most as visible" rule, over random forums
+
+/// Who can see something at a level, for the reference rule below. No
+/// member is in a group yet (M5), so only staff see group categories.
+fn sees(who: &str, level: &str) -> bool {
+    match level {
+        "public" => true,
+        "members" => who != "anonymous",
+        _ => who == "staff",
+    }
+}
+
+/// Everyone who could see `dest` could already see `source`.
+fn nobody_sees_more(source: &str, dest: &str) -> bool {
+    ["anonymous", "member", "staff"]
+        .iter()
+        .all(|who| !sees(who, dest) || sees(who, source))
+}
+
+#[hegel::standalone_function(test_cases = 60, suppress_health_check = [hegel::HealthCheck::TooSlow])]
+fn forks_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle, db: &PgPool) {
+    use hegel::generators as gs;
+    rt.block_on(async {
+        sqlx::raw_sql(
+            "TRUNCATE settings, posts, threads, categories, sections, users RESTART IDENTITY CASCADE",
+        )
+        .execute(db)
+        .await
+        .unwrap();
+    });
+    let f = Forum::new(db.clone());
+    let levels = vec!["public", "members", "groups"];
+    let writes = vec!["members", "groups", "staff"];
+    let count = tc.draw(gs::integers::<usize>().min_value(1).max_value(5));
+    let mut categories = Vec::new();
+    for i in 0..count {
+        let read = tc.draw(gs::sampled_from(levels.clone()));
+        let write = tc.draw(gs::sampled_from(writes.clone()));
+        let slug = format!("c{i}");
+        rt.block_on(async {
+            f.category(&slug, read, None, i as i32).await;
+            f.exec(&format!(
+                "UPDATE categories SET write_level = '{write}' WHERE slug = '{slug}'"
+            ))
+            .await;
+        });
+        categories.push((slug, read, write));
+    }
+    let role = tc.draw(gs::sampled_from(vec!["user", "moderator"]));
+    let who = if role == "user" { "member" } else { "staff" };
+    let source_category = tc.draw(gs::integers::<usize>().max_value(count - 1));
+    let removal = tc.draw(gs::sampled_from(vec!["", "deleted", "hidden"]));
+    let (cookie, post_id) = rt.block_on(async {
+        let author = f.user("author").await;
+        let me = f.member("forker", role, None).await;
+        let t = f
+            .thread(
+                (source_category + 1) as i64,
+                author,
+                "Source",
+                "Secret source text",
+            )
+            .await;
+        if !removal.is_empty() {
+            f.exec(&format!(
+                "UPDATE posts SET {removal}_at = now() WHERE id = {}",
+                t.first_post_id
+            ))
+            .await;
+        }
+        (f.session(me).await, t.first_post_id)
+    });
+    let source_level = categories[source_category].1;
+    let source_visible = removal.is_empty() && sees(who, source_level);
+    for (slug, read, write) in &categories {
+        let response = rt.block_on(f.submit(
+            &format!("/p/{post_id}/fork"),
+            &[("title", "Fork"), ("category", slug), ("body", "Opening")],
+            Some(&cookie),
+        ));
+        let may_write = sees(who, read) && (*write == "members" || who == "staff");
+        let expected = if !source_visible {
+            StatusCode::NOT_FOUND
+        } else if may_write && nobody_sees_more(source_level, read) {
+            StatusCode::SEE_OTHER
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        assert_eq!(
+            response.status, expected,
+            "{who} forking from {source_level} into {read} (write {write})"
+        );
+        if response.status == StatusCode::SEE_OTHER {
+            // Nobody sees the quoted post through the fork who couldn't
+            // see it where it is.
+            let path = response.location().split('#').next().unwrap().to_owned();
+            let anonymous = rt.block_on(f.get(&path));
+            if anonymous.status == StatusCode::OK {
+                assert_eq!(
+                    anonymous.body.contains("Secret source text"),
+                    sees("anonymous", source_level),
+                    "{path}"
+                );
+            }
+        }
+    }
+}
+
+#[sqlx::test]
+async fn quote_forks_follow_the_visibility_rule_property(pool: PgPool) {
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || forks_follow_the_rule(&rt, &pool))
+        .await
+        .unwrap();
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO reactions (post_id, user_id, emoji, created_at) VALUES ($1, $2, $3, $4)\n                     ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cd978f9b99b3e546f0cac6b80abad6e9c889e2da7a2bb11b92569552755a60c9"
+}

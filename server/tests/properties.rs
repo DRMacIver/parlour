@@ -25,12 +25,12 @@ use axum::http::StatusCode;
 use common::{Forum, Response};
 use hegel::generators::{self as gs};
 use hegel::{HealthCheck, TestCase};
+use parlour::AppState;
 use parlour::cache::PageCache;
 use parlour::changes::Change;
 use parlour::content::{POSTS_PER_PAGE, THREADS_PER_PAGE, page_count, page_of_seq};
 use parlour::pagination::page_href;
 use parlour::store::{self, NewCategory, NewPost, NewThread, NewUser};
-use parlour::AppState;
 use sqlx::PgPool;
 use tokio::runtime::Handle;
 
@@ -450,10 +450,11 @@ impl World {
                 );
                 assert_eq!(history.status, StatusCode::OK);
                 assert!(history.body.contains(&p.body_token));
-                assert!(history.body.contains(&format!(
-                    "{} version",
-                    p.history.len() + 1
-                )));
+                assert!(
+                    history
+                        .body
+                        .contains(&format!("{} version", p.history.len() + 1))
+                );
                 for (n, token) in p.history.iter().enumerate() {
                     let version = self.get_as(who, &format!("/p/{}/revisions?v={}", p.id, n + 1));
                     assert!(

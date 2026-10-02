@@ -1172,8 +1172,16 @@ impl Seeder<'_> {
         // Edited twice after the grace period, as in the mockups.
         let maya = self.user("maya");
         for (rev, minutes, body) in [
-            (1, 0, "Mostly solo this week: three games of Arkham Horror LCG and one game of Mage Knight.\n\nI think solo play is its own hobby."),
-            (2, 6, "Mostly solo this week: three games of Arkham Horror LCG and one game of Mage Knight.\n\nI think solo play is its own hobby that happens to share equipment with this one."),
+            (
+                1,
+                0,
+                "Mostly solo this week: three games of Arkham Horror LCG and one game of Mage Knight.\n\nI think solo play is its own hobby.",
+            ),
+            (
+                2,
+                6,
+                "Mostly solo this week: three games of Arkham Horror LCG and one game of Mage Knight.\n\nI think solo play is its own hobby that happens to share equipment with this one.",
+            ),
         ] {
             sqlx::query!(
                 "INSERT INTO post_revisions (post_id, rev, body_md, body_html, editor_id, created_at)

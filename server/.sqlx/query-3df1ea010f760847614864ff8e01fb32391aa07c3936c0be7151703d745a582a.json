@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO post_revisions (post_id, rev, body_md, body_html, editor_id, created_at)\n                 SELECT $1, $2, $3, $4, $5, created_at + make_interval(mins => $6) FROM posts WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4",
+        "Text",
+        "Text",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3df1ea010f760847614864ff8e01fb32391aa07c3936c0be7151703d745a582a"
+}

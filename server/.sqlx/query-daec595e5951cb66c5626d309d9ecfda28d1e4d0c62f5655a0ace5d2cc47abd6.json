@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO reactions (post_id, user_id, emoji, created_at)\n                     SELECT $1, $2, '😂', created_at + interval '20 minutes' FROM posts WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "daec595e5951cb66c5626d309d9ecfda28d1e4d0c62f5655a0ace5d2cc47abd6"
+}
