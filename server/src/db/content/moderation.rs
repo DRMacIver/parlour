@@ -467,13 +467,14 @@ fn describe(row: Row, staff: bool) -> LogEntry {
         | "delete_space"
         | "mark_space_essential"
         | "unmark_space_essential" => {
-            let verb = match row.action.as_str() {
-                "edit_space" => "changed the settings of ",
-                "archive_space" => "archived ",
-                "unarchive_space" => "opened again ",
-                "mark_space_essential" => "made essential the space ",
-                "unmark_space_essential" => "made no longer essential the space ",
-                _ => "deleted the space ",
+            // What was done to the space, before and after its name.
+            let (before, after) = match row.action.as_str() {
+                "edit_space" => ("changed the settings of ", ""),
+                "archive_space" => ("archived ", ""),
+                "unarchive_space" => ("opened again ", ""),
+                "mark_space_essential" => ("made ", " essential"),
+                "unmark_space_essential" => ("made ", " no longer essential"),
+                _ => ("deleted the space ", ""),
             };
             let name = row.details["name"].as_str().unwrap_or("a space").to_owned();
             let space = match row.details["slug"].as_str() {
@@ -483,7 +484,11 @@ fn describe(row: Row, staff: bool) -> LogEntry {
                 },
                 _ => text(name),
             };
-            vec![text(verb), space]
+            let mut bits = vec![text(before), space];
+            if !after.is_empty() {
+                bits.push(text(after));
+            }
+            bits
         }
         "approve_post" => vec![
             text("approved a post by new member "),

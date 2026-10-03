@@ -1,7 +1,8 @@
 //! A member's own data, for them to download (DESIGN.md §2): their
 //! account and profile, everything they wrote (with earlier versions),
 //! their posts held for approval, reactions, conversations,
-//! notifications, invites, groups, blocks, watches, uploads, reports,
+//! notifications, invites, groups, blocks, watches, how they have
+//! arranged their front page and what they have muted, uploads, reports,
 //! sessions and the addresses recorded for them.
 //!
 //! Other people's words are not included, not even in conversations the
@@ -17,7 +18,7 @@
 
 use serde_json::{Value, json};
 
-use crate::db::Db;
+use crate::db::{Db, layouts};
 use crate::viewer::Viewer;
 
 pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
@@ -150,6 +151,20 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
     )
     .fetch_all(pool)
     .await?;
+    // Their front page as they have arranged it (DESIGN.md §3.5): every
+    // section and the spaces in it, named by slug, whether or not they can
+    // read them now, since the arrangement is theirs.
+    let layout = match layouts::member_id(db, user_id).await? {
+        Some(id) => layouts::read(db, id).await?,
+        None => None,
+    };
+    let muted = sqlx::query_scalar!(
+        "SELECT c.slug FROM space_mutes m JOIN spaces c ON c.id = m.space_id
+         WHERE m.user_id = $1 ORDER BY c.slug",
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
     let uploads = sqlx::query!(
         "SELECT sha256, ext, width, height, created_at FROM uploads WHERE user_id = $1 ORDER BY created_at",
         user_id
@@ -265,6 +280,14 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
             "space": w.space_slug,
             "level": w.level,
         })).collect::<Vec<_>>(),
+        "front_page": layout.map(|l| json!({
+            "edited_at": l.edited_at,
+            "sections": l.sections.iter().map(|s| json!({
+                "name": s.name,
+                "spaces": s.spaces.iter().map(|c| &c.slug).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        })),
+        "muted_spaces": muted,
         "uploads": uploads.iter().map(|u| json!({
             "url": crate::uploads::url(&u.sha256, &u.ext),
             "width": u.width,

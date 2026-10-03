@@ -418,13 +418,25 @@ async fn admins_mark_spaces_essential_and_moderators_dont(db: PgPool) {
     let section = default_section(&a, games).await;
     let kit = a.forum.member("kit", "moderator", None).await;
     let kit_cookie = a.forum.session(kit).await;
+    // Ruth runs Games: staff act on it as staff, which is logged.
+    let ruth = a.forum.member("ruth", "user", None).await;
+    a.forum
+        .set_grant(games, "administer", Grant::listed([], [ruth]))
+        .await;
+    let fields_run_by_ruth = || {
+        let mut fields = space_fields("games", "Games", &section, "public", "members");
+        fields.retain(|(k, _)| *k != "administer_level");
+        fields.push(("administer_level", "listed"));
+        fields.push(("administer_users", "ruth"));
+        fields
+    };
 
     // Moderators place spaces on the default front page but can't mark
     // them essential.
     let settings = a.forum.page_as("/c/games/settings", &kit_cookie).await;
     assert!(settings.contains("name=\"section\""));
     assert!(!settings.contains("name=\"essential\""));
-    let mut fields = space_fields("games", "Games", &section, "public", "members");
+    let mut fields = fields_run_by_ruth();
     fields.push(("essential", "on"));
     let response = a
         .forum
@@ -455,14 +467,39 @@ async fn admins_mark_spaces_essential_and_moderators_dont(db: PgPool) {
     );
     assert!(a.page("/admin/spaces").await.contains("Essential"));
     // Leaving the box unticked clears it.
-    let response = a
-        .submit(
-            "/c/games/settings",
-            &space_fields("games", "Games", &section, "public", "members"),
-        )
-        .await;
+    let response = a.submit("/c/games/settings", &fields_run_by_ruth()).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     assert!(!essential(&a).await);
+
+    // Kit and Sam administer Games as staff, not by name, so each save is
+    // logged, and marking it essential (or not) is logged in its own right.
+    let actions: Vec<String> = sqlx::query_scalar(
+        "SELECT action FROM mod_actions WHERE target_kind = 'space' AND target_id = $1 ORDER BY id",
+    )
+    .bind(games)
+    .fetch_all(&a.forum.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        actions,
+        [
+            "edit_space",
+            "mark_space_essential",
+            "edit_space",
+            "unmark_space_essential",
+            "edit_space"
+        ]
+    );
+    let log = a.forum.page("/moderation").await;
+    assert!(
+        log.contains("made <a href=\"/c/games\">Games</a> essential"),
+        "{log}"
+    );
+    assert!(
+        log.contains("made <a href=\"/c/games\">Games</a> no longer essential"),
+        "{log}"
+    );
+    assert!(!log.contains("mark_space_essential"), "{log}");
 }
 
 #[sqlx::test]

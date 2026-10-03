@@ -2240,12 +2240,12 @@ impl Access {
     }
 
     /// What a change to the default layout does: every member who hasn't
-    /// edited their copy gets the default again.
+    /// edited their copy gets the default again, less what they have muted.
     fn default_changed(&mut self) {
         let default = self.default_set();
         for user in &mut self.users {
             if !user.edited {
-                user.sections = default.clone();
+                user.sections = default.difference(&user.muted).copied().collect();
             }
         }
     }

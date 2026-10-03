@@ -679,6 +679,145 @@ async fn deleting_an_account_removes_its_layout_and_mutes(pool: PgPool) {
     assert_eq!(muted, 0);
 }
 
+/// A change to the default puts nothing back that the member has muted,
+/// so unmuting means the same whether or not they follow the default: the
+/// space stays off their front page until they follow it again.
+#[sqlx::test]
+async fn a_default_change_doesnt_put_a_muted_space_back_in_the_sections(pool: PgPool) {
+    let f = Forum::new(pool);
+    let forum = f.section("Forum", 1).await;
+    let general = f.space("general", "public", Some(forum), 0).await;
+    f.space("games", "public", Some(forum), 1).await;
+    let ruth = f.user("ruth").await;
+    let ruth_layout = member_layout(&f, ruth).await;
+    assert_eq!(
+        layouts::mute(&f.db, ruth, general).await.unwrap(),
+        MuteOutcome::Muted
+    );
+    let default = layouts::default_id(&f.db).await.unwrap();
+    assert!(
+        layouts::rename_section(&f.db, default, forum, "The forum")
+            .await
+            .unwrap()
+    );
+    // Ruth still follows the default (the rename reached her), but the
+    // space she muted isn't in her copy of it.
+    assert_eq!(
+        shape(&f, ruth_layout).await,
+        vec![section("The forum", &["games"]), section("Feeds", &[])]
+    );
+    assert!(layouts::unmute(&f.db, ruth, general).await.unwrap());
+    assert_eq!(
+        front_page(&f, &viewer(&f, ruth).await).await.1,
+        vec![section("The forum", &["games"])]
+    );
+    assert!(
+        layouts::read(&f.db, ruth_layout)
+            .await
+            .unwrap()
+            .unwrap()
+            .edited_at
+            .is_none()
+    );
+    // Something the default's Feeds section holds is skipped the same way.
+    let jonah = f.user("jonah").await;
+    let books = f.unlisted_space("books", "public").await;
+    assert_eq!(
+        layouts::mute(&f.db, jonah, books).await.unwrap(),
+        MuteOutcome::Muted
+    );
+    let default_feeds = layouts::add_section(&f.db, default, "Feeds").await.unwrap();
+    assert!(
+        layouts::follow(&f.db, default, default_feeds, books)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        shape(&f, member_layout(&f, jonah).await).await,
+        vec![
+            section("The forum", &["general", "games"]),
+            section("Feeds", &[])
+        ]
+    );
+    // Ruth unmuted General above and still follows the default, so this
+    // change brings her the default in full: General is back where the
+    // default puts it. (Had she edited her layout, nothing would reach it.)
+    assert_eq!(
+        shape(&f, ruth_layout).await,
+        vec![
+            section("The forum", &["general", "games"]),
+            section("Feeds", &["books"])
+        ]
+    );
+}
+
+/// A member's first edit of their layout, landing while an admin's change
+/// to the default is being copied out, is theirs to keep: the copy checks
+/// again, once it has the member's row, that they still follow the default.
+#[sqlx::test]
+async fn a_members_first_edit_survives_a_default_change_in_progress(pool: PgPool) {
+    let f = Forum::new(pool);
+    let forum = f.section("Forum", 1).await;
+    f.space("general", "public", Some(forum), 0).await;
+    let ruth = f.user("ruth").await;
+    let jonah = f.user("jonah").await;
+    let default = layouts::default_id(&f.db).await.unwrap();
+    let jonah_layout = member_layout(&f, jonah).await;
+
+    // Jonah's edit has his layout's row, and hasn't committed yet.
+    let mut jonahs_edit = f.db.begin().await.unwrap();
+    let mine = layouts::add_section(&mut jonahs_edit, jonah_layout, "Mine")
+        .await
+        .unwrap();
+
+    // The admin adds a section to the default: copying it out waits for
+    // Jonah's row.
+    let db = f.db.clone();
+    let admins_write =
+        tokio::spawn(async move { layouts::add_section(&db, default, "Reading").await.unwrap() });
+    loop {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .fetch_one(&f.db)
+        .await
+        .unwrap();
+        if waiting > 0 {
+            break;
+        }
+        assert!(
+            !admins_write.is_finished(),
+            "the admin's write went through without waiting for Jonah's row"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    jonahs_edit.commit().await.unwrap();
+    admins_write.await.unwrap();
+
+    // Jonah's layout is his own now, section and all; Ruth's followed.
+    assert_eq!(
+        shape(&f, jonah_layout).await,
+        vec![
+            section("Forum", &["general"]),
+            section("Feeds", &[]),
+            section("Mine", &[]),
+        ]
+    );
+    let layout = layouts::read(&f.db, jonah_layout).await.unwrap().unwrap();
+    assert_eq!(layout.sections.last().map(|s| s.id), Some(mine));
+    assert!(layout.edited_at.is_some());
+    assert_eq!(
+        shape(&f, member_layout(&f, ruth).await).await,
+        vec![
+            section("Forum", &["general"]),
+            section("Reading", &[]),
+            section("Feeds", &[]),
+        ]
+    );
+}
+
 /// Two admins changing the default at once (or one admin's save racing a
 /// member's) must not trip over each other's copying into the members'
 /// layouts: every write serialises on the layout it changes.

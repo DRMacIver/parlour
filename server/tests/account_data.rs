@@ -7,6 +7,7 @@ mod common;
 use axum::http::{StatusCode, header};
 use common::{Forum, cookie_set_by, post_html};
 use parlour::http_cache::PRIVATE_CACHE_CONTROL;
+use parlour::layouts::{self, MuteOutcome};
 use parlour::store::{self, NewConversation};
 use serde_json::Value;
 use sqlx::PgPool;
@@ -90,6 +91,19 @@ async fn members_download_their_data(pool: PgPool) {
             .await;
     s.f.restrict(hidden, &[group], None).await;
 
+    // Her front page: a section of her own holding Games, and Secret muted.
+    let layout = layouts::member_id(&s.f.db, s.ruth).await.unwrap().unwrap();
+    let mine = layouts::add_section(&s.f.db, layout, "Mine").await.unwrap();
+    assert!(
+        layouts::follow(&s.f.db, layout, mine, s.public)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        layouts::mute(&s.f.db, s.ruth, hidden).await.unwrap(),
+        MuteOutcome::Muted
+    );
+
     let page = s.f.page_as("/settings", &s.ruth_cookie).await;
     assert!(page.contains("action=\"/settings/export\""));
     let response =
@@ -137,6 +151,36 @@ async fn members_download_their_data(pool: PgPool) {
     assert_eq!(data["conversations"][0]["title"], "Gift ideas");
     assert_eq!(data["reactions"][0]["emoji"], "👍");
     assert!(data["sessions"].as_array().is_some_and(|s| !s.is_empty()));
+    // How she has arranged her front page, and what she has muted. (The
+    // fixture's spaces go in a default section called "Spaces", which her
+    // copy started from.)
+    let front_page = &data["front_page"];
+    assert!(front_page["edited_at"].is_string(), "{front_page}");
+    let sections: Vec<(&str, Vec<&str>)> = front_page["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|section| {
+            (
+                section["name"].as_str().unwrap(),
+                section["spaces"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|c| c.as_str().unwrap())
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sections,
+        [
+            ("Spaces", vec![]),
+            ("Feeds", vec![]),
+            ("Mine", vec!["games"])
+        ]
+    );
+    assert_eq!(data["muted_spaces"], serde_json::json!(["secret"]));
 }
 
 #[sqlx::test]

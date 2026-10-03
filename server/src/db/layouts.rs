@@ -7,9 +7,13 @@
 //!
 //! A member who hasn't edited their copy (`edited_at` is null) keeps
 //! following the default: every change to the default is copied into
-//! their layout again, by `layout_copy_default` in migration 0023, which
-//! keeps their own "Feeds" section and what is in it. Any change a member
+//! their layout again, by `layout_copy_default` (migration 0024, first
+//! written in 0023), which keeps their own "Feeds" section and what is in
+//! it, and leaves out the spaces they have muted. Any change a member
 //! makes to their sections marks the layout edited; muting doesn't.
+//! `layout_propagate_default` checks each follower again once it has
+//! their row lock, so a first edit that lands while a change to the
+//! default is being copied out isn't copied over.
 //!
 //! Sections keep the positions they are given and sort by `(position,
 //! id)`, so a layout editor may number them as it likes. Within a section
@@ -549,7 +553,8 @@ pub enum MuteOutcome {
 
 /// Mutes a space for a member: it leaves their sections and their front
 /// page. Their layout isn't marked as edited by this, so one that follows
-/// the default keeps doing so.
+/// the default keeps doing so (and later copies of the default leave the
+/// muted space out).
 pub async fn mute<'c>(
     db: impl Handle<'c>,
     user_id: i64,
