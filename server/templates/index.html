@@ -7,7 +7,7 @@
   {% if sections.is_empty() %}
     <section class="panel">
       <h2 class="panel-bar">Spaces</h2>
-      <p class="empty">There are no spaces yet.{% if let Some(user) = layout.user %}{% if user.is_admin %} <a href="/admin/spaces">Make the first ones in Admin → Spaces.</a>{% endif %}{% endif %}</p>
+      <p class="empty">There are no spaces yet.{% if layout.user.is_some() %} <a href="/spaces/new">Make the first one.</a>{% endif %}</p>
     </section>
   {% endif %}
   {% for section in sections %}

@@ -149,6 +149,8 @@ struct SpaceTemplate {
     logged_in: bool,
     /// Whether the viewer may start a thread here.
     can_post: bool,
+    /// Whether the viewer may change the space's settings.
+    can_administer: bool,
     /// How closely a logged-in viewer follows the space.
     watch: Option<WatchLevel>,
 }
@@ -183,12 +185,16 @@ pub async fn space(
     }
     let threads = std::mem::take(&mut space.threads);
     let base = format!("/c/{}", space.space.slug);
-    let can_post = match viewer.user() {
-        None => false,
-        Some(_) => content::space_target(&state.db, &viewer, &slug)
-            .await?
-            .is_some_and(|target| writing::may_post_in(&viewer, &target)),
+    let target = match viewer.user() {
+        None => None,
+        Some(_) => content::space_target(&state.db, &viewer, &slug).await?,
     };
+    let can_post = target
+        .as_ref()
+        .is_some_and(|target| writing::may_start_in(&viewer, target));
+    let can_administer = target
+        .as_ref()
+        .is_some_and(|target| target.rules.may_administer(&viewer));
     let watch = match viewer.user() {
         Some(user) => {
             Some(social::watch_level(&state.db, user.id, Watched::Space(space.space.id)).await?)
@@ -204,6 +210,7 @@ pub async fn space(
             show_space: false,
             logged_in: viewer.user().is_some(),
             can_post,
+            can_administer,
             watch,
         },
         &deps,

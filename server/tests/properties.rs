@@ -57,6 +57,7 @@ use parlour::content::{
 use parlour::db::Db;
 use parlour::groups::{self, GroupFields};
 use parlour::pagination::page_href;
+use parlour::permissions::{Grant, Level};
 use parlour::sessions;
 use parlour::store::{self, NewPost, NewSpace, NewThread, NewUser, SpaceSettings};
 use parlour::users::{self, RoleChange};
@@ -81,7 +82,7 @@ const STALE_POST_COUNTS: &str = "
     SELECT count(*) FROM actual FULL JOIN kept USING (user_id, space_id)
     WHERE actual.posts IS DISTINCT FROM kept.posts";
 
-const LEVELS: [&str; 3] = ["public", "members", "groups"];
+const LEVELS: [&str; 3] = ["public", "members", "listed"];
 
 /// Who is looking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -329,7 +330,7 @@ impl World {
             let id = world.block(world.cached.group(&format!("g{n}"), &format!("Group {n}")));
             world.groups.push(id);
         }
-        for level in ["public", "public", "members", "groups"] {
+        for level in ["public", "public", "members", "listed"] {
             world.add_space(level);
         }
         // Everyone can be emailed, as soon as a notification is made.
@@ -375,15 +376,15 @@ impl World {
         let id = self
             .block(store::create_space(
                 self.db(),
-                &NewSpace {
-                    section_id: None,
-                    slug: slug.clone(),
-                    name: format!("Space {token}"),
-                    description: String::new(),
-                    position: self.spaces.len() as i32,
-                    read_level: level.into(),
-                    write_level: "members".into(),
-                },
+                &NewSpace::with_levels(
+                    None,
+                    &slug,
+                    &format!("Space {token}"),
+                    "",
+                    self.spaces.len() as i32,
+                    level,
+                    "members",
+                ),
             ))
             .unwrap();
         self.changed(Change::SpaceChanged { space_id: id });
@@ -509,7 +510,7 @@ impl World {
         };
         match (c.read_level, who) {
             ("public", _) | ("members", Who::Member | Who::Staff) | (_, Who::Staff) => true,
-            ("groups", Who::Member) => !self.member_groups.is_disjoint(&c.read_groups),
+            ("listed", Who::Member) => !self.member_groups.is_disjoint(&c.read_groups),
             _ => false,
         }
     }
@@ -1336,9 +1337,25 @@ impl World {
         if tc.draw(gs::booleans()) {
             let level = tc.draw(gs::sampled_from(LEVELS.to_vec()));
             self.spaces[space].read_level = level;
-            self.exec(format!(
-                "UPDATE spaces SET read_level = '{level}' WHERE id = {id}"
-            ));
+            // As the settings form does: a new level keeps the groups
+            // named only while it is `listed`.
+            let groups: Vec<i64> = if level == "listed" {
+                self.spaces[space]
+                    .read_groups
+                    .iter()
+                    .map(|&g| self.groups[g])
+                    .collect()
+            } else {
+                self.spaces[space].read_groups.clear();
+                Vec::new()
+            };
+            self.block(store::set_grant(
+                self.db(),
+                id,
+                "read",
+                &Grant::from_parts(level, &groups, &[]),
+            ))
+            .unwrap();
         } else {
             let token = self.token();
             self.exec(format!(
@@ -1374,16 +1391,17 @@ impl World {
             .filter(|_| tc.draw(gs::booleans()))
             .collect();
         let space = &self.spaces[c];
+        let group_ids: Vec<i64> = read_groups.iter().map(|&g| self.groups[g]).collect();
         let settings = SpaceSettings {
             section_id: None,
             slug: space.slug.clone(),
             name: format!("Space {}", space.token),
             description: String::new(),
             position: c as i32,
-            read_level: space.read_level.into(),
-            write_level: "members".into(),
-            read_groups: read_groups.iter().map(|&g| self.groups[g]).collect(),
-            write_groups: Vec::new(),
+            read: Grant::from_parts(space.read_level, &group_ids, &[]),
+            reply: Grant::members(),
+            start: Grant::members(),
+            administer: Grant::staff(),
         }
         .clean()
         .unwrap();
@@ -1395,7 +1413,7 @@ impl World {
         .unwrap()
         .unwrap();
         let id = space.id;
-        self.spaces[c].read_groups = if settings.read_level == "groups" {
+        self.spaces[c].read_groups = if settings.read.level == Level::Listed {
             read_groups
         } else {
             BTreeSet::new()
@@ -2067,7 +2085,7 @@ impl Access {
         for _ in 0..2 {
             world.add_group();
         }
-        for level in ["public", "members", "groups", "groups"] {
+        for level in ["public", "members", "listed", "listed"] {
             world.add_space(level);
         }
         world
@@ -2104,15 +2122,15 @@ impl Access {
         let id = self
             .block(store::create_space(
                 &self.pool,
-                &NewSpace {
-                    section_id: None,
-                    slug: slug.clone(),
-                    name: format!("Space {n}"),
-                    description: String::new(),
-                    position: n as i32,
-                    read_level: level.into(),
-                    write_level: "members".into(),
-                },
+                &NewSpace::with_levels(
+                    None,
+                    &slug,
+                    &format!("Space {n}"),
+                    "",
+                    n as i32,
+                    level,
+                    "members",
+                ),
             ))
             .unwrap();
         self.spaces.push(AccessSpace {
@@ -2169,6 +2187,7 @@ impl Access {
     /// `who` is an index into `users`, or `None` for an anonymous visitor.
     /// A suspended member reads what a visitor reads (DESIGN.md §3.1:
     /// members-only means members who are not suspended).
+    /// Staff read every space for now (DESIGN.md §13, milestone 15).
     fn reads_space(&self, who: Option<usize>, space: usize) -> bool {
         let c = &self.spaces[space];
         let who = who.filter(|&u| !self.users[u].suspended);
@@ -2176,6 +2195,7 @@ impl Access {
             ("public", _) => true,
             (_, None) => false,
             ("members", Some(_)) => true,
+            ("staff", Some(u)) => self.users[u].staff,
             (_, Some(u)) => {
                 let user = &self.users[u];
                 user.staff || !user.groups.is_disjoint(&c.read_groups)
@@ -2378,7 +2398,7 @@ impl Access {
             && self.reads_space(who, space)
             && match c.write_level {
                 "members" => true,
-                "groups" => user.staff || !user.groups.is_disjoint(&c.write_groups),
+                "listed" => !user.groups.is_disjoint(&c.write_groups),
                 _ => user.staff,
             }
     }
@@ -2389,8 +2409,9 @@ impl Access {
         let (s, d) = (&self.spaces[source], &self.spaces[dest]);
         match (s.level, d.level) {
             ("public", _) => true,
-            ("members", "members" | "groups") => true,
-            ("groups", "groups") => d.read_groups.is_subset(&s.read_groups),
+            ("members", "members" | "staff" | "listed") => true,
+            ("staff", "staff") => true,
+            ("listed", "listed") => d.read_groups.is_subset(&s.read_groups),
             _ => false,
         }
     }
@@ -2402,7 +2423,7 @@ impl Access {
         let readable = self.block(content::readable_spaces(db, viewer)).unwrap();
         let may_post: BTreeSet<i64> = readable
             .iter()
-            .filter(|c| writing::may_post_in(viewer, c))
+            .filter(|c| writing::may_start_in(viewer, c))
             .map(|c| c.space.id)
             .collect();
         let expected = Self::ids(&self.spaces, |c| self.posts_in_space(who, c), |c| c.id);
@@ -2434,33 +2455,35 @@ impl Access {
         }
     }
 
-    /// Gives space `c` random read and write levels and groups, as an
-    /// admin can with the space form.
+    /// Gives space `c` random read and write grants, as an administrator
+    /// can with the settings form. Replying and starting threads share one
+    /// grant here.
     fn set_space_access(&mut self, tc: &TestCase, c: usize) {
-        let level = tc.draw(gs::sampled_from(LEVELS.to_vec()));
+        let level = tc.draw(gs::sampled_from(vec![
+            "public", "members", "staff", "listed",
+        ]));
         let read_groups: BTreeSet<usize> = (0..self.groups.len())
             .filter(|_| tc.draw(gs::booleans()))
             .collect();
-        let write_level = tc.draw(gs::sampled_from(vec!["members", "groups", "staff"]));
-        let mut write_groups: BTreeSet<usize> = (0..self.groups.len())
+        let write_level = tc.draw(gs::sampled_from(vec!["members", "listed", "staff"]));
+        let write_groups: BTreeSet<usize> = (0..self.groups.len())
             .filter(|_| tc.draw(gs::booleans()))
             .collect();
-        if level == "groups" && write_level == "groups" {
-            // The form refuses groups that may post but not read.
-            write_groups.retain(|g| read_groups.contains(g));
-        }
         let space = &self.spaces[c];
-        let to_ids = |groups: &BTreeSet<usize>| groups.iter().map(|&g| self.groups[g]).collect();
+        let to_ids = |groups: &BTreeSet<usize>| -> Vec<i64> {
+            groups.iter().map(|&g| self.groups[g]).collect()
+        };
+        let write = Grant::from_parts(write_level, &to_ids(&write_groups), &[]);
         let settings = SpaceSettings {
             section_id: None,
             slug: space.slug.clone(),
             name: format!("Space {c}"),
             description: String::new(),
             position: c as i32,
-            read_level: level.into(),
-            write_level: write_level.into(),
-            read_groups: to_ids(&read_groups),
-            write_groups: to_ids(&write_groups),
+            read: Grant::from_parts(level, &to_ids(&read_groups), &[]),
+            reply: write.clone(),
+            start: write,
+            administer: Grant::staff(),
         }
         .clean()
         .unwrap();
@@ -2469,13 +2492,13 @@ impl Access {
             .unwrap();
         let space = &mut self.spaces[c];
         space.level = level;
-        space.read_groups = if level == "groups" {
+        space.read_groups = if level == "listed" {
             read_groups
         } else {
             BTreeSet::new()
         };
         space.write_level = write_level;
-        space.write_groups = if write_level == "groups" {
+        space.write_groups = if write_level == "listed" {
             write_groups
         } else {
             BTreeSet::new()
@@ -3247,15 +3270,15 @@ impl Access {
         assert_eq!(stale, 0, "maintained post counts are stale");
     }
 
-    /// The denormalised `threads.visibility` is always the space's read
-    /// level, however threads move and levels change.
+    /// The denormalised `threads.visibility` is always the space's
+    /// visibility, however threads move and read grants change.
     #[invariant(always_run)]
     fn visibility_copies_are_current(&self, _: TestCase) {
         let stale: i64 = self
             .block(
                 sqlx::query_scalar(
                     "SELECT count(*) FROM threads t JOIN spaces c ON c.id = t.space_id
-                     WHERE t.visibility <> c.read_level",
+                     WHERE t.visibility <> c.visibility",
                 )
                 .fetch_one(&self.pool),
             )
@@ -3269,7 +3292,12 @@ impl Access {
                         .fetch_one(&self.pool),
                 )
                 .unwrap();
-            assert_eq!(level, self.spaces[t.space].level);
+            let expected = match self.spaces[t.space].level {
+                "public" => "public",
+                "members" => "members",
+                _ => "restricted",
+            };
+            assert_eq!(level, expected);
         }
     }
 }

@@ -24,6 +24,7 @@
   <div class="wrap">
     <a href="/"{% if layout.nav == Nav::Index %} aria-current="page"{% endif %}>Forum index</a>
     <a href="/latest"{% if layout.nav == Nav::Latest %} aria-current="page"{% endif %}>Latest</a>
+    <a href="/spaces"{% if layout.nav == Nav::Spaces %} aria-current="page"{% endif %}>Spaces</a>
     <a href="/users/tree"{% if layout.nav == Nav::Members %} aria-current="page"{% endif %}>Members</a>
     <span class="spacer"></span>
     {% if let Some(user) = layout.user %}

@@ -115,7 +115,7 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
         "#,
         user_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         filter.dm_viewer,
     )
     .fetch_one(db.pool())
@@ -147,7 +147,7 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
         "#,
         user_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         NOTIFICATIONS_PER_PAGE,
         offset,
         filter.dm_viewer,
@@ -217,7 +217,7 @@ pub async fn unread_count(db: &Db, viewer: &Viewer) -> sqlx::Result<i64> {
         r#"SELECT unread_notification_count($1, $2, $3, $4) AS "n!""#,
         user_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         filter.dm_viewer,
     )
     .fetch_one(db.pool())

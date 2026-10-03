@@ -91,15 +91,14 @@ async fn index_with_no_spaces_says_so(pool: PgPool) {
     let f = Forum::new(pool);
     let page = f.page("/").await;
     assert!(page.contains("There are no spaces yet."));
-    assert!(!page.contains("/admin/spaces"));
-    // A new admin is shown where to make them; nobody else is.
-    let sam = f.member("sam", "admin", None).await;
-    let page = f.page_as("/", &f.session(sam).await).await;
-    assert!(page.contains("href=\"/admin/spaces\""), "{page}");
-    let jonah = f.member("jonah", "user", None).await;
-    let page = f.page_as("/", &f.session(jonah).await).await;
-    assert!(page.contains("There are no spaces yet."));
-    assert!(!page.contains("/admin/spaces"));
+    assert!(!page.contains("/spaces/new"));
+    // Members are shown where to make one; visitors aren't.
+    for (name, role) in [("sam", "admin"), ("jonah", "user")] {
+        let user = f.member(name, role, None).await;
+        let page = f.page_as("/", &f.session(user).await).await;
+        assert!(page.contains("There are no spaces yet."));
+        assert!(page.contains("href=\"/spaces/new\""), "{page}");
+    }
 }
 
 #[sqlx::test]

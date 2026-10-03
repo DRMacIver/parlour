@@ -1,0 +1,119 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,\n               c.archived_at IS NOT NULL AS \"archived!\", c.created_at,\n               array(SELECT g.name FROM groups g\n                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)\n                     ORDER BY lower(g.name), g.id) AS \"group_names!\",\n               counts.threads AS \"thread_count!\", counts.last_post_at AS \"last_post_at?\"\n        FROM spaces c\n        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'\n        CROSS JOIN LATERAL (\n            SELECT count(*) AS threads, max(t.last_post_at) AS last_post_at\n            FROM threads t\n            WHERE t.space_id = c.id AND t.deleted_at IS NULL\n              AND thread_readable(t.visibility, t.space_id, $1, $2)\n        ) counts\n        WHERE space_readable(c.visibility, c.id, $1, $2)\n          AND ($3 OR c.archived_at IS NULL)\n        ORDER BY CASE WHEN $4 = 'name' THEN lower(c.name) END,\n                 CASE WHEN $4 = 'activity' THEN counts.last_post_at END DESC NULLS LAST,\n                 c.created_at DESC, c.id DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "read_level",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_grants",
+            "name": "level"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "archived!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "group_names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "thread_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "last_post_at?",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int8Array",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "1f383695338d24883793f8ae0d5731c9711080f8968080f28c3e49032ef89de6"
+}

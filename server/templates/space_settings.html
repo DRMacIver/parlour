@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{% block title %}Settings · {{ space.space.name }} · {{ layout.site_name }}{% endblock %}
+
+{#- One verb's grant: a level, and for "listed" the groups and people. -#}
+{% macro grant_fields(verb, legend, grant, groups, allow_public, hint) %}
+<fieldset class="field">
+  <legend>{{ legend }}</legend>
+  {% if allow_public %}<label class="choice"><input type="radio" name="{{ verb }}_level" value="public"{% if grant.level == "public" %} checked{% endif %}> Everyone, including visitors who aren’t logged in</label>{% endif %}
+  <label class="choice"><input type="radio" name="{{ verb }}_level" value="members"{% if grant.level == "members" %} checked{% endif %}> Any member</label>
+  <label class="choice"><input type="radio" name="{{ verb }}_level" value="staff"{% if grant.level == "staff" %} checked{% endif %}> Only moderators and admins</label>
+  <label class="choice"><input type="radio" name="{{ verb }}_level" value="listed"{% if grant.level == "listed" %} checked{% endif %}> Only the groups and people named here:</label>
+  <div class="choice-group" role="group" aria-label="Groups and people">
+  {% for group in groups %}
+    <label class="choice"><input type="checkbox" name="{{ verb }}_group" value="{{ group.id }}"{% if grant.ticked(group.id) %} checked{% endif %}> {{ group.name }}</label>
+  {% endfor %}
+    <label for="{{ verb }}_users">Members, by username</label>
+    <input id="{{ verb }}_users" name="{{ verb }}_users" type="text" value="{{ grant.users }}" placeholder="alice, bob">
+  </div>
+  <span class="field-hint">{{ hint }}</span>
+</fieldset>
+{% endmacro %}
+
+{% block content %}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/c/{{ space.space.slug }}">{{ space.space.name }}</a> › <span aria-current="page">Settings</span></nav>
+<h1 class="page-title">{{ space.space.name }}: settings</h1>
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+{% call f::errors(errors) %}{% endcall %}
+<form class="panel" method="post" action="/c/{{ space.space.slug }}/settings">
+  <h2 class="panel-bar">The space</h2>
+  <div class="form">
+    <div class="field-row">
+      <div class="field">
+        <label for="name">Name</label>
+        <input id="name" name="name" type="text" maxlength="80" value="{{ form.name }}" required>
+      </div>
+      <div class="field">
+        <label for="slug">Address <span class="field-hint">(/c/…)</span></label>
+        <input id="slug" name="slug" type="text" maxlength="40" value="{{ form.slug }}" required pattern="[a-z0-9]+(-[a-z0-9]+)*">
+      </div>
+    </div>
+    <div class="field">
+      <label for="description">Description <span class="field-hint">(optional; shown on the index)</span></label>
+      <input id="description" name="description" type="text" maxlength="500" value="{{ form.description }}">
+    </div>
+    {% if staff %}
+    <div class="field-row">
+      <div class="field">
+        <label for="section">Section <span class="field-hint">(staff)</span></label>
+        <select id="section" name="section">
+          <option value=""{% if form.section.is_empty() %} selected{% endif %}>None</option>
+          {% for section in sections %}
+          <option value="{{ section.id }}"{% if self.section_chosen(section.id) %} selected{% endif %}>{{ section.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="position">Position <span class="field-hint">(staff)</span></label>
+        <input id="position" name="position" type="number" value="{{ form.position }}">
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  <h2 class="panel-bar">Who can do what</h2>
+  <div class="form">
+    {% call grant_fields("read", "Who can read it", form.read, groups, true, "Nobody can post where they can’t read. Moderators and admins read every space for now.") %}{% endcall %}
+    {% call grant_fields("reply", "Who can reply in its threads", form.reply, groups, false, "Of those who can read it.") %}{% endcall %}
+    {% call grant_fields("start", "Who can start threads", form.start, groups, false, "Of those who can read it.") %}{% endcall %}
+    {% call grant_fields("administer", "Who runs it", form.administer, groups, false, "They change these settings, pin and lock threads, and can archive the space. Moderators and admins always can.") %}{% endcall %}
+    <div class="form-actions">
+      <button class="button" type="submit">Save</button>
+      <a href="/c/{{ space.space.slug }}">Back to the space</a>
+    </div>
+  </div>
+</form>
+<section class="panel" aria-labelledby="archive-heading">
+  <h2 class="panel-bar" id="archive-heading">{% if space.archived() %}Archived{% else %}Archive{% endif %}</h2>
+  <div class="form">
+    {% if space.archived() %}
+    <p class="form-note">The space is archived: everyone who could read it still can, nobody can post in it, and it is left out of the index and the list of spaces unless asked for.</p>
+    <form class="form-inline" method="post" action="/c/{{ space.space.slug }}/unarchive">
+      <button class="button button-quiet" type="submit">Open it again</button>
+    </form>
+    {% else %}
+    <p class="form-note">Archiving keeps the space and its threads readable but closes it to new posts, and takes it out of the index. It can be opened again later.</p>
+    <form class="form-inline" method="post" action="/c/{{ space.space.slug }}/archive">
+      <button class="button button-quiet" type="submit">Archive this space</button>
+    </form>
+    {% endif %}
+  </div>
+</section>
+<section class="panel" aria-labelledby="delete-heading">
+  <h2 class="panel-bar" id="delete-heading">Delete</h2>
+  <div class="form">
+    {% if thread_count > 0 %}
+    <p class="form-note">This space has {{ crate::format::plural(thread_count, "thread", "threads") }}, so it can’t be deleted. Archive it instead, or have its threads moved elsewhere first.</p>
+    {% else %}
+    <form class="form-inline" method="post" action="/c/{{ space.space.slug }}/delete">
+      <button class="button button-quiet" type="submit">Delete this space</button>
+    </form>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

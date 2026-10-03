@@ -135,10 +135,10 @@ async fn rows(
                t2.id AS "to_thread_id?", t2.title AS "to_title?", t2.slug AS "to_slug?",
                t2.deleted_at IS NULL AS "to_live?",
                thread_readable(t2.visibility, t2.space_id, $4, $5) AS "to_readable?",
-               CASE WHEN space_readable(c1.read_level, c1.id, $4, $5) THEN c1.name END AS "from_space?",
-               CASE WHEN space_readable(c1.read_level, c1.id, $4, $5) THEN c1.slug END AS "from_space_slug?",
-               CASE WHEN space_readable(c2.read_level, c2.id, $4, $5) THEN c2.name END AS "to_space?",
-               CASE WHEN space_readable(c2.read_level, c2.id, $4, $5) THEN c2.slug END AS "to_space_slug?"
+               CASE WHEN space_readable(c1.visibility, c1.id, $4, $5) THEN c1.name END AS "from_space?",
+               CASE WHEN space_readable(c1.visibility, c1.id, $4, $5) THEN c1.slug END AS "from_space_slug?",
+               CASE WHEN space_readable(c2.visibility, c2.id, $4, $5) THEN c2.name END AS "to_space?",
+               CASE WHEN space_readable(c2.visibility, c2.id, $4, $5) THEN c2.slug END AS "to_space_slug?"
         FROM mod_actions a
         JOIN users actor ON actor.id = a.actor_id
         LEFT JOIN users u ON u.id = a.user_id
@@ -155,7 +155,7 @@ async fn rows(
         member,
         only,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         filter.dm_viewer,
         limit,
         offset,
@@ -248,7 +248,7 @@ pub async fn entry_for_member(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result
         "#,
         id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         filter.dm_viewer,
     )
     .fetch_all(db.pool())
@@ -461,6 +461,23 @@ fn describe(row: Row, staff: bool) -> LogEntry {
                 Role::Admin => vec![text("made "), who(), text(" an admin")],
             }
         }
+        "edit_space" | "archive_space" | "unarchive_space" | "delete_space" => {
+            let verb = match row.action.as_str() {
+                "edit_space" => "changed the settings of ",
+                "archive_space" => "archived ",
+                "unarchive_space" => "opened again ",
+                _ => "deleted the space ",
+            };
+            let name = row.details["name"].as_str().unwrap_or("a space").to_owned();
+            let space = match row.details["slug"].as_str() {
+                Some(slug) if row.action != "delete_space" => Bit::Link {
+                    href: format!("/c/{slug}"),
+                    text: name,
+                },
+                _ => text(name),
+            };
+            vec![text(verb), space]
+        }
         "approve_post" => vec![
             text("approved a post by new member "),
             who(),
@@ -535,7 +552,7 @@ pub async fn deleted_thread(
              AND thread_readable(t.visibility, t.space_id, $2, $3)"#,
         thread_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
     )
     .fetch_optional(db.pool())
     .await?;
@@ -562,7 +579,7 @@ pub async fn merged_into(
              AND thread_readable(d.visibility, d.space_id, $2, $3)"#,
         thread_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
     )
     .fetch_optional(db.pool())
     .await?;

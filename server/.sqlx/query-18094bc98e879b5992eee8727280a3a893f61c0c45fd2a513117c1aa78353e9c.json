@@ -1,0 +1,61 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.slug, c.name,\n                  bool_or(g.verb = 'read') AS \"read!\",\n                  bool_or(g.verb IN ('reply', 'start')) AS \"write!\",\n                  bool_or(g.verb = 'administer') AS \"administer!\"\n           FROM space_grants g JOIN spaces c ON c.id = g.space_id\n           WHERE g.group_ids @> ARRAY[$1]::bigint[]\n           GROUP BY c.id\n           ORDER BY c.position, c.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "read!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "write!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "administer!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "18094bc98e879b5992eee8727280a3a893f61c0c45fd2a513117c1aa78353e9c"
+}

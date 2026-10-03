@@ -6,6 +6,7 @@ mod common;
 
 use axum::http::{StatusCode, header};
 use common::{Forum, Response, post_html};
+use parlour::permissions::Grant;
 use parlour::store::NewThread;
 use sqlx::PgPool;
 
@@ -232,8 +233,9 @@ async fn write_levels_are_enforced(pool: PgPool) {
     let s = setup(pool).await;
     let mod_id = s.f.member("sam", "moderator", None).await;
     let mod_cookie = s.f.session(mod_id).await;
-    s.f.exec("UPDATE spaces SET write_level = 'staff' WHERE slug = 'games'")
-        .await;
+    for verb in ["reply", "start"] {
+        s.f.set_grant(s.games, verb, Grant::staff()).await;
+    }
     let response = s.f.get_as("/c/games/new", Some(&s.ruth_cookie)).await;
     assert_status(&response, StatusCode::FORBIDDEN);
     let response =
@@ -264,11 +266,14 @@ async fn write_levels_are_enforced(pool: PgPool) {
         .await;
     assert_status(&response, StatusCode::FORBIDDEN);
 
-    // Group-restricted writing: no member is in a group yet.
-    s.f.exec("UPDATE spaces SET write_level = 'groups' WHERE slug = 'games'")
-        .await;
+    // Writing for listed people only: nobody is listed yet, staff included.
+    s.f.set_grant(s.games, "start", Grant::listed([], [])).await;
     let response = s.f.get_as("/c/games/new", Some(&s.ruth_cookie)).await;
     assert_status(&response, StatusCode::FORBIDDEN);
+    let response = s.f.get_as("/c/games/new", Some(&mod_cookie)).await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+    s.f.set_grant(s.games, "start", Grant::listed([], [mod_id]))
+        .await;
     let response = s.f.get_as("/c/games/new", Some(&mod_cookie)).await;
     assert_status(&response, StatusCode::OK);
 
@@ -282,9 +287,7 @@ async fn write_levels_are_enforced(pool: PgPool) {
 #[sqlx::test]
 async fn spaces_members_cant_read_are_not_found(pool: PgPool) {
     let s = setup(pool).await;
-    s.f.space("organisers", "groups", None, 1).await;
-    s.f.exec("UPDATE spaces SET write_level = 'members' WHERE slug = 'organisers'")
-        .await;
+    s.f.space("organisers", "listed", None, 1).await;
     let response = s.f.get_as("/c/organisers/new", Some(&s.ruth_cookie)).await;
     assert_status(&response, StatusCode::NOT_FOUND);
     let response =
@@ -1322,7 +1325,8 @@ async fn posting_is_rate_limited(pool: PgPool) {
 // The "at most as visible" rule, over random forums
 
 /// Who can see something at a level, for the reference rule below. No
-/// member is in a group yet (M5), so only staff see group spaces.
+/// member is in a group yet (M5), so only staff see listed spaces (staff
+/// read every space for now).
 fn sees(who: &str, level: &str) -> bool {
     match level {
         "public" => true,
@@ -1351,8 +1355,8 @@ fn forks_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle, db: &
     });
     let f = Forum::new(db.clone());
     rt.block_on(f.no_new_members());
-    let levels = vec!["public", "members", "groups"];
-    let writes = vec!["members", "groups", "staff"];
+    let levels = vec!["public", "members", "listed"];
+    let writes = vec!["members", "listed", "staff"];
     let count = tc.draw(gs::integers::<usize>().min_value(1).max_value(5));
     let mut spaces = Vec::new();
     for i in 0..count {
@@ -1360,11 +1364,11 @@ fn forks_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle, db: &
         let write = tc.draw(gs::sampled_from(writes.clone()));
         let slug = format!("c{i}");
         rt.block_on(async {
-            f.space(&slug, read, None, i as i32).await;
-            f.exec(&format!(
-                "UPDATE spaces SET write_level = '{write}' WHERE slug = '{slug}'"
-            ))
-            .await;
+            let id = f.space(&slug, read, None, i as i32).await;
+            for verb in ["reply", "start"] {
+                f.set_grant(id, verb, Grant::from_parts(write, &[], &[]))
+                    .await;
+            }
         });
         spaces.push((slug, read, write));
     }
@@ -1400,7 +1404,14 @@ fn forks_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle, db: &
             &[("title", "Fork"), ("space", slug), ("body", "Opening")],
             Some(&cookie),
         ));
-        let may_write = sees(who, read) && (*write == "members" || who == "staff");
+        // Staff post only where a grant lets them; a `listed` grant
+        // naming nobody lets nobody.
+        let may_write = sees(who, read)
+            && match *write {
+                "members" => true,
+                "staff" => who == "staff",
+                _ => false,
+            };
         let expected = if !source_visible {
             StatusCode::NOT_FOUND
         } else if may_write && nobody_sees_more(source_level, read) {
@@ -1617,11 +1628,9 @@ async fn text_is_kept_when_a_thread_is_locked_while_writing(pool: PgPool) {
 #[sqlx::test]
 async fn text_is_kept_when_a_space_is_closed_while_writing(pool: PgPool) {
     let s = setup(pool).await;
-    s.f.exec(&format!(
-        "UPDATE spaces SET write_level = 'staff' WHERE id = {}",
-        s.games
-    ))
-    .await;
+    for verb in ["reply", "start"] {
+        s.f.set_grant(s.games, verb, Grant::staff()).await;
+    }
     let response =
         s.f.submit(
             "/c/games/new",

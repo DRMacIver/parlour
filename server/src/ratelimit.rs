@@ -59,6 +59,8 @@ pub enum Action {
     Upload,
     /// Downloading one's own data.
     Export,
+    /// Making a space.
+    CreateSpace,
 }
 
 /// Whose allowance a request uses up.
@@ -133,6 +135,9 @@ pub fn rule(action: Action, scope: Scope) -> Rule {
         (Action::Upload, _) => Rule::new(20, 60),
         // Gathering it all takes a few queries; a few a day is plenty.
         (Action::Export, _) => Rule::new(5, 3600),
+        // Spaces are cheap to make, but not that cheap: a handful at once,
+        // then one every half hour.
+        (Action::CreateSpace, _) => Rule::new(10, 1800),
     }
 }
 

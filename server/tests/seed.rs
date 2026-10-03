@@ -24,7 +24,7 @@ async fn seed_fills_an_empty_forum_with_browsable_content(pool: PgPool) {
     assert!(!index.contains("Members only"));
 
     // Every public space has threads and every thread page renders.
-    let spaces: Vec<(String, String)> = sqlx::query_as("SELECT slug, read_level FROM spaces")
+    let spaces: Vec<(String, String)> = sqlx::query_as("SELECT slug, visibility FROM spaces")
         .fetch_all(&pool)
         .await
         .unwrap();
@@ -108,7 +108,7 @@ async fn seed_includes_the_interesting_cases(pool: PgPool) {
         "edited posts"
     );
     assert!(
-        count("SELECT count(*) FROM spaces WHERE read_level <> 'public'").await >= 2,
+        count("SELECT count(*) FROM spaces WHERE visibility <> 'public'").await >= 2,
         "private spaces"
     );
     assert!(
@@ -172,9 +172,11 @@ async fn seed_includes_the_interesting_cases(pool: PgPool) {
     );
     // Members only post in, react in and have read markers for threads
     // they can read.
-    const CANT_READ: &str = "t.visibility = 'groups' AND u.role = 'user' AND NOT EXISTS (
-        SELECT 1 FROM group_members m JOIN space_groups cg ON cg.group_id = m.group_id
-        WHERE m.user_id = u.id AND cg.space_id = t.space_id AND cg.access = 'read')";
+    const CANT_READ: &str = "t.visibility = 'restricted' AND u.role = 'user' AND NOT EXISTS (
+        SELECT 1 FROM space_grants g
+        WHERE g.space_id = t.space_id AND g.verb = 'read'
+          AND (g.user_ids @> ARRAY[u.id]
+               OR g.group_ids && array(SELECT m.group_id FROM group_members m WHERE m.user_id = u.id)))";
     for sql in [
         "SELECT count(*) FROM thread_reads r JOIN threads t ON t.id = r.thread_id
          JOIN users u ON u.id = r.user_id",

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{%- import "_macros.html" as m -%}
+{% block title %}Spaces · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <span aria-current="page">Spaces</span></nav>
+<h1 class="page-title">Spaces</h1>
+<div class="toolbar">
+  {% if can_create %}<a class="button" href="/spaces/new">New space</a>{% endif %}
+  <span class="toolbar-note">Sorted by {% if self.sort_is("created") %}newest first{% else %}<a href="{{ self.sort_href("created") }}">newest first</a>{% endif %} · {% if self.sort_is("activity") %}latest post{% else %}<a href="{{ self.sort_href("activity") }}">latest post</a>{% endif %} · {% if self.sort_is("name") %}name{% else %}<a href="{{ self.sort_href("name") }}">name</a>{% endif %}</span>
+  <span class="spacer"></span>
+  <a class="toolbar-note" href="{{ self.archived_href() }}">{% if archived %}Hide archived spaces{% else %}Show archived spaces{% endif %}</a>
+</div>
+{% if spaces.is_empty() %}
+<section class="panel"><p class="empty">There are no spaces yet.{% if can_create %} <a href="/spaces/new">Make the first one.</a>{% endif %}</p></section>
+{% else %}
+<table class="list space-list">
+  <thead>
+    <tr>
+      <th scope="col">Space</th>
+      <th scope="col" class="num">Threads</th>
+      <th scope="col" class="last-col">Last post</th>
+      <th scope="col" class="last-col">Made</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for space in spaces %}
+    <tr>
+      <td class="main-col">
+        <div class="row-title">
+          <a href="/c/{{ space.space.slug }}">{{ space.space.name }}</a>
+          {% call m::access_flag(space.read_level, space.group_names) %}{% endcall %}
+          {% if space.archived %}<span class="flag">Archived</span>{% endif %}
+        </div>
+        {% if !space.description.is_empty() %}<div class="row-meta">{{ space.description }}</div>{% endif %}
+      </td>
+      <td class="num" data-label="Threads">{{ crate::format::count(space.thread_count) }}</td>
+      <td class="last-col" data-label="Last post">{% if let Some(at) = space.last_post_at %}{% call m::time(at) %}{% endcall %}{% else %}<span class="row-meta">No posts yet</span>{% endif %}</td>
+      <td class="last-col" data-label="Made">{% call m::time(space.created_at) %}{% endcall %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

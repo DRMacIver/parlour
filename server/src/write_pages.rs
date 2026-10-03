@@ -165,7 +165,7 @@ fn thread_crumbs(thread: &ThreadTarget) -> Vec<Crumb> {
 /// A space's name with who can read it, as in "Lounge (members only)"
 /// or "Planning (Organisers group)".
 pub(crate) fn space_label(space: &SpaceTarget) -> String {
-    match format::access_label(&space.read_level, &space.group_names) {
+    match format::access_label(space.read_level(), &space.group_names) {
         None => space.space.name.clone(),
         // Group names keep their capitals.
         Some(access) if !space.group_names.is_empty() => {
@@ -462,8 +462,8 @@ async fn new_thread_target(
     let Some(space) = content::space_target(state.db(), viewer, slug).await? else {
         return Ok(Err(Refused::NotFound));
     };
-    if !writing::may_post_in(viewer, &space) {
-        return Ok(Err(Refused::NotAllowed("You can’t post in this space.")));
+    if !writing::may_start_in(viewer, &space) {
+        return Ok(Err(Refused::NotAllowed(writing::start_refusal(&space))));
     }
     Ok(Ok(space))
 }

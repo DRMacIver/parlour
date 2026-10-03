@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO space_grants (space_id, verb, level, group_ids, user_ids)\n         VALUES ($1, $2, $3, $4, $5)\n         ON CONFLICT (space_id, verb)\n         DO UPDATE SET level = EXCLUDED.level, group_ids = EXCLUDED.group_ids, user_ids = EXCLUDED.user_ids",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Int8Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "905652da1d97ce12c95d128beb736eda51d4ec34aee3e5de0548a2a42ffb1115"
+}

@@ -24,6 +24,7 @@ use serde_json::json;
 
 use crate::db::moderation::{self as mod_records, HeldPlace, NewAction, NewReport, ReportAbout};
 use crate::markdown;
+use crate::permissions::Grant;
 use crate::store::{self, CreatedThread, NewPost, NewSpace, NewThread, NewUser};
 
 #[derive(Debug)]
@@ -1119,7 +1120,7 @@ impl Seeder<'_> {
                 let user = self.user(spec.username);
                 // Only those who can read the post react to it.
                 if user == post.author_id
-                    || (post.visibility == "groups" && !reads_organisers(spec))
+                    || (post.visibility == "restricted" && !reads_organisers(spec))
                 {
                     continue;
                 }
@@ -1152,7 +1153,7 @@ impl Seeder<'_> {
         for spec in USERS {
             let user = self.user(spec.username);
             for thread in &threads {
-                if thread.visibility == "groups" && !reads_organisers(spec) {
+                if thread.visibility == "restricted" && !reads_organisers(spec) {
                     continue;
                 }
                 let seq = if spec.username == "priya" && thread.id == september {
@@ -1739,15 +1740,15 @@ impl Seeder<'_> {
         self.summary.spaces += 1;
         store::create_space(
             &mut *self.db,
-            &NewSpace {
-                section_id: Some(section_id),
-                slug: slug.into(),
-                name: name.into(),
-                description: description.into(),
+            &NewSpace::with_levels(
+                Some(section_id),
+                slug,
+                name,
+                description,
                 position,
-                read_level: read_level.into(),
-                write_level: write_level.into(),
-            },
+                read_level,
+                write_level,
+            ),
         )
         .await
     }
@@ -1772,14 +1773,9 @@ impl Seeder<'_> {
             .execute(&mut *self.db)
             .await?;
         }
-        sqlx::query!(
-            "INSERT INTO space_groups (space_id, group_id, access)
-             VALUES ($1, $2, 'read'), ($1, $2, 'write')",
-            space,
-            group
-        )
-        .execute(&mut *self.db)
-        .await?;
+        for verb in ["read", "reply", "start"] {
+            store::set_grant(&mut *self.db, space, verb, &Grant::listed([group], [])).await?;
+        }
         self.organisers_space = Some(space);
         Ok(())
     }

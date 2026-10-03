@@ -34,7 +34,7 @@
     <ul class="queue-context">
       {% if post.thread.conversation().is_some() %}<li>Reporting shared only this conversation with moderators</li>{% endif %}
       {% if let Some(inviter) = author.invited_by %}<li>Invited by <a href="/mod/users/{{ inviter.username }}">{{ inviter.username }}</a></li>{% endif %}
-      {% if let Some(c) = post.thread.space() %}{% if let Some(access) = crate::format::access_label(c.read_level, c.group_names) %}<li>{{ access }}</li>{% endif %}{% endif %}
+      {% if let Some(c) = post.thread.space() %}{% if let Some(access) = crate::format::access_label(c.read_level(), c.group_names) %}<li>{{ access }}</li>{% endif %}{% endif %}
     </ul>
     {% let report = reports[0].id %}
     <form class="queue-actions" method="post" action="/mod/reports/{{ report }}/dismiss">

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq, t.pinned, t.locked, t.forked_from_post_id,\n               c.id AS \"space_id!\", c.slug AS \"space_slug!\", c.name AS \"space_name!\",\n               c.description AS \"space_description!\", c.position AS \"space_position!\",\n               c.section_id AS \"section_id?\", c.section_name AS \"section_name?\",\n               c.read_level AS \"read_level!\", c.write_level AS \"write_level!\",\n               c.read_groups AS \"read_groups!\", c.write_groups AS \"write_groups!\",\n               c.group_names AS \"group_names!\", c.write_group_names AS \"write_group_names!\",\n               (SELECT tr.last_read_seq FROM thread_reads tr\n                WHERE tr.thread_id = t.id AND tr.user_id = $4) AS read_marker,\n               (SELECT w.level FROM watches w\n                WHERE w.user_id = $5 AND w.thread_id = t.id AND w.space_id IS NULL) AS \"watch_level?\",\n               a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name\n        FROM threads t\n        JOIN space_targets c ON c.id = t.space_id\n        JOIN users a ON a.id = t.author_id\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.space_id, $2, $3)\n        ",
+  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq, t.pinned, t.locked, t.forked_from_post_id,\n               c.id AS \"space_id!\", c.slug AS \"space_slug!\", c.name AS \"space_name!\",\n               c.description AS \"space_description!\", c.position AS \"space_position!\",\n               c.section_id AS \"section_id?\", c.section_name AS \"section_name?\",\n               c.visibility AS \"visibility!\", c.created_by AS \"created_by?\",\n               c.created_at AS \"space_created_at!\", c.archived_at AS \"archived_at?\",\n               c.read_level AS \"read_level!\", c.read_group_ids AS \"read_group_ids!\", c.read_user_ids AS \"read_user_ids!\",\n               c.reply_level AS \"reply_level!\", c.reply_group_ids AS \"reply_group_ids!\", c.reply_user_ids AS \"reply_user_ids!\",\n               c.start_level AS \"start_level!\", c.start_group_ids AS \"start_group_ids!\", c.start_user_ids AS \"start_user_ids!\",\n               c.administer_level AS \"administer_level!\", c.administer_group_ids AS \"administer_group_ids!\",\n               c.administer_user_ids AS \"administer_user_ids!\",\n               c.read_group_names AS \"group_names!\",\n               (SELECT tr.last_read_seq FROM thread_reads tr\n                WHERE tr.thread_id = t.id AND tr.user_id = $4) AS read_marker,\n               (SELECT w.level FROM watches w\n                WHERE w.user_id = $5 AND w.thread_id = t.id AND w.space_id IS NULL) AS \"watch_level?\",\n               a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name\n        FROM threads t\n        JOIN space_targets c ON c.id = t.space_id\n        JOIN users a ON a.id = t.author_id\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.space_id, $2, $3)\n        ",
   "describe": {
     "columns": [
       {
@@ -170,6 +170,50 @@
       },
       {
         "ordinal": 15,
+        "name": "visibility!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "visibility"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "created_by?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "space_created_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "archived_at?",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "archived_at"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
         "name": "read_level!",
         "type_info": "Text",
         "origin": {
@@ -180,74 +224,151 @@
         }
       },
       {
-        "ordinal": 16,
-        "name": "write_level!",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "space_targets",
-            "name": "write_level"
-          }
-        }
-      },
-      {
-        "ordinal": 17,
-        "name": "read_groups!",
-        "type_info": "Int8Array",
-        "origin": {
-          "Table": {
-            "table": "space_targets",
-            "name": "read_groups"
-          }
-        }
-      },
-      {
-        "ordinal": 18,
-        "name": "write_groups!",
-        "type_info": "Int8Array",
-        "origin": {
-          "Table": {
-            "table": "space_targets",
-            "name": "write_groups"
-          }
-        }
-      },
-      {
-        "ordinal": 19,
-        "name": "group_names!",
-        "type_info": "TextArray",
-        "origin": {
-          "Table": {
-            "table": "space_targets",
-            "name": "group_names"
-          }
-        }
-      },
-      {
         "ordinal": 20,
-        "name": "write_group_names!",
-        "type_info": "TextArray",
+        "name": "read_group_ids!",
+        "type_info": "Int8Array",
         "origin": {
           "Table": {
             "table": "space_targets",
-            "name": "write_group_names"
+            "name": "read_group_ids"
           }
         }
       },
       {
         "ordinal": 21,
+        "name": "read_user_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "read_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "reply_level!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "reply_level"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "reply_group_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "reply_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "reply_user_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "reply_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 25,
+        "name": "start_level!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "start_level"
+          }
+        }
+      },
+      {
+        "ordinal": 26,
+        "name": "start_group_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "start_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 27,
+        "name": "start_user_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "start_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 28,
+        "name": "administer_level!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "administer_level"
+          }
+        }
+      },
+      {
+        "ordinal": 29,
+        "name": "administer_group_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "administer_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 30,
+        "name": "administer_user_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "administer_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 31,
+        "name": "group_names!",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "read_group_names"
+          }
+        }
+      },
+      {
+        "ordinal": 32,
         "name": "read_marker",
         "type_info": "Int4",
         "origin": "Expression"
       },
       {
-        "ordinal": 22,
+        "ordinal": 33,
         "name": "watch_level?",
         "type_info": "Text",
         "origin": "Expression"
       },
       {
-        "ordinal": 23,
+        "ordinal": 34,
         "name": "author_id",
         "type_info": "Int8",
         "origin": {
@@ -258,7 +379,7 @@
         }
       },
       {
-        "ordinal": 24,
+        "ordinal": 35,
         "name": "author_username",
         "type_info": {
           "Custom": {
@@ -274,7 +395,7 @@
         }
       },
       {
-        "ordinal": 25,
+        "ordinal": 36,
         "name": "author_display_name",
         "type_info": "Text",
         "origin": {
@@ -316,6 +437,17 @@
       true,
       true,
       true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
       null,
       null,
       false,
@@ -323,5 +455,5 @@
       false
     ]
   },
-  "hash": "72506e6740e70ac4fe00536b323be22e9aa02e5d37022f9c2219a24e1add34f3"
+  "hash": "08794ed3a364877129349d4a44f81f60caed77a72c0403818441205f7b6d88c7"
 }

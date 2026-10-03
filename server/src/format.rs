@@ -88,13 +88,15 @@ pub fn names(names: &[String]) -> String {
 }
 
 /// Who can read a space, for a label beside its name: nothing for a
-/// public space, "Members only", or the groups that may read it.
+/// public space, "Members only", "Staff only", the groups that may read
+/// it, or "Chosen members" when only people are named.
 pub fn access_label(read_level: &str, group_names: &[String]) -> Option<String> {
     match read_level {
         "public" => None,
         "members" => Some("Members only".to_owned()),
+        "staff" => Some("Staff only".to_owned()),
         _ => Some(match group_names {
-            [] => "Staff only".to_owned(),
+            [] => "Chosen members".to_owned(),
             [one] if without_group(one).len() < one.len() => one.clone(),
             [one] => format!("{one} group"),
             [first @ .., last] => format!(
@@ -110,10 +112,21 @@ pub fn access_label(read_level: &str, group_names: &[String]) -> Option<String> 
     }
 }
 
+/// Who a grant lets post or administer, in a word or two.
+pub fn grant_label(level: crate::permissions::Level) -> &'static str {
+    use crate::permissions::Level;
+    match level {
+        Level::Public => "Everyone",
+        Level::Members => "Any member who can read it",
+        Level::Staff => "Staff only",
+        Level::Listed => "Chosen members and groups",
+    }
+}
+
 /// Whether a space's access label names groups (rather than saying
 /// "Members only" or "Staff only"), for its icon.
 pub fn access_is_groups(read_level: &str, group_names: &[String]) -> bool {
-    read_level == "groups" && !group_names.is_empty()
+    read_level == "listed" && !group_names.is_empty()
 }
 
 /// A group's name without a final word "group", which the label adds.
@@ -166,34 +179,35 @@ mod tests {
         let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(access_label("public", &[]), None);
         assert_eq!(access_label("members", &[]).unwrap(), "Members only");
-        assert_eq!(access_label("groups", &[]).unwrap(), "Staff only");
+        assert_eq!(access_label("staff", &[]).unwrap(), "Staff only");
+        assert_eq!(access_label("listed", &[]).unwrap(), "Chosen members");
         assert_eq!(
-            access_label("groups", &names(&["Organisers"])).unwrap(),
+            access_label("listed", &names(&["Organisers"])).unwrap(),
             "Organisers group"
         );
         assert_eq!(
-            access_label("groups", &names(&["Board", "Organisers", "Treasurers"])).unwrap(),
+            access_label("listed", &names(&["Board", "Organisers", "Treasurers"])).unwrap(),
             "Board, Organisers and Treasurers groups"
         );
         // A name that already says "group" doesn't say it twice.
         assert_eq!(
-            access_label("groups", &names(&["Organisers group"])).unwrap(),
+            access_label("listed", &names(&["Organisers group"])).unwrap(),
             "Organisers group"
         );
         assert_eq!(
-            access_label("groups", &names(&["Steering Group"])).unwrap(),
+            access_label("listed", &names(&["Steering Group"])).unwrap(),
             "Steering Group"
         );
         assert_eq!(
-            access_label("groups", &names(&["Board group", "Treasurers"])).unwrap(),
+            access_label("listed", &names(&["Board group", "Treasurers"])).unwrap(),
             "Board and Treasurers groups"
         );
         assert_eq!(
-            access_label("groups", &names(&["Playgroup"])).unwrap(),
+            access_label("listed", &names(&["Playgroup"])).unwrap(),
             "Playgroup group"
         );
         assert_eq!(
-            access_label("groups", &names(&["Group"])).unwrap(),
+            access_label("listed", &names(&["Group"])).unwrap(),
             "Group group"
         );
     }

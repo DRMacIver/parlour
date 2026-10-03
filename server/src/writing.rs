@@ -14,7 +14,7 @@ use crate::error::AppError;
 use crate::markdown;
 use crate::mod_records::{self, HeldPlace};
 use crate::notify;
-use crate::permissions::{at_most_as_visible, may_post, may_reply};
+use crate::permissions::at_most_as_visible;
 use crate::ratelimit::{Action, Scope};
 use crate::social::{self, WatchLevel, Watched};
 use crate::store::{self, Edited, NewPost, NewThread};
@@ -189,14 +189,23 @@ pub fn may_preview(state: &AppState, viewer: &Viewer) -> bool {
     allowed(state, viewer, Action::Preview)
 }
 
+/// Why a member who can read a space may not start a thread in it.
+pub fn start_refusal(space: &SpaceTarget) -> &'static str {
+    if space.rules.archived {
+        "This space is archived, so nothing more can be posted in it."
+    } else {
+        "You can’t start threads in this space."
+    }
+}
+
 /// Whether the viewer may start threads in a space they can read.
-pub fn may_post_in(viewer: &Viewer, space: &SpaceTarget) -> bool {
-    may_post(viewer, &space.audience(), &space.write())
+pub fn may_start_in(viewer: &Viewer, space: &SpaceTarget) -> bool {
+    space.rules.may_start(viewer)
 }
 
 /// Whether the viewer may reply in a space thread they can read.
 pub fn may_reply_in(viewer: &Viewer, space: &SpaceTarget, locked: bool) -> bool {
-    may_reply(viewer, &space.audience(), &space.write(), locked)
+    space.rules.may_reply(viewer, locked)
 }
 
 /// Why the viewer may not reply in a thread or conversation they can
@@ -214,8 +223,10 @@ pub async fn reply_refusal(
         Place::Space(space) => {
             if let Some(why) = restriction(user) {
                 Some(why)
-            } else if !may_post_in(viewer, space) {
-                Some("You can’t post in this space.")
+            } else if space.rules.archived {
+                Some("This space is archived, so nothing more can be posted in it.")
+            } else if !may_reply_in(viewer, space, false) {
+                Some("You can’t reply in this space.")
             } else if !may_reply_in(viewer, space, thread.locked) {
                 Some("This thread is locked.")
             } else {
@@ -274,8 +285,8 @@ pub async fn new_thread(
     if let Some(why) = restriction(user) {
         return Ok(Err(Refused::NotAllowed(why)));
     }
-    if !may_post_in(viewer, &space) {
-        return Ok(Err(Refused::NotAllowed("You can’t post in this space.")));
+    if !may_start_in(viewer, &space) {
+        return Ok(Err(Refused::NotAllowed(start_refusal(&space))));
     }
     let (title, body) = (clean_title(title), clean_body(body));
     let mut problems = Vec::new();
@@ -540,7 +551,7 @@ pub async fn fork_destinations(
     Ok(content::readable_spaces(state.db(), viewer)
         .await?
         .into_iter()
-        .filter(|c| may_post_in(viewer, c) && at_most_as_visible(&source_audience, &c.audience()))
+        .filter(|c| may_start_in(viewer, c) && at_most_as_visible(&source_audience, &c.audience()))
         .collect())
 }
 

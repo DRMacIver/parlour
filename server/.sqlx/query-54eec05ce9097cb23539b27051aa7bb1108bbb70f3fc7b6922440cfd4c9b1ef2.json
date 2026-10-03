@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.id, c.slug, c.name, c.description, c.read_level, c.write_level, s.name AS \"section_name?\",\n               array(SELECT g.name FROM space_groups cg JOIN groups g ON g.id = cg.group_id\n                     WHERE cg.space_id = c.id AND cg.access = 'read' AND c.read_level = 'groups'\n                     ORDER BY lower(g.name), g.id) AS \"group_names!\",\n               (SELECT count(*) FROM threads t\n                WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                  AND thread_readable(t.visibility, t.space_id, $2, $3)) AS \"thread_count!\"\n        FROM spaces c\n        LEFT JOIN sections s ON s.id = c.section_id\n        WHERE c.slug = $1 AND space_readable(c.read_level, c.id, $2, $3)\n        ",
+  "query": "\n        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,\n               c.archived_at IS NOT NULL AS \"archived!\", s.name AS \"section_name?\",\n               array(SELECT g.name FROM groups g\n                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)\n                     ORDER BY lower(g.name), g.id) AS \"group_names!\",\n               (SELECT count(*) FROM threads t\n                WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                  AND thread_readable(t.visibility, t.space_id, $2, $3)) AS \"thread_count!\"\n        FROM spaces c\n        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'\n        LEFT JOIN sections s ON s.id = c.section_id\n        WHERE c.slug = $1 AND space_readable(c.visibility, c.id, $2, $3)\n        ",
   "describe": {
     "columns": [
       {
@@ -53,21 +53,16 @@
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "spaces",
-            "name": "read_level"
+            "table": "space_grants",
+            "name": "level"
           }
         }
       },
       {
         "ordinal": 5,
-        "name": "write_level",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "spaces",
-            "name": "write_level"
-          }
-        }
+        "name": "archived!",
+        "type_info": "Bool",
+        "origin": "Expression"
       },
       {
         "ordinal": 6,
@@ -106,11 +101,11 @@
       false,
       false,
       false,
-      false,
+      null,
       true,
       null,
       null
     ]
   },
-  "hash": "02efe5c4a71e404d53029a52cbba3dd468a61ed1a83778785fffbb049c932d65"
+  "hash": "54eec05ce9097cb23539b27051aa7bb1108bbb70f3fc7b6922440cfd4c9b1ef2"
 }

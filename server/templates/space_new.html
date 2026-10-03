@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{% block title %}New space · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/spaces">Spaces</a> › <span aria-current="page">New space</span></nav>
+<h1 class="page-title">New space</h1>
+{% call f::errors(errors) %}{% endcall %}
+<form class="panel" method="post" action="/spaces/new">
+  <h2 class="panel-bar">The space</h2>
+  <div class="form">
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" type="text" maxlength="80" value="{{ form.name }}" required>
+    </div>
+    <div class="field">
+      <label for="slug">Address <span class="field-hint">(/c/…)</span></label>
+      <input id="slug" name="slug" type="text" maxlength="40" value="{{ form.slug }}" required pattern="[a-z0-9]+(-[a-z0-9]+)*">
+      <span class="field-hint">Lower-case letters and digits, with hyphens between words. It can’t be a member’s name.</span>
+    </div>
+    <div class="field">
+      <label for="description">Description <span class="field-hint">(optional)</span></label>
+      <input id="description" name="description" type="text" maxlength="500" value="{{ form.description }}">
+    </div>
+    <p class="form-note">To start with, any member can read the space, reply and start threads in it, and you run it. You can change all of that in its settings once it exists.</p>
+    <div class="form-actions">
+      <button class="button" type="submit">Make the space</button>
+      <a href="/spaces">Cancel</a>
+    </div>
+  </div>
+</form>
+</div>
+{% endblock %}

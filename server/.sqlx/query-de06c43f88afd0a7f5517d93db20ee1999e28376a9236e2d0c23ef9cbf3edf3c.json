@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.id,\n               (SELECT count(*) FROM threads t\n                WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                  AND thread_readable(t.visibility, t.space_id, $1, $2)) AS \"thread_count!\"\n        FROM spaces c\n        WHERE space_readable(c.read_level, c.id, $1, $2)\n        ",
+  "query": "\n        SELECT c.id,\n               (SELECT count(*) FROM threads t\n                WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                  AND thread_readable(t.visibility, t.space_id, $1, $2)) AS \"thread_count!\"\n        FROM spaces c\n        WHERE space_readable(c.visibility, c.id, $1, $2)\n        ",
   "describe": {
     "columns": [
       {
@@ -32,5 +32,5 @@
       null
     ]
   },
-  "hash": "584a6e79db2e1f962b1e9b361247d6592caf0dab27288669b889d0fc380090b9"
+  "hash": "de06c43f88afd0a7f5517d93db20ee1999e28376a9236e2d0c23ef9cbf3edf3c"
 }

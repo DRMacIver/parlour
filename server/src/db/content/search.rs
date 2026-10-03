@@ -140,7 +140,7 @@ pub async fn search(
         "#,
         query.text,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         filter.dm_viewer,
         staff,
         query.space,

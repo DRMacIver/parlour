@@ -20,7 +20,7 @@ use crate::db::Db;
 use chrono::{DateTime, Utc};
 
 use crate::cache::Tag;
-use crate::permissions::{Audience, WriteLevel};
+use crate::permissions::{Audience, Grant, SpaceRules};
 use crate::store::SpaceSettings;
 use crate::viewer::Viewer;
 
@@ -113,8 +113,9 @@ pub struct IndexSection {
 pub struct SpaceSummary {
     pub space: SpaceRef,
     pub description: String,
+    /// The level of the read grant, for the label beside the name.
     pub read_level: String,
-    /// For a group-restricted space, the groups that may read it.
+    /// For a listed space, the groups that may read it.
     pub group_names: Vec<String>,
     pub thread_count: i64,
     pub post_count: i64,
@@ -131,6 +132,8 @@ pub struct LastActivity {
     pub post_id: Option<i64>,
 }
 
+/// The spaces on the index, by section: those the viewer can read that
+/// aren't archived.
 pub async fn index_sections(
     db: &Db,
     viewer: &Viewer,
@@ -139,15 +142,16 @@ pub async fn index_sections(
     let filter = viewer.filter();
     let rows = sqlx::query!(
         r#"
-        SELECT c.id, c.slug, c.name, c.description, c.read_level, s.name AS "section_name?",
-               array(SELECT g.name FROM space_groups cg JOIN groups g ON g.id = cg.group_id
-                     WHERE cg.space_id = c.id AND cg.access = 'read' AND c.read_level = 'groups'
+        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level, s.name AS "section_name?",
+               array(SELECT g.name FROM groups g
+                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)
                      ORDER BY lower(g.name), g.id) AS "group_names!",
                counts.threads AS "thread_count!", counts.posts AS "post_count!",
                lt.id AS "last_thread_id?", lt.title AS "last_thread_title?", lt.slug AS "last_thread_slug?",
                coalesce(lp.created_at, lt.last_post_at) AS "last_at?", lp.id AS "last_post_id?",
                lu.id AS "last_user_id?", lu.username AS "last_username?", lu.display_name AS "last_display_name?"
         FROM spaces c
+        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'
         LEFT JOIN sections s ON s.id = c.section_id
         CROSS JOIN LATERAL (
             SELECT count(*) AS threads, coalesce(sum(t.last_seq), 0)::bigint AS posts
@@ -170,11 +174,11 @@ pub async fn index_sections(
             LIMIT 1
         ) lp ON true
         LEFT JOIN users lu ON lu.id = lp.author_id
-        WHERE space_readable(c.read_level, c.id, $1, $2)
+        WHERE c.archived_at IS NULL AND space_readable(c.visibility, c.id, $1, $2)
         ORDER BY s.position NULLS FIRST, s.id NULLS FIRST, c.position, c.id
         "#,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -260,10 +264,11 @@ pub struct SpacePage {
     pub space: SpaceRef,
     pub section_name: Option<String>,
     pub description: String,
+    /// The level of the read grant, for the label beside the name.
     pub read_level: String,
-    /// For a group-restricted space, the groups that may read it.
+    /// For a listed space, the groups that may read it.
     pub group_names: Vec<String>,
-    pub write_level: String,
+    pub archived: bool,
     pub thread_count: i64,
     pub threads: Vec<ThreadRow>,
 }
@@ -280,20 +285,22 @@ pub async fn space_page(
     let filter = viewer.filter();
     let Some(space) = sqlx::query!(
         r#"
-        SELECT c.id, c.slug, c.name, c.description, c.read_level, c.write_level, s.name AS "section_name?",
-               array(SELECT g.name FROM space_groups cg JOIN groups g ON g.id = cg.group_id
-                     WHERE cg.space_id = c.id AND cg.access = 'read' AND c.read_level = 'groups'
+        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,
+               c.archived_at IS NOT NULL AS "archived!", s.name AS "section_name?",
+               array(SELECT g.name FROM groups g
+                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)
                      ORDER BY lower(g.name), g.id) AS "group_names!",
                (SELECT count(*) FROM threads t
                 WHERE t.space_id = c.id AND t.deleted_at IS NULL
                   AND thread_readable(t.visibility, t.space_id, $2, $3)) AS "thread_count!"
         FROM spaces c
+        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'
         LEFT JOIN sections s ON s.id = c.section_id
-        WHERE c.slug = $1 AND space_readable(c.read_level, c.id, $2, $3)
+        WHERE c.slug = $1 AND space_readable(c.visibility, c.id, $2, $3)
         "#,
         slug,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
     )
     .fetch_optional(db.pool())
     .await?
@@ -312,7 +319,7 @@ pub async fn space_page(
         description: space.description,
         read_level: space.read_level,
         group_names: space.group_names,
-        write_level: space.write_level,
+        archived: space.archived,
         thread_count: space.thread_count,
         threads,
     }))
@@ -341,10 +348,10 @@ pub async fn latest(
                 WHERE t.space_id = c.id AND t.deleted_at IS NULL
                   AND thread_readable(t.visibility, t.space_id, $1, $2)) AS "thread_count!"
         FROM spaces c
-        WHERE space_readable(c.read_level, c.id, $1, $2)
+        WHERE space_readable(c.visibility, c.id, $1, $2)
         "#,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -410,7 +417,7 @@ async fn thread_rows(
         LIMIT $4 OFFSET $5
         "#,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         space_id,
         per_page,
         offset,
@@ -500,7 +507,7 @@ impl ThreadPage {
         ThreadTarget {
             thread: self.thread.clone(),
             name: self.thread.title.clone(),
-            place: Place::Space(self.space.clone()),
+            place: Place::Space(Box::new(self.space.clone())),
             locked: self.locked,
             last_seq: self.last_seq,
         }
@@ -611,9 +618,14 @@ pub async fn thread_page(
                c.id AS "space_id!", c.slug AS "space_slug!", c.name AS "space_name!",
                c.description AS "space_description!", c.position AS "space_position!",
                c.section_id AS "section_id?", c.section_name AS "section_name?",
-               c.read_level AS "read_level!", c.write_level AS "write_level!",
-               c.read_groups AS "read_groups!", c.write_groups AS "write_groups!",
-               c.group_names AS "group_names!", c.write_group_names AS "write_group_names!",
+               c.visibility AS "visibility!", c.created_by AS "created_by?",
+               c.created_at AS "space_created_at!", c.archived_at AS "archived_at?",
+               c.read_level AS "read_level!", c.read_group_ids AS "read_group_ids!", c.read_user_ids AS "read_user_ids!",
+               c.reply_level AS "reply_level!", c.reply_group_ids AS "reply_group_ids!", c.reply_user_ids AS "reply_user_ids!",
+               c.start_level AS "start_level!", c.start_group_ids AS "start_group_ids!", c.start_user_ids AS "start_user_ids!",
+               c.administer_level AS "administer_level!", c.administer_group_ids AS "administer_group_ids!",
+               c.administer_user_ids AS "administer_user_ids!",
+               c.read_group_names AS "group_names!",
                (SELECT tr.last_read_seq FROM thread_reads tr
                 WHERE tr.thread_id = t.id AND tr.user_id = $4) AS read_marker,
                (SELECT w.level FROM watches w
@@ -626,7 +638,7 @@ pub async fn thread_page(
         "#,
         thread_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         filter.dm_viewer,
         viewer.user_id(),
     )
@@ -662,12 +674,33 @@ pub async fn thread_page(
             section_name: thread.section_name,
             description: thread.space_description,
             position: thread.space_position,
-            read_level: thread.read_level,
-            write_level: thread.write_level,
-            read_groups: thread.read_groups,
-            write_groups: thread.write_groups,
+            visibility: thread.visibility,
             group_names: thread.group_names,
-            write_group_names: thread.write_group_names,
+            created_by: thread.created_by,
+            created_at: thread.space_created_at,
+            rules: SpaceRules {
+                read: Grant::from_parts(
+                    &thread.read_level,
+                    &thread.read_group_ids,
+                    &thread.read_user_ids,
+                ),
+                reply: Grant::from_parts(
+                    &thread.reply_level,
+                    &thread.reply_group_ids,
+                    &thread.reply_user_ids,
+                ),
+                start: Grant::from_parts(
+                    &thread.start_level,
+                    &thread.start_group_ids,
+                    &thread.start_user_ids,
+                ),
+                administer: Grant::from_parts(
+                    &thread.administer_level,
+                    &thread.administer_group_ids,
+                    &thread.administer_user_ids,
+                ),
+                archived: thread.archived_at.is_some(),
+            },
         },
         author: UserRef {
             id: thread.author_id,
@@ -803,7 +836,7 @@ pub(super) async fn posts_on_page(
         first,
         last,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -856,14 +889,14 @@ async fn author_infos(
                (SELECT coalesce(sum(pc.posts), 0)::bigint
                 FROM user_space_post_counts pc JOIN spaces c ON c.id = pc.space_id
                 WHERE pc.user_id = u.id
-                  AND space_readable(c.read_level, c.id, $2, $3)) AS "post_count!"
+                  AND space_readable(c.visibility, c.id, $2, $3)) AS "post_count!"
         FROM users u
         LEFT JOIN uploads av ON av.id = u.avatar_upload_id
         WHERE u.id = ANY($1)
         "#,
         ids,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -954,7 +987,7 @@ async fn forks_of(
         "#,
         post_ids,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -997,7 +1030,7 @@ async fn embed(db: &Db, viewer: &Viewer, post_id: i64, deps: &mut Deps) -> sqlx:
         "#,
         post_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
     )
     .fetch_optional(db.pool())
     .await?
@@ -1063,10 +1096,10 @@ pub async fn visible_post_count(db: &Db, viewer: &Viewer, user_id: i64) -> sqlx:
     sqlx::query_scalar!(
         r#"SELECT coalesce(sum(pc.posts), 0)::bigint AS "n!"
            FROM user_space_post_counts pc JOIN spaces c ON c.id = pc.space_id
-           WHERE pc.user_id = $1 AND space_readable(c.read_level, c.id, $2, $3)"#,
+           WHERE pc.user_id = $1 AND space_readable(c.visibility, c.id, $2, $3)"#,
         user_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
     )
     .fetch_one(db.pool())
     .await
@@ -1117,7 +1150,7 @@ pub async fn post_location(
         "#,
         post_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         filter.dm_viewer,
     )
     .fetch_optional(db.pool())
@@ -1140,7 +1173,7 @@ pub async fn thread_slug(db: &Db, viewer: &Viewer, thread_id: i64) -> sqlx::Resu
         "#,
         thread_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
     )
     .fetch_optional(db.pool())
     .await
@@ -1152,7 +1185,7 @@ pub async fn thread_slug(db: &Db, viewer: &Viewer, thread_id: i64) -> sqlx::Resu
 // These say where something is and who may see it; whether the viewer may
 // write there is for [`crate::permissions`] to decide.
 
-/// A space the viewer can read, as somewhere to post.
+/// A space the viewer can read, as somewhere to post or to administer.
 #[derive(Clone, Debug)]
 pub struct SpaceTarget {
     pub space: SpaceRef,
@@ -1160,28 +1193,31 @@ pub struct SpaceTarget {
     pub section_name: Option<String>,
     pub description: String,
     pub position: i32,
-    pub read_level: String,
-    pub write_level: String,
-    /// The groups named for reading and posting. They matter only with the
-    /// `groups` read and write levels.
-    pub read_groups: Vec<i64>,
-    pub write_groups: Vec<i64>,
-    /// The names of the groups that may read a group-restricted space.
+    /// `public`, `members` or `restricted`, as `spaces.visibility` has it.
+    pub visibility: String,
+    /// The names of the groups the read grant lists.
     pub group_names: Vec<String>,
-    /// The names of the groups that may post, with the `groups` write level.
-    pub write_group_names: Vec<String>,
+    pub created_by: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    /// Who may do what here.
+    pub rules: SpaceRules,
 }
 
 impl SpaceTarget {
     pub fn audience(&self) -> Audience {
-        Audience::from_level(&self.read_level, self.read_groups.iter().copied())
+        self.rules.read.audience()
     }
 
-    pub fn write(&self) -> WriteLevel {
-        WriteLevel::from_level(&self.write_level, self.write_groups.iter().copied())
+    /// The level of the read grant, for the label beside the name.
+    pub fn read_level(&self) -> &'static str {
+        self.rules.read.level.as_str()
     }
 
-    /// The space's settings, as an admin edits them.
+    pub fn archived(&self) -> bool {
+        self.rules.archived
+    }
+
+    /// The space's settings, as its administrators edit them.
     pub fn settings(&self) -> SpaceSettings {
         SpaceSettings {
             section_id: self.section_id,
@@ -1189,10 +1225,10 @@ impl SpaceTarget {
             name: self.space.name.clone(),
             description: self.description.clone(),
             position: self.position,
-            read_level: self.read_level.clone(),
-            write_level: self.write_level.clone(),
-            read_groups: self.read_groups.clone(),
-            write_groups: self.write_groups.clone(),
+            read: self.rules.read.clone(),
+            reply: self.rules.reply.clone(),
+            start: self.rules.start.clone(),
+            administer: self.rules.administer.clone(),
         }
     }
 }
@@ -1208,10 +1244,10 @@ pub async fn space_thread_count(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Resu
     let filter = viewer.filter();
     sqlx::query_scalar!(
         r#"SELECT count(t.id) AS "n!" FROM spaces c LEFT JOIN threads t ON t.space_id = c.id
-           WHERE c.id = $1 AND space_readable(c.read_level, c.id, $2, $3)"#,
+           WHERE c.id = $1 AND space_readable(c.visibility, c.id, $2, $3)"#,
         id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
     )
     .fetch_one(db.pool())
     .await
@@ -1236,7 +1272,8 @@ pub async fn sections(db: &Db) -> sqlx::Result<Vec<Section>> {
     .await
 }
 
-/// Every space the viewer can read, in index order.
+/// Every space the viewer can read, archived ones included, in index
+/// order.
 pub async fn readable_spaces(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<SpaceTarget>> {
     space_targets(db, viewer, None, None).await
 }
@@ -1254,17 +1291,22 @@ async fn space_targets(
         r#"
         SELECT c.id AS "id!", c.slug AS "slug!", c.name AS "name!", c.description AS "description!",
                c.position AS "position!", c.section_id AS "section_id?", c.section_name AS "section_name?",
-               c.read_level AS "read_level!", c.write_level AS "write_level!",
-               c.read_groups AS "read_groups!", c.write_groups AS "write_groups!",
-               c.group_names AS "group_names!", c.write_group_names AS "write_group_names!"
+               c.visibility AS "visibility!", c.created_by AS "created_by?", c.created_at AS "created_at!",
+               c.archived_at AS "archived_at?",
+               c.read_level AS "read_level!", c.read_group_ids AS "read_group_ids!", c.read_user_ids AS "read_user_ids!",
+               c.reply_level AS "reply_level!", c.reply_group_ids AS "reply_group_ids!", c.reply_user_ids AS "reply_user_ids!",
+               c.start_level AS "start_level!", c.start_group_ids AS "start_group_ids!", c.start_user_ids AS "start_user_ids!",
+               c.administer_level AS "administer_level!", c.administer_group_ids AS "administer_group_ids!",
+               c.administer_user_ids AS "administer_user_ids!",
+               c.read_group_names AS "group_names!"
         FROM space_targets c
-        WHERE space_readable(c.read_level, c.id, $1, $2)
+        WHERE space_readable(c.visibility, c.id, $1, $2)
           AND ($3::bigint IS NULL OR c.id = $3)
           AND ($4::text IS NULL OR c.slug = $4)
         ORDER BY c.section_position NULLS FIRST, c.section_id NULLS FIRST, c.position, c.id
         "#,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         id,
         slug,
     )
@@ -1282,12 +1324,29 @@ async fn space_targets(
             section_name: row.section_name,
             description: row.description,
             position: row.position,
-            read_level: row.read_level,
-            write_level: row.write_level,
-            read_groups: row.read_groups,
-            write_groups: row.write_groups,
+            visibility: row.visibility,
             group_names: row.group_names,
-            write_group_names: row.write_group_names,
+            created_by: row.created_by,
+            created_at: row.created_at,
+            rules: SpaceRules {
+                read: Grant::from_parts(&row.read_level, &row.read_group_ids, &row.read_user_ids),
+                reply: Grant::from_parts(
+                    &row.reply_level,
+                    &row.reply_group_ids,
+                    &row.reply_user_ids,
+                ),
+                start: Grant::from_parts(
+                    &row.start_level,
+                    &row.start_group_ids,
+                    &row.start_user_ids,
+                ),
+                administer: Grant::from_parts(
+                    &row.administer_level,
+                    &row.administer_group_ids,
+                    &row.administer_user_ids,
+                ),
+                archived: row.archived_at.is_some(),
+            },
         })
         .collect())
 }
@@ -1299,6 +1358,111 @@ pub async fn space_target(
     slug: &str,
 ) -> sqlx::Result<Option<SpaceTarget>> {
     Ok(space_targets(db, viewer, None, Some(slug)).await?.pop())
+}
+
+// ---------------------------------------------------------------------------
+// The space index
+
+/// How `/spaces` is ordered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpaceSort {
+    /// Newest first: the default.
+    Created,
+    /// Most recently posted in first.
+    Activity,
+    Name,
+}
+
+impl SpaceSort {
+    pub fn parse(s: &str) -> Option<SpaceSort> {
+        match s {
+            "created" => Some(SpaceSort::Created),
+            "activity" => Some(SpaceSort::Activity),
+            "name" => Some(SpaceSort::Name),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SpaceSort::Created => "created",
+            SpaceSort::Activity => "activity",
+            SpaceSort::Name => "name",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SpaceListing {
+    pub space: SpaceRef,
+    pub description: String,
+    pub read_level: String,
+    pub group_names: Vec<String>,
+    pub archived: bool,
+    pub created_at: DateTime<Utc>,
+    pub thread_count: i64,
+    pub last_post_at: Option<DateTime<Utc>>,
+}
+
+/// Every space the viewer can read, for the space index: archived ones
+/// only when asked for.
+pub async fn space_index(
+    db: &Db,
+    viewer: &Viewer,
+    sort: SpaceSort,
+    include_archived: bool,
+    deps: &mut Deps,
+) -> sqlx::Result<Vec<SpaceListing>> {
+    let filter = viewer.filter();
+    let rows = sqlx::query!(
+        r#"
+        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,
+               c.archived_at IS NOT NULL AS "archived!", c.created_at,
+               array(SELECT g.name FROM groups g
+                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)
+                     ORDER BY lower(g.name), g.id) AS "group_names!",
+               counts.threads AS "thread_count!", counts.last_post_at AS "last_post_at?"
+        FROM spaces c
+        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'
+        CROSS JOIN LATERAL (
+            SELECT count(*) AS threads, max(t.last_post_at) AS last_post_at
+            FROM threads t
+            WHERE t.space_id = c.id AND t.deleted_at IS NULL
+              AND thread_readable(t.visibility, t.space_id, $1, $2)
+        ) counts
+        WHERE space_readable(c.visibility, c.id, $1, $2)
+          AND ($3 OR c.archived_at IS NULL)
+        ORDER BY CASE WHEN $4 = 'name' THEN lower(c.name) END,
+                 CASE WHEN $4 = 'activity' THEN counts.last_post_at END DESC NULLS LAST,
+                 c.created_at DESC, c.id DESC
+        "#,
+        &filter.visibilities,
+        &filter.restricted_space_ids,
+        include_archived,
+        sort.as_str(),
+    )
+    .fetch_all(db.pool())
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            deps.add(Tag::Space(row.id));
+            SpaceListing {
+                space: SpaceRef {
+                    id: row.id,
+                    slug: row.slug,
+                    name: row.name,
+                },
+                description: row.description,
+                read_level: row.read_level,
+                group_names: row.group_names,
+                archived: row.archived,
+                created_at: row.created_at,
+                thread_count: row.thread_count,
+                last_post_at: row.last_post_at,
+            }
+        })
+        .collect())
 }
 
 /// A thread or conversation the viewer can read, as somewhere to reply.
@@ -1316,7 +1480,8 @@ pub struct ThreadTarget {
 /// Where a thread is: in a space, or a conversation between members.
 #[derive(Clone, Debug)]
 pub enum Place {
-    Space(SpaceTarget),
+    /// Boxed: a space carries its four grants, a conversation little.
+    Space(Box<SpaceTarget>),
     Conversation(messages::ConversationTarget),
 }
 
@@ -1367,7 +1532,7 @@ pub async fn thread_target(
         "#,
         thread_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         filter.dm_viewer,
     )
     .fetch_optional(db.pool())
@@ -1380,7 +1545,7 @@ pub async fn thread_target(
             let Some(space) = space_by_id(db, viewer, space_id).await? else {
                 return Ok(None);
             };
-            Place::Space(space)
+            Place::Space(Box::new(space))
         }
         None => Place::Conversation(messages::conversation_target(db, row.id).await?),
     };
@@ -1451,7 +1616,7 @@ pub async fn post_target(
         "#,
         post_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         filter.dm_viewer,
         viewer.is_staff(),
     )
@@ -1491,7 +1656,7 @@ pub async fn visible_thread_ids(db: &Db, viewer: &Viewer, space_id: i64) -> sqlx
              AND thread_readable(t.visibility, t.space_id, $2, $3)"#,
         space_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
     )
     .fetch_all(db.pool())
     .await
@@ -1533,7 +1698,7 @@ pub async fn first_unread(
         "#,
         thread_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         filter.dm_viewer,
     )
     .fetch_optional(db.pool())

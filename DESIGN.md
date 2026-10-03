@@ -70,7 +70,7 @@ Items marked **[proposal]** are choices I made while drafting this document that
 
 A **space** is where threads live. There is one flat set of spaces; they have no parents. Every space has a slug, a name, an optional description and a **kind**: `topic` or `feed`.
 
-**Who can create a space:** any member, by default. A site setting restricts it to staff. There is no gate on creation while registration is invite-only; a gate for open registration is listed under "soon after".
+**Who can create a space:** any member, by default. A site setting (`space_creation`, on the admin settings page) restricts it to staff. There is no gate on creation while registration is invite-only; a gate for open registration is listed under "soon after". A member who makes a space lands on its settings page, where who may read, reply, start threads and administer is set; staff additionally place it in a section there.
 
 **Four verbs.** Each space holds a **grant** for each of four verbs:
 
@@ -85,9 +85,10 @@ A grant is a **level** plus optional named members:
 
 - `public`: anyone, including anonymous visitors. Only valid for `read`.
 - `members`: any logged-in user who is not suspended.
-- `listed`: only the groups, lists and individual people named in the grant.
+- `staff`: moderators and admins. Roles aren't groups, so this is how a grant names them (Announcements: `start` staff).
+- `listed`: only the groups, lists and individual people named in the grant. A `listed` grant naming nobody lets nobody through.
 
-Each verb's grant is independent, except that `reply` and `start` imply nothing about `read`: a viewer needs both `read` and the verb. The grant for `administer` of a new topic space names its creator; administrators can name others, and a space whose `administer` grant is empty (its only administrator left) is administrable by site staff until they name someone.
+Each verb's grant is independent, except that `reply` and `start` imply nothing about `read`: a viewer needs both `read` and the verb. The grant for `administer` of a new topic space names its creator; administrators can name others, and a space whose `administer` grant is empty (its only administrator left) is administrable by site staff until they name someone. Staff hold `reply` and `start` only where a grant says so, like anyone else.
 
 **Defaults for a new topic space** **[proposal]**: `read` members, `reply` members, `start` members, `administer` the creator. A public space is an explicit choice.
 
@@ -379,7 +380,8 @@ What this doesn't cover, and the site's privacy page should say so: whoever runs
 | `/spaces` | Index of spaces, newest first; `?sort=activity|name`, `?kind=topic|feed`, `?archived=1` |
 | `/spaces/new` | Create a space |
 | `/c/{slug}?page=n` | Space: pinned threads first, then by last activity. A feed's slug is its owner's username |
-| `/c/{slug}/settings` | Grants, name, description, archive (administrators) |
+| `/c/{slug}/settings` | Grants, name, description, and for staff the section (administrators) |
+| `/c/{slug}/archive`, `/c/{slug}/unarchive`, `/c/{slug}/delete` | Administrators' actions on a space (POST); deletion only of a space that never had threads |
 | `/t/{id}/{slug}?page=n` | Thread |
 | `/t/{id}/unread` | Redirects to the first unread post |
 | `/t/{id}/audience` | Who can read and reply, and the per-thread restriction form |
@@ -420,7 +422,7 @@ research/      background research
 
 v0.1 was built in milestones 1–8 (skeleton, reading, accounts, writing, privacy, DMs and notifications, moderation, finishing). Getting the prototype to v0.2:
 
-9. **Spaces.** `categories` become `spaces` of kind `topic` with grants derived from the old read and write levels (`administer`: staff); `category_groups` fold into the grant arrays; `threads.visibility` gains `restricted` in place of `groups`; cache tags renamed. Any member can create a space. The space index. No behaviour change for readers yet.
+9. **Spaces** (done, migrations 0021 and 0022). `categories` become `spaces` with grants derived from the old read and write levels (`administer`: staff); `category_groups` fold into the grant arrays; `threads.visibility` gains `restricted` in place of `groups`; cache tags renamed. Any member can create a space and its administrators run it from `/c/{slug}/settings`; archiving; the space index. Staff still read every space (milestone 15). Spaces don't yet have a `kind` (milestone 13) or the `essential` flag (milestone 10).
 10. **Layouts.** The old `sections` become the default layout; each existing member gets a copy. `/` and `/latest` tabs render from layouts. Mutes. Essential spaces. The layout editor island and its plain form.
 11. **Notifications.** `watches` on threads become `thread_subscriptions`; category watches are dropped, with a one-time notice to the people who had them. The notification kinds are reduced to §9's list.
 12. **Lists.** `groups.owner_user_id`; the Friends list for every member; grants can name lists and individual people; the settings pages; hidden-name rules in every audience display.

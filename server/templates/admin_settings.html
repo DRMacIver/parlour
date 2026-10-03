@@ -36,6 +36,17 @@
     </fieldset>
   </div>
 </section>
+<section class="panel" aria-labelledby="spaces-heading">
+  <h2 class="panel-bar" id="spaces-heading">Spaces</h2>
+  <div class="form">
+    <fieldset class="field">
+      <legend>Who can make spaces</legend>
+      <label class="choice"><input type="radio" name="space_creation" value="members"{% if space_creation == SpaceCreation::Members %} checked{% endif %}> Every member</label>
+      <label class="choice"><input type="radio" name="space_creation" value="staff"{% if space_creation == SpaceCreation::Staff %} checked{% endif %}> Only moderators and admins</label>
+      <span class="field-hint">Whoever makes a space runs it, and can hand that to others.</span>
+    </fieldset>
+  </div>
+</section>
 <section class="panel" aria-labelledby="email-heading">
   <h2 class="panel-bar" id="email-heading">Email</h2>
   <div class="form">

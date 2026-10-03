@@ -5,11 +5,11 @@
 {% block content %}
 <h1 class="page-title">Spaces</h1>
 {% call an::admin_nav("spaces") %}{% endcall %}
-<p class="lede">Spaces are listed on the index under their sections, in order of position. Sections are only headings: who can read and post is set on each space.</p>
+<p class="lede">Spaces are listed on the index under their sections, in order of position. Sections are only headings: who can read, post in and run each space is set in the space’s own settings, which staff can always open.</p>
 {% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
 {% call f::errors(errors) %}{% endcall %}
 <div class="toolbar">
-  <a class="button" href="/admin/spaces/new">New space</a>
+  <a class="button" href="/spaces/new">New space</a>
 </div>
 {% if !any_spaces %}
 <section class="panel"><p class="empty">No spaces yet.</p></section>
@@ -37,7 +37,7 @@
   {% for space in row.spaces %}
     <li>
       <span class="admin-space-name">
-        <a href="/admin/spaces/{{ space.space.id }}">{{ space.space.name }}</a>
+        <a href="/c/{{ space.space.slug }}/settings">{{ space.space.name }}</a>
         <span class="row-meta">/c/{{ space.space.slug }} · position {{ space.position }}</span>
       </span>
       <span class="row-meta">Read: {{ self.access(space) }} · Post: {{ self.posting(space) }}</span>

@@ -56,6 +56,38 @@ pub async fn id_by_username(db: &Db, username: &str) -> sqlx::Result<Option<i64>
     .await
 }
 
+/// A member, named.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamedUser {
+    pub id: i64,
+    pub username: String,
+}
+
+/// The members with these usernames (any capitalisation), skipping names
+/// nobody has.
+pub async fn by_usernames(db: &Db, names: &[String]) -> sqlx::Result<Vec<NamedUser>> {
+    let names: Vec<String> = names.iter().map(|name| name.to_lowercase()).collect();
+    sqlx::query_as!(
+        NamedUser,
+        r#"SELECT id, username::text AS "username!" FROM users
+           WHERE lower(username::text) = ANY($1) AND deleted_at IS NULL"#,
+        &names
+    )
+    .fetch_all(db.pool())
+    .await
+}
+
+/// The usernames of these members.
+pub async fn usernames_of(db: &Db, ids: &[i64]) -> sqlx::Result<Vec<NamedUser>> {
+    sqlx::query_as!(
+        NamedUser,
+        r#"SELECT id, username::text AS "username!" FROM users WHERE id = ANY($1)"#,
+        ids
+    )
+    .fetch_all(db.pool())
+    .await
+}
+
 /// Records that the member can read their email (a magic link or reset
 /// link reached them).
 pub async fn mark_verified(db: &Db, user_id: i64) -> sqlx::Result<()> {

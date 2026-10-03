@@ -8,6 +8,7 @@ use axum::http::{Request, StatusCode, header};
 use common::Forum;
 use parlour::changes::Change;
 use parlour::http_cache::{PRIVATE_CACHE_CONTROL, PUBLIC_CACHE_CONTROL};
+use parlour::permissions::Grant;
 use parlour::store::NewThread;
 use sqlx::PgPool;
 
@@ -644,13 +645,7 @@ async fn space_changes_clear_the_site(pool: PgPool) {
     .await;
 
     // Making a space members-only hides it and its threads.
-    s.f.exec(&format!(
-        "UPDATE spaces SET read_level = 'members' WHERE id = {}",
-        s.games
-    ))
-    .await;
-    s.f.changed(Change::SpaceChanged { space_id: s.games })
-        .await;
+    s.f.set_grant(s.games, "read", Grant::members()).await;
     s.assert_shown("Spirit Island", &[], &["/", "/latest"])
         .await;
     assert_eq!(s.f.get(&s.path).await.status, StatusCode::NOT_FOUND);

@@ -19,6 +19,7 @@ use crate::viewer::Viewer;
 pub enum Nav {
     Index,
     Latest,
+    Spaces,
     Members,
     Messages,
     Notifications,

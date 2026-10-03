@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO spaces (section_id, slug, name, description, position, read_level, write_level)\n           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+  "query": "INSERT INTO spaces (section_id, slug, name, description, position, created_by, visibility)\n           VALUES ($1, $2, $3, $4, $5, $6, 'restricted') RETURNING id",
   "describe": {
     "columns": [
       {
@@ -22,13 +22,12 @@
         "Text",
         "Text",
         "Int4",
-        "Text",
-        "Text"
+        "Int8"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "9602b2167a769bc0b81596b3aefb96c06265f6ee84f5c893206ea46c9dfe0292"
+  "hash": "549243881d7ed064e8809ab1b48c4d58e5f07f81ec7b7405e127911e4f2ceea2"
 }

@@ -4,6 +4,7 @@ mod common;
 
 use axum::http::StatusCode;
 use common::Forum;
+use parlour::permissions::Grant;
 use sqlx::PgPool;
 
 async fn role_of(forum: &Forum, user_id: i64) -> String {
@@ -237,6 +238,8 @@ impl Admin {
     }
 }
 
+/// A space's settings form as staff see it: a read level, one level for
+/// both replying and starting threads, and staff alone administering.
 fn space_fields<'a>(
     slug: &'a str,
     name: &'a str,
@@ -251,7 +254,9 @@ fn space_fields<'a>(
         ("section", section),
         ("position", "1"),
         ("read_level", read),
-        ("write_level", write),
+        ("reply_level", write),
+        ("start_level", write),
+        ("administer_level", "staff"),
     ]
 }
 
@@ -272,18 +277,31 @@ async fn admins_arrange_sections_and_spaces(db: PgPool) {
     let hobbies = a.id("SELECT id FROM sections WHERE name = 'Hobbies'").await;
     let section = hobbies.to_string();
 
-    let form = a.page("/admin/spaces/new").await;
-    assert!(form.contains("Hobbies"));
+    // Spaces are made the way any member makes them, and staff place them
+    // in sections from the space's settings.
     let response = a
         .submit(
-            "/admin/spaces/new",
-            &space_fields("board-games", "Board games", &section, "public", "members"),
+            "/spaces/new",
+            &[
+                ("name", "Board games"),
+                ("slug", "board-games"),
+                ("description", "All about it."),
+            ],
         )
         .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     let games = a
         .id("SELECT id FROM spaces WHERE slug = 'board-games'")
         .await;
+    let form = a.page("/c/board-games/settings").await;
+    assert!(form.contains("Hobbies"));
+    let response = a
+        .submit(
+            "/c/board-games/settings",
+            &space_fields("board-games", "Board games", &section, "public", "members"),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     let index = a.forum.page("/").await;
     assert!(index.contains("Hobbies") && index.contains("Board games"));
     assert!(index.contains("All about it."));
@@ -292,8 +310,8 @@ async fn admins_arrange_sections_and_spaces(db: PgPool) {
     for slug in ["board-games", "Board Games!"] {
         let response = a
             .submit(
-                "/admin/spaces/new",
-                &space_fields(slug, "Again", &section, "public", "members"),
+                "/spaces/new",
+                &[("name", "Again"), ("slug", slug), ("description", "")],
             )
             .await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST, "{slug}");
@@ -301,20 +319,29 @@ async fn admins_arrange_sections_and_spaces(db: PgPool) {
     }
 
     // Renaming and moving.
-    let path = format!("/admin/spaces/{games}");
     let response = a
         .submit(
-            &path,
+            "/c/board-games/settings",
             &space_fields("games", "Games", "", "public", "members"),
         )
         .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(response.location(), "/c/games/settings?done=saved");
     let index = a.forum.page("/").await;
     assert!(index.contains("href=\"/c/games\"") && !index.contains("Board games"));
     assert_eq!(
         a.forum.get("/c/board-games").await.status,
         StatusCode::NOT_FOUND
     );
+    // The old admin addresses lead to the space's own pages.
+    let response = a
+        .forum
+        .get_as(&format!("/admin/spaces/{games}"), Some(&a.cookie))
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(response.location(), "/c/games/settings");
+    let response = a.forum.get_as("/admin/spaces/new", Some(&a.cookie)).await;
+    assert_eq!(response.location(), "/spaces/new");
 
     // Sections are renamed, reordered and deleted; their spaces stay.
     let response = a
@@ -325,7 +352,7 @@ async fn admins_arrange_sections_and_spaces(db: PgPool) {
         .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
     a.submit(
-        &path,
+        "/c/games/settings",
         &space_fields("games", "Games", &section, "public", "members"),
     )
     .await;
@@ -340,15 +367,11 @@ async fn admins_arrange_sections_and_spaces(db: PgPool) {
     // Only empty spaces can be deleted.
     let sam = a.id("SELECT id FROM users WHERE username = 'sam'").await;
     a.forum.thread(games, sam, "Heat", "Fast").await;
-    let response = a
-        .submit(&format!("/admin/spaces/{games}/delete"), &[])
-        .await;
+    let response = a.submit("/c/games/delete", &[]).await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert!(response.body.contains("Only an empty space can be deleted"));
-    let empty = a.forum.space("empty", "public", None, 5).await;
-    let response = a
-        .submit(&format!("/admin/spaces/{empty}/delete"), &[])
-        .await;
+    a.forum.space("empty", "public", None, 5).await;
+    let response = a.submit("/c/empty/delete", &[]).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
     assert_eq!(a.forum.get("/c/empty").await.status, StatusCode::NOT_FOUND);
 }
@@ -363,12 +386,12 @@ async fn changing_who_can_read_a_space_takes_effect_for_visitors_at_once(db: PgP
     // Cached for visitors.
     assert!(a.forum.page(&thread_path).await.contains("Fast cars"));
     assert!(a.forum.page("/").await.contains("Heat"));
-    let path = format!("/admin/spaces/{games}");
-    let form = a.page(&path).await;
+    let path = "/c/games/settings";
+    let form = a.page(path).await;
     assert!(form.contains("value=\"games\""));
     let response = a
         .submit(
-            &path,
+            path,
             &space_fields("games", "Games", "", "members", "members"),
         )
         .await;
@@ -386,7 +409,7 @@ async fn changing_who_can_read_a_space_takes_effect_for_visitors_at_once(db: PgP
     assert_eq!(visibility, "members");
     // And back again.
     a.submit(
-        &path,
+        path,
         &space_fields("games", "Games", "", "public", "members"),
     )
     .await;
@@ -429,12 +452,11 @@ async fn admins_manage_groups_and_who_is_in_them(db: PgPool) {
     // A space only the organisers read.
     let planning = a.forum.space("planning", "public", None, 0).await;
     let group = organisers.to_string();
-    let mut fields = space_fields("planning", "Planning", "", "groups", "groups");
+    let mut fields = space_fields("planning", "Planning", "", "listed", "listed");
     fields.push(("read_group", &group));
-    fields.push(("write_group", &group));
-    let response = a
-        .submit(&format!("/admin/spaces/{planning}"), &fields)
-        .await;
+    fields.push(("reply_group", &group));
+    fields.push(("start_group", &group));
+    let response = a.submit("/c/planning/settings", &fields).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     assert_eq!(
         a.forum
@@ -493,54 +515,68 @@ async fn admins_manage_groups_and_who_is_in_them(db: PgPool) {
     assert!(a.page("/admin/groups").await.contains("Committee"));
     assert!(a.page("/").await.contains("Committee group"));
 
+    // A group that a space's settings name can't be deleted.
     let response = a.submit(&format!("{path}/delete"), &[]).await;
-    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(response.body.contains("can’t be deleted while"));
+    for verb in ["read", "reply", "start"] {
+        a.forum.set_grant(planning, verb, Grant::members()).await;
+    }
+    let response = a.submit(&format!("{path}/delete"), &[]).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     assert_eq!(
         a.forum.get_as(&path, Some(&a.cookie)).await.status,
         StatusCode::NOT_FOUND
     );
-    // The space is now for staff only.
-    assert!(a.page("/").await.contains("Staff only"));
+    assert!(a.page("/").await.contains("Members only"));
 }
 
 #[sqlx::test]
-async fn space_settings_are_checked(db: PgPool) {
+async fn staff_place_spaces_in_sections_and_members_dont(db: PgPool) {
     let a = admin(db).await;
-    let organisers = a.forum.group("organisers", "Organisers").await.to_string();
-    let board = a.forum.group("board", "Board").await.to_string();
-    let mut fields = space_fields("planning", "Planning", "", "groups", "groups");
-    fields.push(("read_group", &organisers));
-    fields.push(("write_group", &board));
-    let response = a.submit("/admin/spaces/new", &fields).await;
-    assert_eq!(response.status, StatusCode::BAD_REQUEST);
-    assert!(
-        response
-            .body
-            .contains("Groups that can post must also be able to read.")
-    );
-    for (key, value) in [
-        ("read_level", "everyone"),
-        ("write_level", "anyone"),
-        ("section", "999"),
-        ("position", "first"),
-        ("name", ""),
-    ] {
-        let mut fields = space_fields("planning", "Planning", "", "public", "members");
-        fields.retain(|(k, _)| *k != key);
-        fields.push((key, value));
-        let response = a.submit("/admin/spaces/new", &fields).await;
-        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{key}={value}");
-    }
-    let mut fields = space_fields("planning", "Planning", "", "groups", "members");
-    fields.push(("read_group", "999"));
-    let response = a.submit("/admin/spaces/new", &fields).await;
-    assert_eq!(response.status, StatusCode::BAD_REQUEST);
-    assert!(response.body.contains("Choose groups from the list."));
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM spaces")
+    let hobbies = a.forum.section("Hobbies", 0).await;
+    let ruth = a.forum.member("ruth", "user", None).await;
+    let ruth_cookie = a.forum.session(ruth).await;
+    let games = a.forum.space("games", "public", None, 0).await;
+    a.forum
+        .set_grant(games, "administer", Grant::listed([], [ruth]))
+        .await;
+    // Ruth runs the space, but the section is the admin's to choose.
+    let settings = a.forum.page_as("/c/games/settings", &ruth_cookie).await;
+    assert!(!settings.contains("name=\"section\""));
+    let section = hobbies.to_string();
+    let mut fields = space_fields("games", "Games", &section, "public", "members");
+    fields.push(("administer_users", "ruth"));
+    fields.retain(|(k, _)| *k != "administer_level");
+    fields.push(("administer_level", "listed"));
+    let response = a
+        .forum
+        .submit("/c/games/settings", &fields, Some(&ruth_cookie))
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let section: Option<i64> = sqlx::query_scalar("SELECT section_id FROM spaces WHERE id = $1")
+        .bind(games)
         .fetch_one(&a.forum.db)
         .await
         .unwrap();
-    assert_eq!(count, 0);
+    assert_eq!(section, None);
+    let settings = a.page("/c/games/settings").await;
+    assert!(settings.contains("name=\"section\""));
+    let response = a.submit("/c/games/settings", &fields).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let section: Option<i64> = sqlx::query_scalar("SELECT section_id FROM spaces WHERE id = $1")
+        .bind(games)
+        .fetch_one(&a.forum.db)
+        .await
+        .unwrap();
+    assert_eq!(section, Some(hobbies));
+    for (key, value) in [("section", "999"), ("position", "first")] {
+        let mut fields = fields.clone();
+        fields.retain(|(k, _)| *k != key);
+        fields.push((key, value));
+        let response = a.submit("/c/games/settings", &fields).await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{key}={value}");
+    }
 }
 
 #[sqlx::test]
@@ -574,9 +610,6 @@ async fn only_admins_manage_spaces_and_groups(db: PgPool) {
         "/admin/sections".to_owned(),
         "/admin/sections/1".to_owned(),
         "/admin/sections/1/delete".to_owned(),
-        "/admin/spaces/new".to_owned(),
-        format!("/admin/spaces/{games}"),
-        format!("/admin/spaces/{games}/delete"),
         "/admin/groups".to_owned(),
         format!("/admin/groups/{group}"),
         format!("/admin/groups/{group}/members"),
@@ -617,8 +650,6 @@ async fn unknown_spaces_and_groups_are_not_found(db: PgPool) {
         );
     }
     for path in [
-        "/admin/spaces/999",
-        "/admin/spaces/999/delete",
         "/admin/sections/999",
         "/admin/sections/999/delete",
         "/admin/groups/999",
@@ -671,24 +702,26 @@ async fn deleting_a_group_asks_first_and_says_what_it_will_change(db: PgPool) {
     assert!(page.contains(&format!("href=\"{delete_path}\"")));
     assert!(!page.contains(&format!("action=\"{delete_path}\"")));
 
+    // While spaces name the group, it can't be deleted, and the page says
+    // which spaces those are.
+    let confirm = a.page(&delete_path).await;
+    assert!(!confirm.contains(&format!("action=\"{delete_path}\"")));
+    assert!(confirm.contains("can’t be deleted"));
+    assert!(confirm.contains("href=\"/c/planning\""));
+    assert!(confirm.contains("href=\"/c/accounts\""));
+    let response = a.submit(&delete_path, &[]).await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert_eq!(a.id("SELECT count(*) FROM groups").await, 2);
+
+    // Taken out of both spaces' settings, it can go.
+    a.forum.restrict(planning, &[board], Some(&[board])).await;
+    a.forum.restrict(accounts, &[board], Some(&[board])).await;
     let confirm = a.page(&delete_path).await;
     assert!(confirm.contains(&format!("action=\"{delete_path}\"")));
     assert!(confirm.contains(&format!("href=\"{path}\"")));
     assert!(confirm.contains("can’t be undone"));
     assert!(confirm.contains("1 member"));
     assert!(confirm.contains("1 invite"));
-    // Planning will be left to staff; Accounts keeps the board.
-    let planning_row = confirm
-        .split("<li")
-        .find(|row| row.contains("href=\"/c/planning\""))
-        .expect("Planning is listed");
-    assert!(planning_row.contains("only staff will be able to read it"));
-    assert!(planning_row.contains("only staff will be able to post in it"));
-    let accounts_row = confirm
-        .split("<li")
-        .find(|row| row.contains("href=\"/c/accounts\""))
-        .expect("Accounts is listed");
-    assert!(!accounts_row.contains("only staff"));
     // Asking changes nothing.
     assert_eq!(
         a.id("SELECT count(*) FROM groups").await,

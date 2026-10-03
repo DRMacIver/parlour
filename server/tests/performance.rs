@@ -62,7 +62,7 @@ async fn seeded(pool: PgPool) -> Seeded {
     parlour::seed::seed(&pool).await.unwrap();
     let (id, slug): (i64, String) = sqlx::query_as(
         "SELECT t.id, t.slug FROM threads t JOIN spaces c ON c.id = t.space_id
-         WHERE c.read_level = 'public' AND t.deleted_at IS NULL
+         WHERE c.visibility = 'public' AND t.deleted_at IS NULL
          ORDER BY t.last_seq DESC LIMIT 1",
     )
     .fetch_one(&pool)
@@ -144,7 +144,7 @@ async fn author_post_counts_come_from_maintained_counts(pool: PgPool) {
         .unwrap();
     sqlx::query(
         "INSERT INTO user_space_post_counts (user_id, space_id, posts)
-         SELECT $1, min(c.id), 98765 FROM spaces c WHERE c.read_level = 'public'",
+         SELECT $1, min(c.id), 98765 FROM spaces c WHERE c.visibility = 'public'",
     )
     .bind(author.0)
     .execute(&s.forum.db)

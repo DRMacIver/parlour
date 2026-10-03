@@ -66,7 +66,7 @@
       {% else %}
       <ul class="member-list">
       {% for space in detail.spaces %}
-        <li><a href="/c/{{ space.slug }}">{{ space.name }}</a> <span class="row-meta">{% if space.read %}reads{% endif %}{% if space.read && space.write %} and {% endif %}{% if space.write %}posts{% endif %}</span></li>
+        <li><a href="/c/{{ space.slug }}">{{ space.name }}</a> <span class="row-meta">{% if space.read %}reads{% endif %}{% if space.read && space.write %}, {% endif %}{% if space.write %}posts{% endif %}{% if (space.read || space.write) && space.administer %}, {% endif %}{% if space.administer %}administers{% endif %}</span></li>
       {% endfor %}
       </ul>
       {% endif %}
@@ -74,7 +74,7 @@
     <section class="panel" aria-labelledby="delete-heading">
       <h2 class="panel-bar" id="delete-heading">Delete</h2>
       <div class="form">
-        <p class="form-note">Deleting the group takes its members out of it and takes it off every space and invite.</p>
+        <p class="form-note">Deleting the group takes its members out of it and takes it off every invite. A group that a space’s settings name can’t be deleted until it is taken out of them.</p>
         <p><a class="button button-quiet" href="/admin/groups/{{ detail.group.id }}/delete">Delete this group…</a></p>
       </div>
     </section>

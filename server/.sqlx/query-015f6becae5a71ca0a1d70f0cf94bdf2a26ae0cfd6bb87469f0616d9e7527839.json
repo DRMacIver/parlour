@@ -1,0 +1,307 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.id AS \"id!\", c.slug AS \"slug!\", c.name AS \"name!\", c.description AS \"description!\",\n               c.position AS \"position!\", c.section_id AS \"section_id?\", c.section_name AS \"section_name?\",\n               c.visibility AS \"visibility!\", c.created_by AS \"created_by?\", c.created_at AS \"created_at!\",\n               c.archived_at AS \"archived_at?\",\n               c.read_level AS \"read_level!\", c.read_group_ids AS \"read_group_ids!\", c.read_user_ids AS \"read_user_ids!\",\n               c.reply_level AS \"reply_level!\", c.reply_group_ids AS \"reply_group_ids!\", c.reply_user_ids AS \"reply_user_ids!\",\n               c.start_level AS \"start_level!\", c.start_group_ids AS \"start_group_ids!\", c.start_user_ids AS \"start_user_ids!\",\n               c.administer_level AS \"administer_level!\", c.administer_group_ids AS \"administer_group_ids!\",\n               c.administer_user_ids AS \"administer_user_ids!\",\n               c.read_group_names AS \"group_names!\"\n        FROM space_targets c\n        WHERE space_readable(c.visibility, c.id, $1, $2)\n          AND ($3::bigint IS NULL OR c.id = $3)\n          AND ($4::text IS NULL OR c.slug = $4)\n        ORDER BY c.section_position NULLS FIRST, c.section_id NULLS FIRST, c.position, c.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "slug!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "description!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "position!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "section_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "section_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "section_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "section_name"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "visibility!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "visibility"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "created_by?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "archived_at?",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "archived_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "read_level!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "read_level"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "read_group_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "read_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "read_user_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "read_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "reply_level!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "reply_level"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "reply_group_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "reply_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "reply_user_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "reply_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "start_level!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "start_level"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "start_group_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "start_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "start_user_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "start_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "administer_level!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "administer_level"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "administer_group_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "administer_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "administer_user_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "administer_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "group_names!",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "read_group_names"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "015f6becae5a71ca0a1d70f0cf94bdf2a26ae0cfd6bb87469f0616d9e7527839"
+}

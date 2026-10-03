@@ -1,11 +1,11 @@
-//! Groups of members (DESIGN.md §3.1). Admins make them and add members to
-//! them, and invites can add the people who use them. Spaces with the
-//! `groups` read or write level name the groups that may read or post in
-//! them (in `space_groups`, set by [`crate::store::update_space`]).
+//! Groups of members (DESIGN.md §3.1, §3.3). Admins make them and add
+//! members to them, and invites can add the people who use them. A space's
+//! grants name the groups that may read, post in or administer it (in
+//! `space_grants`, set by [`crate::store::update_space`]).
 //!
-//! Group names show on the index next to group-restricted spaces, but
-//! only to viewers who can read those spaces, and they are never in the
-//! anonymous cache, so changing groups clears no cached pages.
+//! Group names show on the index next to restricted spaces, but only to
+//! viewers who can read those spaces, and they are never in the anonymous
+//! cache, so changing groups clears no cached pages.
 
 use chrono::{DateTime, Utc};
 
@@ -130,13 +130,26 @@ pub async fn update(db: &Db, id: i64, fields: &GroupFields) -> sqlx::Result<Resu
     }
 }
 
-/// Deletes a group, taking it off every space and invite. Returns
-/// whether there was one.
-pub async fn delete(db: &Db, id: i64) -> sqlx::Result<bool> {
+/// Deletes a group that no space's grants name (DESIGN.md §3.3), taking
+/// it off every invite. Returns the problem if a space names it, and
+/// `Ok(Ok(false))` if there is no such group.
+pub async fn delete(db: &Db, id: i64) -> sqlx::Result<Result<bool, String>> {
+    let named = sqlx::query_scalar!(
+        r#"SELECT count(DISTINCT space_id) AS "n!" FROM space_grants WHERE group_ids @> ARRAY[$1]::bigint[]"#,
+        id
+    )
+    .fetch_one(db.pool())
+    .await?;
+    if named > 0 {
+        return Ok(Err(format!(
+            "The group can’t be deleted while {} name it. Take it out of their settings first.",
+            crate::format::plural(named, "space", "spaces")
+        )));
+    }
     let done = sqlx::query!("DELETE FROM groups WHERE id = $1", id)
         .execute(db.pool())
         .await?;
-    Ok(done.rows_affected() == 1)
+    Ok(Ok(done.rows_affected() == 1))
 }
 
 /// Adds a member to a group, returning whether they weren't in it already.
@@ -229,17 +242,14 @@ pub struct GroupMember {
     pub added_by: Option<UserRef>,
 }
 
-/// A space that names a group.
+/// A space whose grants name a group.
 pub struct GroupSpace {
     pub slug: String,
     pub name: String,
     pub read: bool,
+    /// Named for replying or starting threads.
     pub write: bool,
-    /// The space is group-restricted and this is the only group that
-    /// may read it, so without the group only staff could.
-    pub only_readers: bool,
-    /// Likewise for posting.
-    pub only_writers: bool,
+    pub administer: bool,
 }
 
 /// A group in full, for its admin page.
@@ -288,17 +298,11 @@ pub async fn detail(db: &Db, id: i64) -> sqlx::Result<Option<GroupDetail>> {
     .collect();
     let spaces = sqlx::query!(
         r#"SELECT c.slug, c.name,
-                  bool_or(cg.access = 'read') AS "read!", bool_or(cg.access = 'write') AS "write!",
-                  bool_or(cg.access = 'read' AND c.read_level = 'groups' AND NOT EXISTS (
-                      SELECT 1 FROM space_groups o
-                      WHERE o.space_id = c.id AND o.access = 'read' AND o.group_id <> $1
-                  )) AS "only_readers!",
-                  bool_or(cg.access = 'write' AND c.write_level = 'groups' AND NOT EXISTS (
-                      SELECT 1 FROM space_groups o
-                      WHERE o.space_id = c.id AND o.access = 'write' AND o.group_id <> $1
-                  )) AS "only_writers!"
-           FROM space_groups cg JOIN spaces c ON c.id = cg.space_id
-           WHERE cg.group_id = $1
+                  bool_or(g.verb = 'read') AS "read!",
+                  bool_or(g.verb IN ('reply', 'start')) AS "write!",
+                  bool_or(g.verb = 'administer') AS "administer!"
+           FROM space_grants g JOIN spaces c ON c.id = g.space_id
+           WHERE g.group_ids @> ARRAY[$1]::bigint[]
            GROUP BY c.id
            ORDER BY c.position, c.id"#,
         id
@@ -311,8 +315,7 @@ pub async fn detail(db: &Db, id: i64) -> sqlx::Result<Option<GroupDetail>> {
         name: row.name,
         read: row.read,
         write: row.write,
-        only_readers: row.only_readers,
-        only_writers: row.only_writers,
+        administer: row.administer,
     })
     .collect();
     let usable_invites = sqlx::query_scalar!(

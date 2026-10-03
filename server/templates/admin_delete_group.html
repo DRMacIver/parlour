@@ -1,34 +1,31 @@
 {% extends "base.html" %}
+{%- import "_forms.html" as f -%}
 {% block title %}Delete {{ detail.group.name }} · {{ layout.site_name }}{% endblock %}
 {% block content %}
 <div class="narrow">
 <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/admin/groups">Groups</a> › <a href="/admin/groups/{{ detail.group.id }}">{{ detail.group.name }}</a></nav>
 <h1 class="page-title">Delete {{ detail.group.name }}?</h1>
-<p>Deleting the group takes {{ crate::format::plural(detail.members.len() as i64, "member", "members") }} out of it, and takes it off every space and invite. This can’t be undone: making a group with the same name later won’t bring any of that back.</p>
+{% call f::error(problem) %}{% endcall %}
+{% if detail.spaces.is_empty() %}
+<p>Deleting the group takes {{ crate::format::plural(detail.members.len() as i64, "member", "members") }} out of it, and takes it off every invite. This can’t be undone: making a group with the same name later won’t bring any of that back.</p>
 {% if detail.usable_invites > 0 %}
 <p>{{ crate::format::plural(detail.usable_invites, "invite", "invites") }} that can still be used will no longer add people to the group.</p>
 {% endif %}
-<section class="panel" aria-labelledby="spaces-heading">
-  <h2 class="panel-bar" id="spaces-heading">Spaces it changes</h2>
-  {% if detail.spaces.is_empty() %}
-  <p class="empty">No space names this group.</p>
-  {% else %}
-  <ul class="member-list">
-  {% for space in detail.spaces %}
-    <li><a href="/c/{{ space.slug }}">{{ space.name }}</a>
-      <span class="row-meta">
-      {%- if space.read %}{% if space.only_readers %}only staff will be able to read it{% else %}its other groups can still read it{% endif %}{% endif -%}
-      {%- if space.read && space.write %}; {% endif -%}
-      {%- if space.write %}{% if space.only_writers %}only staff will be able to post in it{% else %}its other groups can still post in it{% endif %}{% endif -%}
-      </span>
-    </li>
-  {% endfor %}
-  </ul>
-  {% endif %}
-</section>
 <form class="form-actions form-actions-page" method="post" action="/admin/groups/{{ detail.group.id }}/delete">
   <button class="button" type="submit">Delete the group</button>
   <a href="/admin/groups/{{ detail.group.id }}">Keep it</a>
 </form>
+{% else %}
+<p>The group can’t be deleted while the settings of {{ crate::format::plural(detail.spaces.len() as i64, "space", "spaces") }} name it. Take it out of their settings first.</p>
+<section class="panel" aria-labelledby="spaces-heading">
+  <h2 class="panel-bar" id="spaces-heading">Spaces that name it</h2>
+  <ul class="member-list">
+  {% for space in detail.spaces %}
+    <li><a href="/c/{{ space.slug }}">{{ space.name }}</a> <span class="row-meta"><a href="/c/{{ space.slug }}/settings">Settings</a></span></li>
+  {% endfor %}
+  </ul>
+</section>
+<p class="form-actions form-actions-page"><a href="/admin/groups/{{ detail.group.id }}">Back to the group</a></p>
+{% endif %}
 </div>
 {% endblock %}

@@ -1,0 +1,529 @@
+//! Member-created spaces and their grants (DESIGN.md v0.2 §3.1): any
+//! member makes a space, its administrators say who may read, reply and
+//! start threads in it, spaces can be archived, and the space index lists
+//! what the viewer can read.
+
+mod common;
+
+use axum::http::StatusCode;
+use common::Forum;
+use parlour::permissions::Grant;
+use sqlx::PgPool;
+
+struct Setup {
+    f: Forum,
+    ruth: i64,
+    ruth_cookie: String,
+    jonah_cookie: String,
+    staff_cookie: String,
+}
+
+async fn setup(pool: PgPool) -> Setup {
+    let f = Forum::new(pool);
+    f.no_new_members().await;
+    let ruth = f.member("ruth", "user", None).await;
+    let jonah = f.member("jonah", "user", None).await;
+    let sam = f.member("sam", "moderator", None).await;
+    Setup {
+        ruth_cookie: f.session(ruth).await,
+        jonah_cookie: f.session(jonah).await,
+        staff_cookie: f.session(sam).await,
+        f,
+        ruth,
+    }
+}
+
+/// The settings form, with every grant at `members` unless given, and
+/// staff alone administering.
+fn settings_fields<'a>(
+    name: &'a str,
+    slug: &'a str,
+    grants: &[(&'a str, &'a str)],
+) -> Vec<(&'a str, &'a str)> {
+    let mut fields = vec![
+        ("name", name),
+        ("slug", slug),
+        ("description", "All about it."),
+    ];
+    for verb in ["read", "reply", "start", "administer"] {
+        let level = grants.iter().find(|(v, _)| *v == verb).map_or(
+            if verb == "administer" {
+                "staff"
+            } else {
+                "members"
+            },
+            |(_, level)| *level,
+        );
+        fields.push((
+            match verb {
+                "read" => "read_level",
+                "reply" => "reply_level",
+                "start" => "start_level",
+                _ => "administer_level",
+            },
+            level,
+        ));
+    }
+    fields
+}
+
+async fn count(f: &Forum, sql: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql.to_owned()))
+        .fetch_one(&f.db)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test]
+async fn any_member_can_make_a_space(pool: PgPool) {
+    let s = setup(pool).await;
+    let response = s.f.get("/spaces/new").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert!(response.location().starts_with("/login?next="));
+    let form = s.f.page_as("/spaces/new", &s.ruth_cookie).await;
+    assert!(form.contains("name=\"name\"") && form.contains("name=\"slug\""));
+
+    let response =
+        s.f.submit(
+            "/spaces/new",
+            &[
+                ("name", " Board games "),
+                ("slug", "board-games"),
+                ("description", "Dice, cards and cardboard."),
+            ],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(response.location(), "/c/board-games/settings?done=created");
+    let created_by: Option<i64> =
+        sqlx::query_scalar("SELECT created_by FROM spaces WHERE slug = 'board-games'")
+            .fetch_one(&s.f.db)
+            .await
+            .unwrap();
+    assert_eq!(created_by, Some(s.ruth));
+
+    // By default any member reads, replies and starts threads; visitors
+    // see nothing; the maker administers it.
+    assert_eq!(
+        s.f.get("/c/board-games").await.status,
+        StatusCode::NOT_FOUND
+    );
+    let page = s.f.page_as("/c/board-games", &s.jonah_cookie).await;
+    assert!(page.contains("Board games") && page.contains("href=\"/c/board-games/new\""));
+    assert!(!page.contains("href=\"/c/board-games/settings\""));
+    let page = s.f.page_as("/c/board-games", &s.ruth_cookie).await;
+    assert!(page.contains("href=\"/c/board-games/settings\""));
+    let response =
+        s.f.submit(
+            "/c/board-games/new",
+            &[("title", "Heat"), ("body", "Fast cars")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(
+        s.f.get_as("/c/board-games/settings", Some(&s.jonah_cookie))
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+    for cookie in [&s.ruth_cookie, &s.staff_cookie] {
+        let settings = s.f.page_as("/c/board-games/settings", cookie).await;
+        assert!(settings.contains("value=\"Board games\""), "{settings}");
+        assert!(settings.contains("name=\"read_level\""));
+    }
+
+    // Addresses are checked: taken, malformed, or a member's name.
+    for (slug, why) in [
+        ("board-games", "Another space has that address."),
+        ("Board Games!", "lower-case letters"),
+        ("jonah", "a member’s name"),
+    ] {
+        let response =
+            s.f.submit(
+                "/spaces/new",
+                &[("name", "Again"), ("slug", slug), ("description", "")],
+                Some(&s.ruth_cookie),
+            )
+            .await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{slug}");
+        assert!(response.body.contains(why), "{slug}: {}", response.body);
+        assert!(response.body.contains("value=\"Again\""));
+    }
+    assert_eq!(count(&s.f, "SELECT count(*) FROM spaces").await, 1);
+}
+
+#[sqlx::test]
+async fn administrators_set_who_may_read_reply_and_start(pool: PgPool) {
+    let s = setup(pool).await;
+    let maya = s.f.member("maya", "user", None).await;
+    let maya_cookie = s.f.session(maya).await;
+    s.f.submit(
+        "/spaces/new",
+        &[("name", "Club"), ("slug", "club"), ("description", "")],
+        Some(&s.ruth_cookie),
+    )
+    .await;
+    let club = s.f.id("SELECT id FROM spaces WHERE slug = 'club'").await;
+
+    // Only Ruth and Jonah read it; anyone who reads may reply; only Ruth
+    // starts threads.
+    let mut fields = settings_fields(
+        "Club",
+        "club",
+        &[
+            ("read", "listed"),
+            ("start", "listed"),
+            ("administer", "listed"),
+        ],
+    );
+    fields.push(("read_users", "ruth, @Jonah"));
+    fields.push(("start_users", "ruth"));
+    fields.push(("administer_users", "ruth"));
+    let response =
+        s.f.submit("/c/club/settings", &fields, Some(&s.ruth_cookie))
+            .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(
+        s.f.get_as("/c/club", Some(&maya_cookie)).await.status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        s.f.get_as("/c/club", Some(&s.jonah_cookie)).await.status,
+        StatusCode::OK
+    );
+    let response =
+        s.f.submit(
+            "/c/club/new",
+            &[("title", "Rules"), ("body", "Read these")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    let response =
+        s.f.submit(
+            "/c/club/new",
+            &[("title", "Rules"), ("body", "Read these")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let thread = s.f.id("SELECT id FROM threads WHERE slug = 'rules'").await;
+    let response =
+        s.f.submit(
+            &format!("/t/{thread}/reply"),
+            &[("body", "Noted")],
+            Some(&s.jonah_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let visibility: String =
+        sqlx::query_scalar("SELECT visibility FROM threads WHERE slug = 'rules'")
+            .fetch_one(&s.f.db)
+            .await
+            .unwrap();
+    assert_eq!(visibility, "restricted");
+    // The space page and thread say who can read it.
+    let page = s.f.page_as("/c/club", &s.jonah_cookie).await;
+    assert!(page.contains("Chosen members"), "{page}");
+
+    // Starting threads for staff only: an administrator who isn't staff
+    // can't; a moderator can.
+    s.f.set_grant(club, "start", Grant::staff()).await;
+    let response =
+        s.f.submit(
+            "/c/club/new",
+            &[("title", "Mine"), ("body", "x")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    // Staff read every space for now (DESIGN.md §13, milestone 15).
+    let response =
+        s.f.submit(
+            "/c/club/new",
+            &[("title", "Notice"), ("body", "x")],
+            Some(&s.staff_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+
+    // Reading for staff only.
+    s.f.set_grant(club, "read", Grant::staff()).await;
+    assert_eq!(
+        s.f.get_as("/c/club", Some(&s.jonah_cookie)).await.status,
+        StatusCode::NOT_FOUND
+    );
+    let page = s.f.page_as("/c/club", &s.staff_cookie).await;
+    assert!(page.contains("Staff only"), "{page}");
+
+    // A group in a grant.
+    let organisers = s.f.group("organisers", "Organisers").await;
+    s.f.join_group(organisers, maya).await;
+    s.f.set_grant(club, "read", Grant::listed([organisers], []))
+        .await;
+    assert_eq!(
+        s.f.get_as("/c/club", Some(&maya_cookie)).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        s.f.get_as("/c/club", Some(&s.jonah_cookie)).await.status,
+        StatusCode::NOT_FOUND
+    );
+    let page = s.f.page_as("/c/club", &maya_cookie).await;
+    assert!(page.contains("Organisers group"), "{page}");
+
+    // The form refuses what it can't use.
+    for (key, value, why) in [
+        ("read_users", "nobody", "There is no member called"),
+        (
+            "reply_level",
+            "public",
+            "Only reading can be open to everyone.",
+        ),
+        ("start_level", "sometimes", "Choose who can start threads."),
+        ("read_group", "999", "Choose groups from the list."),
+    ] {
+        let mut fields = settings_fields("Club", "club", &[("read", "listed")]);
+        fields.retain(|(k, _)| *k != key);
+        fields.push((key, value));
+        let response =
+            s.f.submit("/c/club/settings", &fields, Some(&s.staff_cookie))
+                .await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{key}={value}");
+        assert!(
+            response.body.contains(why),
+            "{key}={value}: {}",
+            response.body
+        );
+    }
+}
+
+#[sqlx::test]
+async fn archived_spaces_are_read_only(pool: PgPool) {
+    let s = setup(pool).await;
+    let games = s.f.space("games", "public", None, 0).await;
+    s.f.set_grant(games, "administer", Grant::listed([], [s.ruth]))
+        .await;
+    let t = s.f.thread(games, s.ruth, "Heat", "Fast cars").await;
+    let response =
+        s.f.submit("/c/games/archive", &[], Some(&s.jonah_cookie))
+            .await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    let response =
+        s.f.submit("/c/games/archive", &[], Some(&s.ruth_cookie))
+            .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+
+    // Still readable, by visitors too, but closed.
+    let page = s.f.page("/c/games").await;
+    assert!(page.contains("Archived") && page.contains("Heat"), "{page}");
+    let page = s.f.page_as("/c/games", &s.jonah_cookie).await;
+    assert!(!page.contains("href=\"/c/games/new\""));
+    for (path, fields) in [
+        ("/c/games/new", vec![("title", "New"), ("body", "x")]),
+        (&*format!("/t/{}/reply", t.thread_id), vec![("body", "x")]),
+    ] {
+        let response = s.f.submit(path, &fields, Some(&s.jonah_cookie)).await;
+        assert_eq!(response.status, StatusCode::FORBIDDEN, "{path}");
+    }
+    // Out of the index and the space list, unless asked for.
+    assert!(!s.f.page("/").await.contains("href=\"/c/games\""));
+    assert!(!s.f.page("/spaces").await.contains("href=\"/c/games\""));
+    assert!(
+        s.f.page("/spaces?archived=1")
+            .await
+            .contains("href=\"/c/games\"")
+    );
+    assert_eq!(
+        count(
+            &s.f,
+            "SELECT count(*) FROM mod_actions WHERE action = 'archive_space'"
+        )
+        .await,
+        0,
+        "an administrator's own action isn't moderation"
+    );
+
+    // And back.
+    let response =
+        s.f.submit("/c/games/unarchive", &[], Some(&s.staff_cookie))
+            .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert!(s.f.page("/").await.contains("href=\"/c/games\""));
+    assert_eq!(
+        count(
+            &s.f,
+            "SELECT count(*) FROM mod_actions WHERE action = 'unarchive_space'"
+        )
+        .await,
+        1,
+        "staff acting on a space they don't administer is logged"
+    );
+}
+
+#[sqlx::test]
+async fn the_space_index_lists_what_the_viewer_can_read(pool: PgPool) {
+    let s = setup(pool).await;
+    let games = s.f.space("games", "public", None, 0).await;
+    let lounge = s.f.space("lounge", "members", None, 1).await;
+    let secret = s.f.space("secret", "listed", None, 2).await;
+    s.f.set_grant(secret, "read", Grant::listed([], [s.ruth]))
+        .await;
+    s.f.thread(games, s.ruth, "Old", "x").await;
+    s.f.thread(lounge, s.ruth, "Newer", "x").await;
+
+    fn slugs(page: &str) -> Vec<&str> {
+        page.split("href=\"/c/")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .filter(|slug| !slug.contains('/'))
+            .collect()
+    }
+    // Newest first by default.
+    assert_eq!(slugs(&s.f.page("/spaces").await), vec!["games"]);
+    assert_eq!(
+        slugs(&s.f.page_as("/spaces", &s.jonah_cookie).await),
+        vec!["lounge", "games"]
+    );
+    assert_eq!(
+        slugs(&s.f.page_as("/spaces", &s.ruth_cookie).await),
+        vec!["secret", "lounge", "games"]
+    );
+    assert_eq!(
+        slugs(&s.f.page_as("/spaces?sort=name", &s.ruth_cookie).await),
+        vec!["games", "lounge", "secret"]
+    );
+    assert_eq!(
+        slugs(&s.f.page_as("/spaces?sort=activity", &s.ruth_cookie).await),
+        vec!["lounge", "games", "secret"]
+    );
+    // Other spellings redirect to the one address, so the cache stays small.
+    let response = s.f.get("/spaces?sort=created").await;
+    assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(response.location(), "/spaces");
+    let response = s.f.get("/spaces?utm=1").await;
+    assert_eq!(response.location(), "/spaces");
+    assert_eq!(
+        s.f.get("/spaces?sort=bogus").await.status,
+        StatusCode::NOT_FOUND
+    );
+    // The page links to making a space, for those who may.
+    assert!(
+        s.f.page_as("/spaces", &s.jonah_cookie)
+            .await
+            .contains("href=\"/spaces/new\"")
+    );
+    assert!(!s.f.page("/spaces").await.contains("href=\"/spaces/new\""));
+}
+
+#[sqlx::test]
+async fn admins_can_keep_making_spaces_to_staff(pool: PgPool) {
+    let s = setup(pool).await;
+    let admin = s.f.member("boss", "admin", None).await;
+    let admin_cookie = s.f.session(admin).await;
+    let settings = s.f.page_as("/admin/settings", &admin_cookie).await;
+    assert!(settings.contains("name=\"space_creation\""));
+    let response =
+        s.f.submit(
+            "/admin/settings",
+            &[
+                ("site_name", "Club"),
+                ("registration_mode", "invite_only"),
+                ("invite_who", "everyone"),
+                ("space_creation", "staff"),
+            ],
+            Some(&admin_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(
+        s.f.get_as("/spaces/new", Some(&s.ruth_cookie)).await.status,
+        StatusCode::FORBIDDEN
+    );
+    let response =
+        s.f.submit(
+            "/spaces/new",
+            &[("name", "Mine"), ("slug", "mine"), ("description", "")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    assert!(
+        !s.f.page_as("/spaces", &s.ruth_cookie)
+            .await
+            .contains("href=\"/spaces/new\"")
+    );
+    assert_eq!(
+        s.f.get_as("/spaces/new", Some(&s.staff_cookie))
+            .await
+            .status,
+        StatusCode::OK
+    );
+}
+
+#[sqlx::test]
+async fn groups_named_in_grants_cant_be_deleted(pool: PgPool) {
+    let s = setup(pool).await;
+    let admin = s.f.member("boss", "admin", None).await;
+    let admin_cookie = s.f.session(admin).await;
+    let organisers = s.f.group("organisers", "Organisers").await;
+    let planning = s.f.space("planning", "public", None, 0).await;
+    s.f.restrict(planning, &[organisers], None).await;
+    let path = format!("/admin/groups/{organisers}/delete");
+    let page = s.f.page_as(&path, &admin_cookie).await;
+    assert!(page.contains("href=\"/c/planning\""), "{page}");
+    assert!(!page.contains(&format!("action=\"{path}\"")), "{page}");
+    let response = s.f.submit(&path, &[], Some(&admin_cookie)).await;
+    assert_eq!(
+        response.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        response.body
+    );
+    assert_eq!(count(&s.f, "SELECT count(*) FROM groups").await, 1);
+
+    s.f.set_grant(planning, "read", Grant::members()).await;
+    let response = s.f.submit(&path, &[], Some(&admin_cookie)).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(count(&s.f, "SELECT count(*) FROM groups").await, 0);
+}
+
+#[sqlx::test]
+async fn staff_edits_to_other_peoples_spaces_are_logged(pool: PgPool) {
+    let s = setup(pool).await;
+    s.f.submit(
+        "/spaces/new",
+        &[("name", "Club"), ("slug", "club"), ("description", "")],
+        Some(&s.ruth_cookie),
+    )
+    .await;
+    // Ruth's own edit is nobody's business.
+    let mut fields = settings_fields("Chess club", "club", &[("administer", "listed")]);
+    fields.push(("administer_users", "ruth"));
+    let response =
+        s.f.submit("/c/club/settings", &fields, Some(&s.ruth_cookie))
+            .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(count(&s.f, "SELECT count(*) FROM mod_actions").await, 0);
+    // A moderator's is recorded. The space is members-only, so the entry
+    // is for staff, not the public log.
+    let mut fields = settings_fields("Chess", "club", &[("administer", "listed")]);
+    fields.push(("administer_users", "ruth"));
+    let response =
+        s.f.submit("/c/club/settings", &fields, Some(&s.staff_cookie))
+            .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(
+        count(
+            &s.f,
+            "SELECT count(*) FROM mod_actions WHERE action = 'edit_space' AND NOT public"
+        )
+        .await,
+        1
+    );
+    let log = s.f.page_as("/mod/log", &s.staff_cookie).await;
+    assert!(log.contains("changed the settings of"), "{log}");
+    assert!(log.contains("href=\"/c/club\""), "{log}");
+}

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT count(t.id) AS \"n!\" FROM spaces c LEFT JOIN threads t ON t.space_id = c.id\n           WHERE c.id = $1 AND space_readable(c.read_level, c.id, $2, $3)",
+  "query": "SELECT coalesce(sum(pc.posts), 0)::bigint AS \"n!\"\n           FROM user_space_post_counts pc JOIN spaces c ON c.id = pc.space_id\n           WHERE pc.user_id = $1 AND space_readable(c.visibility, c.id, $2, $3)",
   "describe": {
     "columns": [
       {
@@ -21,5 +21,5 @@
       null
     ]
   },
-  "hash": "0ad1dfaec6874ccd1fbff14adbbafac289ad01dce64a8f6fc0ff21cf35b0d2d7"
+  "hash": "0075fb78ea8e8371748098b6868d5c14bc21eb7797f0e17d097fec281092e9d4"
 }

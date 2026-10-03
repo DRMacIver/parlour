@@ -12,7 +12,7 @@
   {% else %}
   <ul class="member-list">
   {% for space in spaces %}
-    <li><a href="/admin/spaces/{{ space.space.id }}">{{ space.space.name }}</a> <span class="row-meta">/c/{{ space.space.slug }}</span></li>
+    <li><a href="/c/{{ space.space.slug }}/settings">{{ space.space.name }}</a> <span class="row-meta">/c/{{ space.space.slug }}</span></li>
   {% endfor %}
   </ul>
   {% endif %}

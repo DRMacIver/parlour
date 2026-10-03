@@ -686,6 +686,7 @@ async fn staff_links_can_be_used_several_times_and_add_people_to_groups(db: PgPo
     // A group deleted since is left out.
     parlour::groups::delete(forum.state.db(), board)
         .await
+        .unwrap()
         .unwrap();
     for name in ["alex", "bea", "cal"] {
         let response = join(&forum, &link, name, &format!("{name}@example.com")).await;

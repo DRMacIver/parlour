@@ -82,11 +82,14 @@ test("a new forum is set up, and its first members talk", async ({ page, browser
   await expect(page.locator(".site-name")).toHaveText("The Thursday Club");
   await expect(page.locator(".nav-user")).toHaveText("founder");
 
-  // A space to talk in.
-  await page.goto("/admin/spaces/new");
+  // A space to talk in, open to visitors.
+  await page.goto("/spaces/new");
   await page.fill("#name", "General");
   await page.fill("#slug", "general");
-  await page.locator("form[action='/admin/spaces/new'] button[type=submit]").click();
+  await page.locator("form[action='/spaces/new'] button[type=submit]").click();
+  await expect(page.locator(".notice-success")).toContainText("The space is ready");
+  await page.check("input[name=read_level][value=public]");
+  await page.locator("form[action='/c/general/settings'] button[type=submit]").click();
   await expect(page.locator(".notice-success")).toHaveText("Saved.");
 
   // A newcomer joins with the link, in a browser of their own.

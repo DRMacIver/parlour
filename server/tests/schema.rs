@@ -30,10 +30,10 @@ async fn thread_visibility_follows_its_space(pool: PgPool) {
     assert_eq!(visibility(&f, t.thread_id).await, "members");
 
     f.exec(&format!(
-        "UPDATE spaces SET read_level = 'groups' WHERE id = {lounge}"
+        "UPDATE space_grants SET level = 'listed' WHERE space_id = {lounge} AND verb = 'read'"
     ))
     .await;
-    assert_eq!(visibility(&f, t.thread_id).await, "groups");
+    assert_eq!(visibility(&f, t.thread_id).await, "restricted");
 
     // The copy can't be set by hand.
     f.exec(&format!(
@@ -41,7 +41,13 @@ async fn thread_visibility_follows_its_space(pool: PgPool) {
         t.thread_id
     ))
     .await;
-    assert_eq!(visibility(&f, t.thread_id).await, "groups");
+    assert_eq!(visibility(&f, t.thread_id).await, "restricted");
+    // Nor can the space's own copy.
+    f.exec(&format!(
+        "UPDATE spaces SET visibility = 'public' WHERE id = {lounge}"
+    ))
+    .await;
+    assert_eq!(visibility(&f, t.thread_id).await, "restricted");
 }
 
 #[sqlx::test]
@@ -126,8 +132,8 @@ async fn usernames_are_case_insensitively_unique(pool: PgPool) {
     assert!(result.is_err());
 }
 
-async fn read_level(f: &Forum, space_id: i64) -> String {
-    sqlx::query_scalar!("SELECT read_level FROM spaces WHERE id = $1", space_id)
+async fn space_visibility(f: &Forum, space_id: i64) -> String {
+    sqlx::query_scalar!("SELECT visibility FROM spaces WHERE id = $1", space_id)
         .fetch_one(&f.db)
         .await
         .unwrap()
@@ -169,10 +175,12 @@ async fn moving_a_thread_while_its_destination_is_tightened_keeps_visibility_in_
             "UPDATE threads SET space_id = {dest} WHERE id = {}",
             t.thread_id
         ),
-        format!("UPDATE spaces SET read_level = 'members' WHERE id = {dest}"),
+        format!(
+            "UPDATE space_grants SET level = 'members' WHERE space_id = {dest} AND verb = 'read'"
+        ),
     )
     .await;
-    assert_eq!(read_level(&f, dest).await, "members");
+    assert_eq!(space_visibility(&f, dest).await, "members");
     assert_eq!(visibility(&f, t.thread_id).await, "members");
 }
 
@@ -185,7 +193,9 @@ async fn tightening_a_space_while_a_thread_moves_into_it_keeps_visibility_in_syn
     let t = f.thread(games, ruth, "Thread", "x").await;
     race(
         &f,
-        format!("UPDATE spaces SET read_level = 'members' WHERE id = {dest}"),
+        format!(
+            "UPDATE space_grants SET level = 'members' WHERE space_id = {dest} AND verb = 'read'"
+        ),
         format!(
             "UPDATE threads SET space_id = {dest} WHERE id = {}",
             t.thread_id
@@ -206,7 +216,9 @@ async fn creating_a_thread_while_its_space_is_tightened_keeps_visibility_in_sync
             "INSERT INTO threads (space_id, visibility, title, slug, author_id)
              VALUES ({dest}, 'public', 'Racing', 'racing', {ruth})"
         ),
-        format!("UPDATE spaces SET read_level = 'members' WHERE id = {dest}"),
+        format!(
+            "UPDATE space_grants SET level = 'members' WHERE space_id = {dest} AND verb = 'read'"
+        ),
     )
     .await;
     let visibility: String =

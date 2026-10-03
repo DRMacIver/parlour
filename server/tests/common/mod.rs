@@ -12,6 +12,7 @@ use parlour::cache::PageCache;
 use parlour::changes::Change;
 use parlour::islands::IslandAssets;
 use parlour::mail::{Email, Mailer};
+use parlour::permissions::Grant;
 use parlour::store::{self, CreatedThread, NewPost, NewSpace, NewThread, NewUser};
 use parlour::{AppState, app};
 use sqlx::PgPool;
@@ -293,6 +294,8 @@ impl Forum {
             .unwrap()
     }
 
+    /// A space any member may post in, read at `read_level` (`public`,
+    /// `members`, `staff`, or `listed` naming nobody yet).
     pub async fn space(
         &self,
         slug: &str,
@@ -302,18 +305,34 @@ impl Forum {
     ) -> i64 {
         store::create_space(
             &self.db,
-            &NewSpace {
+            &NewSpace::with_levels(
                 section_id,
-                slug: slug.into(),
-                name: capitalise(&slug.replace('-', " ")),
-                description: format!("All about {slug}."),
+                slug,
+                &capitalise(&slug.replace('-', " ")),
+                &format!("All about {slug}."),
                 position,
-                read_level: read_level.into(),
-                write_level: "members".into(),
-            },
+                read_level,
+                "members",
+            ),
         )
         .await
         .unwrap()
+    }
+
+    /// Replaces one of a space's grants, as its settings form would.
+    pub async fn set_grant(&self, space_id: i64, verb: &str, grant: Grant) {
+        store::set_grant(&self.db, space_id, verb, &grant)
+            .await
+            .unwrap();
+        self.changed(Change::SpaceChanged { space_id }).await;
+    }
+
+    /// The first value of a query, as an id.
+    pub async fn id(&self, sql: &str) -> i64 {
+        sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql.to_owned()))
+            .fetch_one(&self.db)
+            .await
+            .unwrap()
     }
 
     pub async fn thread(
@@ -388,33 +407,17 @@ impl Forum {
         );
     }
 
-    /// Lets these groups read (and, with `write`, post in) a space,
-    /// which becomes group-restricted.
+    /// Lets only these groups read a space (and, with `write`, only those
+    /// groups reply and start threads in it).
     pub async fn restrict(&self, space_id: i64, groups: &[i64], write: Option<&[i64]>) {
-        let db = self.state.db();
-        let viewer = parlour::viewer::Viewer::User(
-            parlour::sessions::user_ctx(db, self.staff().await)
-                .await
-                .unwrap()
-                .unwrap(),
-        );
-        let mut settings = parlour::content::space_by_id(db, &viewer, space_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .settings();
-        settings.read_level = "groups".into();
-        settings.read_groups = groups.to_vec();
+        self.set_grant(space_id, "read", Grant::listed(groups.iter().copied(), []))
+            .await;
         if let Some(write) = write {
-            settings.write_level = "groups".into();
-            settings.write_groups = write.to_vec();
+            for verb in ["reply", "start"] {
+                self.set_grant(space_id, verb, Grant::listed(write.iter().copied(), []))
+                    .await;
+            }
         }
-        let settings = settings.clean().unwrap();
-        parlour::store::update_space(db, space_id, &settings)
-            .await
-            .unwrap()
-            .unwrap();
-        self.changed(Change::SpaceChanged { space_id }).await;
     }
 
     /// Some admin's id, making one if there is none.

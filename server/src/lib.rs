@@ -32,6 +32,7 @@ pub mod permissions;
 pub mod ratelimit;
 mod search_pages;
 pub mod setup;
+mod space_pages;
 pub mod startup;
 pub mod tokens;
 mod upload_pages;
@@ -224,6 +225,7 @@ pub fn app(state: AppState) -> Router {
         .route("/", get(pages::index))
         .route("/latest", get(pages::latest))
         .route("/c/{slug}", get(pages::space))
+        .route("/spaces", get(space_pages::index))
         .route("/t/{id}", get(pages::thread_without_slug))
         .route("/t/{id}/unread", get(pages::thread_unread))
         .route("/t/{id}/{slug}", get(pages::thread))
@@ -270,6 +272,17 @@ pub fn app(state: AppState) -> Router {
             get(write_pages::new_thread_page).post(write_pages::new_thread),
         )
         .route("/c/{slug}/read", post(write_pages::mark_space_read))
+        .route(
+            "/spaces/new",
+            get(space_pages::new_page).post(space_pages::create),
+        )
+        .route(
+            "/c/{slug}/settings",
+            get(space_pages::settings_page).post(space_pages::save_settings),
+        )
+        .route("/c/{slug}/archive", post(space_pages::archive))
+        .route("/c/{slug}/unarchive", post(space_pages::unarchive))
+        .route("/c/{slug}/delete", post(space_pages::delete))
         .route("/c/{slug}/watch", post(notification_pages::watch_space))
         .route("/t/{id}/watch", post(notification_pages::watch_thread))
         .route(
@@ -453,15 +466,8 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/admin/users/{id}/role", post(admin_pages::change_role))
         .route("/admin/spaces", get(admin_forum::spaces_page))
-        .route(
-            "/admin/spaces/new",
-            get(admin_forum::new_space_page).post(admin_forum::create_space),
-        )
-        .route(
-            "/admin/spaces/{id}",
-            get(admin_forum::space_page).post(admin_forum::update_space),
-        )
-        .route("/admin/spaces/{id}/delete", post(admin_forum::delete_space))
+        .route("/admin/spaces/new", get(admin_forum::new_space_page))
+        .route("/admin/spaces/{id}", get(admin_forum::space_page))
         .route("/admin/sections", post(admin_forum::create_section))
         .route("/admin/sections/{id}", post(admin_forum::update_section))
         .route(

@@ -1218,7 +1218,7 @@ pub async fn move_posts(
     // Where to: an existing thread the moderator can read, or a new one.
     enum To {
         Existing(ThreadTarget),
-        New(content::SpaceTarget, String),
+        New(Box<content::SpaceTarget>, String),
     }
     let to = match destination {
         Destination::Existing(text) => match parse_thread_ref(text) {
@@ -1246,7 +1246,7 @@ pub async fn move_posts(
             let title = writing::clean_title(title);
             writing::check_title(&title, &mut problems);
             match content::space_target(db, viewer, space).await? {
-                Some(c) => Some(To::New(c, title)),
+                Some(c) => Some(To::New(Box::new(c), title)),
                 None => {
                     problems.push("Choose a space for the new thread.".to_owned());
                     None
@@ -1700,7 +1700,7 @@ async fn publish_held(
                     "The author can no longer post in that space. Reject it instead.",
                 )));
             };
-            if !writing::may_post_in(&author_viewer, &space) {
+            if !writing::may_start_in(&author_viewer, &space) {
                 return Ok(Err(Refused::NotAllowed(
                     "The author can no longer post in that space. Reject it instead.",
                 )));

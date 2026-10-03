@@ -75,6 +75,36 @@ impl RegistrationMode {
     }
 }
 
+/// Who may make spaces (DESIGN.md §3.1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpaceCreation {
+    #[default]
+    Members,
+    Staff,
+}
+
+impl SpaceCreation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SpaceCreation::Members => "members",
+            SpaceCreation::Staff => "staff",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<SpaceCreation> {
+        match s {
+            "members" => Some(SpaceCreation::Members),
+            "staff" => Some(SpaceCreation::Staff),
+            _ => None,
+        }
+    }
+}
+
+pub async fn space_creation(db: &Db) -> sqlx::Result<SpaceCreation> {
+    Ok(get(db, "space_creation").await?.unwrap_or_default())
+}
+
 pub async fn registration_mode(db: &Db) -> sqlx::Result<RegistrationMode> {
     Ok(get(db, "registration_mode").await?.unwrap_or_default())
 }

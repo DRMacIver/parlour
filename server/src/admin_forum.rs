@@ -2,8 +2,8 @@
 //!
 //! - `/admin/spaces`: the sections on the index and the spaces in
 //!   them, with who can read and post in each;
-//! - `/admin/spaces/new` and `/admin/spaces/{id}`: a space's
-//!   name, address, section, position, read and write levels and groups;
+//! - `/admin/spaces/new` and `/admin/spaces/{id}`, which lead to the
+//!   space's own pages (`space_pages`);
 //! - `/admin/groups` and `/admin/groups/{id}`: groups and their members.
 //!
 //! Changing who can read a space clears every cached page that could
@@ -25,7 +25,7 @@ use crate::error::AppError;
 use crate::format;
 use crate::groups::{self, GroupDetail, GroupFields, GroupSummary};
 use crate::pages::parse_id;
-use crate::store::{self, SpaceSettings};
+use crate::store;
 use crate::users;
 use crate::viewer::Viewer;
 use crate::web::{self, Layout, Nav, render, see_other};
@@ -72,18 +72,12 @@ struct SpacesTemplate {
 
 impl SpacesTemplate {
     fn access(&self, space: &SpaceTarget) -> String {
-        format::access_label(&space.read_level, &space.group_names)
+        format::access_label(space.read_level(), &space.group_names)
             .unwrap_or_else(|| "Everyone".to_owned())
     }
 
-    fn posting(&self, space: &SpaceTarget) -> String {
-        match space.write_level.as_str() {
-            "members" => "Anyone who can read".to_owned(),
-            "groups" => {
-                format::access_label("groups", &space.write_group_names).unwrap_or_default()
-            }
-            _ => "Staff only".to_owned(),
-        }
+    fn posting(&self, space: &SpaceTarget) -> &'static str {
+        format::grant_label(space.rules.start.level)
     }
 }
 
@@ -274,223 +268,15 @@ pub async fn delete_section(
 }
 
 // ---------------------------------------------------------------------------
-// One space
-
-/// The space form, as typed.
-#[derive(Clone, Debug, Default)]
-pub struct SpaceForm {
-    name: String,
-    slug: String,
-    description: String,
-    section: String,
-    position: String,
-    read_level: String,
-    write_level: String,
-    read_groups: Vec<String>,
-    write_groups: Vec<String>,
-}
-
-impl SpaceForm {
-    fn from_fields(fields: &[(String, String)]) -> SpaceForm {
-        let mut form = SpaceForm::default();
-        for (key, value) in fields {
-            match key.as_str() {
-                "name" => form.name = value.clone(),
-                "slug" => form.slug = value.clone(),
-                "description" => form.description = value.clone(),
-                "section" => form.section = value.clone(),
-                "position" => form.position = value.clone(),
-                "read_level" => form.read_level = value.clone(),
-                "write_level" => form.write_level = value.clone(),
-                "read_group" => form.read_groups.push(value.clone()),
-                "write_group" => form.write_groups.push(value.clone()),
-                _ => {}
-            }
-        }
-        form
-    }
-
-    fn from_settings(settings: &SpaceSettings) -> SpaceForm {
-        let ids = |ids: &[i64]| ids.iter().map(i64::to_string).collect();
-        SpaceForm {
-            name: settings.name.clone(),
-            slug: settings.slug.clone(),
-            description: settings.description.clone(),
-            section: settings
-                .section_id
-                .map(|id| id.to_string())
-                .unwrap_or_default(),
-            position: settings.position.to_string(),
-            read_level: settings.read_level.clone(),
-            write_level: settings.write_level.clone(),
-            read_groups: ids(&settings.read_groups),
-            write_groups: ids(&settings.write_groups),
-        }
-    }
-
-    /// The settings this form describes, checked against the sections and
-    /// groups there are.
-    fn settings(
-        &self,
-        sections: &[Section],
-        groups: &[GroupSummary],
-    ) -> Result<SpaceSettings, Vec<String>> {
-        let mut problems = Vec::new();
-        let section_id = match self.section.trim() {
-            "" => None,
-            id => match id.parse::<i64>() {
-                Ok(id) if sections.iter().any(|s| s.id == id) => Some(id),
-                _ => {
-                    problems.push("Choose a section from the list.".to_owned());
-                    None
-                }
-            },
-        };
-        let position = parse_position(&self.position).unwrap_or_else(|why| {
-            problems.push(why);
-            0
-        });
-        let mut group_ids = |chosen: &[String]| -> Vec<i64> {
-            let ids: Vec<i64> = chosen
-                .iter()
-                .filter_map(|id| id.trim().parse::<i64>().ok())
-                .filter(|id| groups.iter().any(|g| g.id == *id))
-                .collect();
-            if ids.len() != chosen.len() {
-                problems.push("Choose groups from the list.".to_owned());
-            }
-            ids
-        };
-        let read_groups = group_ids(&self.read_groups);
-        let write_groups = group_ids(&self.write_groups);
-        problems.dedup();
-        let settings = SpaceSettings {
-            section_id,
-            slug: self.slug.clone(),
-            name: self.name.clone(),
-            description: self.description.clone(),
-            position,
-            read_level: self.read_level.clone(),
-            write_level: self.write_level.clone(),
-            read_groups,
-            write_groups,
-        }
-        .clean();
-        match settings {
-            Ok(settings) if problems.is_empty() => Ok(settings),
-            Ok(_) => Err(problems),
-            Err(more) => {
-                problems.extend(more);
-                Err(problems)
-            }
-        }
-    }
-}
-
-#[derive(Template)]
-#[template(path = "admin_space.html")]
-struct SpaceTemplate {
-    layout: Layout,
-    /// `None` for a new space.
-    id: Option<i64>,
-    errors: Vec<String>,
-    form: SpaceForm,
-    sections: Vec<Section>,
-    groups: Vec<GroupSummary>,
-    thread_count: Option<i64>,
-}
-
-impl SpaceTemplate {
-    fn action(&self) -> String {
-        match self.id {
-            Some(id) => format!("/admin/spaces/{id}"),
-            None => "/admin/spaces/new".to_owned(),
-        }
-    }
-
-    fn section_chosen(&self, id: &i64) -> bool {
-        self.form.section.trim() == id.to_string()
-    }
-
-    fn reads(&self, id: &i64) -> bool {
-        self.form.read_groups.contains(&id.to_string())
-    }
-
-    fn writes(&self, id: &i64) -> bool {
-        self.form.write_groups.contains(&id.to_string())
-    }
-}
-
-async fn render_space(
-    state: &AppState,
-    viewer: &Viewer,
-    status: StatusCode,
-    id: Option<i64>,
-    form: SpaceForm,
-    errors: Vec<String>,
-) -> Result<Response, AppError> {
-    let db = state.db();
-    let thread_count = match id {
-        Some(id) => Some(content::space_thread_count(db, viewer, id).await?),
-        None => None,
-    };
-    render(
-        status,
-        &SpaceTemplate {
-            layout: Layout::load(state, viewer, Nav::Admin).await?,
-            id,
-            errors,
-            form,
-            sections: content::sections(db).await?,
-            groups: groups::list(db).await?,
-            thread_count,
-        },
-    )
-}
+// One space: its settings live with the space itself (`/c/{slug}/settings`,
+// in `space_pages`). The v0.1 addresses lead there.
 
 pub async fn new_space_page(
     State(state): State<AppState>,
     viewer: Viewer,
 ) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/spaces/new");
-    let form = SpaceForm {
-        read_level: "public".to_owned(),
-        write_level: "members".to_owned(),
-        position: "0".to_owned(),
-        ..SpaceForm::default()
-    };
-    render_space(&state, &viewer, StatusCode::OK, None, form, Vec::new()).await
-}
-
-pub async fn create_space(
-    State(state): State<AppState>,
-    viewer: Viewer,
-    Form(fields): Form<Vec<(String, String)>>,
-) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/spaces/new");
-    let form = SpaceForm::from_fields(&fields);
-    let db = state.db();
-    let refuse = |problems| {
-        render_space(
-            &state,
-            &viewer,
-            StatusCode::BAD_REQUEST,
-            None,
-            form.clone(),
-            problems,
-        )
-    };
-    let settings = match form.settings(&content::sections(db).await?, &groups::list(db).await?) {
-        Ok(settings) => settings,
-        Err(problems) => return refuse(problems).await,
-    };
-    match store::add_space(db, &settings).await? {
-        Err(why) => refuse(vec![why]).await,
-        Ok(space_id) => {
-            state.changed(Change::SpaceChanged { space_id }).await?;
-            Ok(see_other("/admin/spaces?done=saved"))
-        }
-    }
+    admins_only!(state, viewer, "/spaces/new");
+    Ok(see_other("/spaces/new"))
 }
 
 pub async fn space_page(
@@ -505,81 +291,7 @@ pub async fn space_page(
     let Some(space) = content::space_by_id(state.db(), &viewer, id).await? else {
         return web::not_found(&state, &viewer).await;
     };
-    let form = SpaceForm::from_settings(&space.settings());
-    render_space(&state, &viewer, StatusCode::OK, Some(id), form, Vec::new()).await
-}
-
-pub async fn update_space(
-    State(state): State<AppState>,
-    viewer: Viewer,
-    Path(id): Path<String>,
-    Form(fields): Form<Vec<(String, String)>>,
-) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/spaces");
-    let Some(id) = parse_id(&id) else {
-        return web::not_found(&state, &viewer).await;
-    };
-    let db = state.db();
-    if content::space_by_id(db, &viewer, id).await?.is_none() {
-        return web::not_found(&state, &viewer).await;
-    }
-    let form = SpaceForm::from_fields(&fields);
-    let refuse = |problems| {
-        render_space(
-            &state,
-            &viewer,
-            StatusCode::BAD_REQUEST,
-            Some(id),
-            form.clone(),
-            problems,
-        )
-    };
-    let settings = match form.settings(&content::sections(db).await?, &groups::list(db).await?) {
-        Ok(settings) => settings,
-        Err(problems) => return refuse(problems).await,
-    };
-    match store::update_space(db, id, &settings).await? {
-        Err(why) => refuse(vec![why]).await,
-        Ok(false) => web::not_found(&state, &viewer).await,
-        Ok(true) => {
-            // A new read level changes every page that could show the
-            // space's threads; this clears them all.
-            state.changed(Change::SpaceChanged { space_id: id }).await?;
-            Ok(see_other("/admin/spaces?done=saved"))
-        }
-    }
-}
-
-pub async fn delete_space(
-    State(state): State<AppState>,
-    viewer: Viewer,
-    Path(id): Path<String>,
-) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/spaces");
-    let Some(id) = parse_id(&id) else {
-        return web::not_found(&state, &viewer).await;
-    };
-    match store::delete_space(state.db(), id).await? {
-        Ok(true) => {
-            state.changed(Change::SpaceChanged { space_id: id }).await?;
-            Ok(see_other("/admin/spaces?done=deleted"))
-        }
-        Ok(false) => web::not_found(&state, &viewer).await,
-        Err(why) => {
-            let Some(space) = content::space_by_id(state.db(), &viewer, id).await? else {
-                return web::not_found(&state, &viewer).await;
-            };
-            render_space(
-                &state,
-                &viewer,
-                StatusCode::BAD_REQUEST,
-                Some(id),
-                SpaceForm::from_settings(&space.settings()),
-                vec![why],
-            )
-            .await
-        }
-    }
+    Ok(see_other(&format!("/c/{}/settings", space.space.slug)))
 }
 
 // ---------------------------------------------------------------------------
@@ -796,6 +508,8 @@ pub async fn update_group(
 struct DeleteGroupTemplate {
     layout: Layout,
     detail: GroupDetail,
+    /// Why it wasn't deleted, after trying.
+    problem: Option<String>,
 }
 
 /// Asks before deleting a group, saying who and what it will affect.
@@ -814,6 +528,7 @@ pub async fn delete_group_page(
         &DeleteGroupTemplate {
             layout: Layout::load(&state, &viewer, Nav::Admin).await?,
             detail,
+            problem: None,
         },
     )
 }
@@ -824,14 +539,22 @@ pub async fn delete_group(
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
     admins_only!(state, viewer, "/admin/groups");
-    let deleted = match parse_id(&id) {
-        Some(id) => groups::delete(state.db(), id).await?,
-        None => false,
+    let detail = match find_group(&state, &viewer, &id).await? {
+        Ok(detail) => detail,
+        Err(response) => return Ok(response),
     };
-    if !deleted {
-        return web::not_found(&state, &viewer).await;
+    match groups::delete(state.db(), detail.group.id).await? {
+        Ok(true) => Ok(see_other("/admin/groups?done=deleted")),
+        Ok(false) => web::not_found(&state, &viewer).await,
+        Err(why) => render(
+            StatusCode::BAD_REQUEST,
+            &DeleteGroupTemplate {
+                layout: Layout::load(&state, &viewer, Nav::Admin).await?,
+                detail,
+                problem: Some(why),
+            },
+        ),
     }
-    Ok(see_other("/admin/groups?done=deleted"))
 }
 
 #[derive(Deserialize, Default)]

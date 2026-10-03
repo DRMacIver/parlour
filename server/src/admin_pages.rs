@@ -20,7 +20,7 @@ use crate::emails;
 use crate::error::AppError;
 use crate::mail::{self, SmtpSecurity, SmtpSettings};
 use crate::pagination::{PageItem, Pagination};
-use crate::settings::{self, InvitePolicy, RegistrationMode};
+use crate::settings::{self, InvitePolicy, RegistrationMode, SpaceCreation};
 use crate::users::{self, AdminMember, RoleChange};
 use crate::viewer::{UserCtx, Viewer};
 use crate::web::{self, Layout, Nav, render, see_other};
@@ -177,6 +177,7 @@ struct AdminSettingsTemplate {
     mode: RegistrationMode,
     invite_who: String,
     invite_days: u32,
+    space_creation: SpaceCreation,
     smtp: SmtpFields,
     smtp_has_password: bool,
     smtp_from_env: bool,
@@ -219,6 +220,7 @@ async fn render_settings(
             mode: RegistrationMode::parse(&form.registration_mode).unwrap_or_default(),
             invite_who: form.invite_who.clone(),
             invite_days: form.invite_days.trim().parse().unwrap_or(invite_days),
+            space_creation: SpaceCreation::parse(&form.space_creation).unwrap_or_default(),
             smtp: SmtpFields {
                 smtp_password: String::new(),
                 ..form.smtp.clone()
@@ -235,6 +237,7 @@ async fn render_settings(
             mode: settings::registration_mode(db).await?,
             invite_who: invite_who.to_owned(),
             invite_days,
+            space_creation: settings::space_creation(db).await?,
             smtp: SmtpFields::from_settings(saved_smtp.as_ref()),
             smtp_has_password: saved_smtp.as_ref().is_some_and(|s| !s.password.is_empty()),
             smtp_from_env: saved_smtp.is_none() && state.config().smtp.is_some(),
@@ -276,6 +279,7 @@ pub struct SettingsForm {
     registration_mode: String,
     invite_who: String,
     invite_days: String,
+    space_creation: String,
     #[serde(flatten)]
     smtp: SmtpFields,
 }
@@ -316,6 +320,14 @@ pub async fn save_settings(
             None
         }
     };
+    // The setting arrived with v0.2; a form without it keeps the default.
+    let space_creation = match form.space_creation.as_str() {
+        "" => Some(SpaceCreation::default()),
+        other => SpaceCreation::parse(other),
+    };
+    if space_creation.is_none() {
+        problems.push("Choose who can make spaces.".to_owned());
+    }
     let saved = mail::saved_smtp_settings(state.db()).await?;
     let smtp = match choose_smtp(&form.smtp, saved.as_ref(), state.config().smtp.as_ref()) {
         Ok(smtp) => smtp,
@@ -324,7 +336,7 @@ pub async fn save_settings(
             None
         }
     };
-    let (Some(mode), Some(policy)) = (mode, policy) else {
+    let (Some(mode), Some(policy), Some(space_creation)) = (mode, policy, space_creation) else {
         return render_settings(
             &state,
             &viewer,
@@ -352,6 +364,7 @@ pub async fn save_settings(
     settings::set(&mut tx, "site_name", &site_name).await?;
     settings::set(&mut tx, "registration_mode", &mode).await?;
     settings::set(&mut tx, "invite_policy", &policy).await?;
+    settings::set(&mut tx, "space_creation", &space_creation).await?;
     save_smtp(&mut tx, smtp.as_ref()).await?;
     tx.commit().await?;
     state.changed(Change::SiteChanged).await?;

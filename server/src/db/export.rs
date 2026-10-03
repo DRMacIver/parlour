@@ -55,7 +55,7 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
            ORDER BY p.created_at, p.id"#,
         user_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         filter.dm_viewer,
     )
     .fetch_all(pool)
@@ -96,7 +96,7 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
            ORDER BY h.created_at, h.id"#,
         user_id,
         &filter.visibilities,
-        &filter.group_space_ids,
+        &filter.restricted_space_ids,
         filter.dm_viewer,
     )
     .fetch_all(pool)

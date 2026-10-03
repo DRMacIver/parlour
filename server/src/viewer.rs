@@ -45,7 +45,7 @@ pub struct UserCtx {
     pub group_ids: Vec<i64>,
     /// The spaces those groups may read. They matter only while a
     /// space's read level is `groups`.
-    pub group_space_ids: Vec<i64>,
+    pub restricted_space_ids: Vec<i64>,
     /// Until when a moderator has silenced this member: they can read but
     /// not write (DESIGN.md §8).
     pub silenced_until: Option<DateTime<Utc>>,
@@ -92,7 +92,7 @@ pub struct ReadFilter {
     /// Visibility levels readable everywhere (`$vis` in `thread_readable`).
     pub visibilities: Vec<String>,
     /// Group-restricted spaces this viewer may read.
-    pub group_space_ids: Vec<i64>,
+    pub restricted_space_ids: Vec<i64>,
     /// Who the viewer is, for `dm_readable`: `None` for visitors and for
     /// suspended members, who read no conversations.
     pub dm_viewer: Option<i64>,
@@ -105,13 +105,13 @@ impl Viewer {
         let user = self.user().filter(|user| !user.is_suspended());
         let levels: &[&str] = match user {
             None => &["public"],
-            Some(user) if user.role.is_staff() => &["public", "members", "groups"],
+            Some(user) if user.role.is_staff() => &["public", "members", "restricted"],
             Some(_) => &["public", "members"],
         };
         ReadFilter {
             visibilities: levels.iter().map(|level| (*level).to_owned()).collect(),
-            group_space_ids: user
-                .map(|user| user.group_space_ids.clone())
+            restricted_space_ids: user
+                .map(|user| user.restricted_space_ids.clone())
                 .unwrap_or_default(),
             dm_viewer: user.map(|user| user.id),
         }
@@ -192,7 +192,7 @@ mod tests {
             role,
             created_at: Utc::now(),
             group_ids: Vec::new(),
-            group_space_ids: Vec::new(),
+            restricted_space_ids: Vec::new(),
             silenced_until: None,
             suspended_until: None,
             blocked_user_ids: Vec::new(),
@@ -224,7 +224,7 @@ mod tests {
             Viewer::Anonymous.filter(),
             ReadFilter {
                 visibilities: vec!["public".into()],
-                group_space_ids: vec![],
+                restricted_space_ids: vec![],
                 dm_viewer: None,
             }
         );
@@ -239,7 +239,7 @@ mod tests {
         for role in [Role::Moderator, Role::Admin] {
             assert_eq!(
                 user(role).filter().visibilities,
-                vec!["public", "members", "groups"]
+                vec!["public", "members", "restricted"]
             );
         }
         assert!(!user(Role::User).is_staff());
@@ -247,12 +247,12 @@ mod tests {
             unreachable!()
         };
         ctx.group_ids = vec![4];
-        ctx.group_space_ids = vec![7, 9];
+        ctx.restricted_space_ids = vec![7, 9];
         assert_eq!(
             Viewer::User(ctx).filter(),
             ReadFilter {
                 visibilities: vec!["public".into(), "members".into()],
-                group_space_ids: vec![7, 9],
+                restricted_space_ids: vec![7, 9],
                 dm_viewer: Some(1),
             }
         );
@@ -267,7 +267,7 @@ mod tests {
             let Viewer::User(mut ctx) = user(role) else {
                 unreachable!()
             };
-            ctx.group_space_ids = vec![7];
+            ctx.restricted_space_ids = vec![7];
             ctx.suspended_until = Some(Utc::now() + chrono::Duration::days(1));
             let viewer = Viewer::User(ctx.clone());
             assert_eq!(viewer.filter(), Viewer::Anonymous.filter());

@@ -6,6 +6,7 @@ mod common;
 
 use axum::http::StatusCode;
 use common::Forum;
+use parlour::permissions::Grant;
 use sqlx::PgPool;
 
 struct Club {
@@ -146,8 +147,18 @@ async fn the_index_says_who_can_read_each_space(pool: PgPool) {
     assert!(space.contains("Organisers group"));
     let lounge = club.f.page_as("/c/lounge", &club.ruth_cookie).await;
     assert!(lounge.contains("Members only"));
-    // Staff see group spaces that no group may read, as staff only.
+    // A space whose read grant names nobody is for "chosen members" (none
+    // yet); one for staff says so.
     club.f.restrict(club.planning, &[], None).await;
+    let index = club.f.page_as("/", &club.staff_cookie).await;
+    assert!(
+        access_flags(&index)
+            .iter()
+            .any(|flag| flag.ends_with(">Chosen members") && flag.contains(LOCK))
+    );
+    club.f
+        .set_grant(club.planning, "read", Grant::staff())
+        .await;
     let index = club.f.page_as("/", &club.staff_cookie).await;
     assert!(
         access_flags(&index)
@@ -197,10 +208,7 @@ async fn joining_and_leaving_a_group_takes_effect_at_once(pool: PgPool) {
     );
     // Opening the space to members lets everyone logged in read it.
     club.f
-        .exec(&format!(
-            "UPDATE spaces SET read_level = 'members' WHERE id = {}",
-            club.planning
-        ))
+        .set_grant(club.planning, "read", Grant::members())
         .await;
     assert_eq!(
         club.f.get_as(&path, Some(&club.ruth_cookie)).await.status,
@@ -224,24 +232,11 @@ async fn group_members_post_where_their_group_may_write(pool: PgPool) {
     let club = club(pool).await;
     // Anyone can read the notices; only organisers post them.
     let notices = club.f.space("notices", "public", None, 3).await;
-    let db = club.f.state.db();
-    let viewer = parlour::viewer::Viewer::User(
-        parlour::sessions::user_ctx(db, club.ruth)
-            .await
-            .unwrap()
-            .unwrap(),
-    );
-    let mut settings = parlour::content::space_by_id(db, &viewer, notices)
-        .await
-        .unwrap()
-        .unwrap()
-        .settings();
-    settings.write_level = "groups".into();
-    settings.write_groups = vec![club.organisers];
-    parlour::store::update_space(db, notices, &settings.clean().unwrap())
-        .await
-        .unwrap()
-        .unwrap();
+    for verb in ["reply", "start"] {
+        club.f
+            .set_grant(notices, verb, Grant::listed([club.organisers], []))
+            .await;
+    }
     assert_eq!(
         post(&club.f, &club.jonah_cookie).await,
         StatusCode::FORBIDDEN
@@ -257,9 +252,10 @@ async fn group_members_post_where_their_group_may_write(pool: PgPool) {
         post(&club.f, &club.ruth_cookie).await,
         StatusCode::SEE_OTHER
     );
+    // Staff post only where a grant lets them (DESIGN.md §3.1).
     assert_eq!(
         post(&club.f, &club.staff_cookie).await,
-        StatusCode::SEE_OTHER
+        StatusCode::FORBIDDEN
     );
     // Group members also post in a group space their group may read.
     let response = club

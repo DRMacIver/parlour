@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.id, c.slug, c.name, c.description, c.read_level, s.name AS \"section_name?\",\n               array(SELECT g.name FROM space_groups cg JOIN groups g ON g.id = cg.group_id\n                     WHERE cg.space_id = c.id AND cg.access = 'read' AND c.read_level = 'groups'\n                     ORDER BY lower(g.name), g.id) AS \"group_names!\",\n               counts.threads AS \"thread_count!\", counts.posts AS \"post_count!\",\n               lt.id AS \"last_thread_id?\", lt.title AS \"last_thread_title?\", lt.slug AS \"last_thread_slug?\",\n               coalesce(lp.created_at, lt.last_post_at) AS \"last_at?\", lp.id AS \"last_post_id?\",\n               lu.id AS \"last_user_id?\", lu.username AS \"last_username?\", lu.display_name AS \"last_display_name?\"\n        FROM spaces c\n        LEFT JOIN sections s ON s.id = c.section_id\n        CROSS JOIN LATERAL (\n            SELECT count(*) AS threads, coalesce(sum(t.last_seq), 0)::bigint AS posts\n            FROM threads t\n            WHERE t.space_id = c.id AND t.deleted_at IS NULL\n              AND thread_readable(t.visibility, t.space_id, $1, $2)\n        ) counts\n        LEFT JOIN LATERAL (\n            SELECT t.id, t.title, t.slug, t.last_post_at\n            FROM threads t\n            WHERE t.space_id = c.id AND t.deleted_at IS NULL\n              AND thread_readable(t.visibility, t.space_id, $1, $2)\n            ORDER BY t.last_post_at DESC, t.id DESC\n            LIMIT 1\n        ) lt ON true\n        LEFT JOIN LATERAL (\n            SELECT p.id, p.author_id, p.created_at FROM posts p\n            WHERE p.thread_id = lt.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL\n            ORDER BY p.seq DESC\n            LIMIT 1\n        ) lp ON true\n        LEFT JOIN users lu ON lu.id = lp.author_id\n        WHERE space_readable(c.read_level, c.id, $1, $2)\n        ORDER BY s.position NULLS FIRST, s.id NULLS FIRST, c.position, c.id\n        ",
+  "query": "\n        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level, s.name AS \"section_name?\",\n               array(SELECT g.name FROM groups g\n                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)\n                     ORDER BY lower(g.name), g.id) AS \"group_names!\",\n               counts.threads AS \"thread_count!\", counts.posts AS \"post_count!\",\n               lt.id AS \"last_thread_id?\", lt.title AS \"last_thread_title?\", lt.slug AS \"last_thread_slug?\",\n               coalesce(lp.created_at, lt.last_post_at) AS \"last_at?\", lp.id AS \"last_post_id?\",\n               lu.id AS \"last_user_id?\", lu.username AS \"last_username?\", lu.display_name AS \"last_display_name?\"\n        FROM spaces c\n        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'\n        LEFT JOIN sections s ON s.id = c.section_id\n        CROSS JOIN LATERAL (\n            SELECT count(*) AS threads, coalesce(sum(t.last_seq), 0)::bigint AS posts\n            FROM threads t\n            WHERE t.space_id = c.id AND t.deleted_at IS NULL\n              AND thread_readable(t.visibility, t.space_id, $1, $2)\n        ) counts\n        LEFT JOIN LATERAL (\n            SELECT t.id, t.title, t.slug, t.last_post_at\n            FROM threads t\n            WHERE t.space_id = c.id AND t.deleted_at IS NULL\n              AND thread_readable(t.visibility, t.space_id, $1, $2)\n            ORDER BY t.last_post_at DESC, t.id DESC\n            LIMIT 1\n        ) lt ON true\n        LEFT JOIN LATERAL (\n            SELECT p.id, p.author_id, p.created_at FROM posts p\n            WHERE p.thread_id = lt.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL\n            ORDER BY p.seq DESC\n            LIMIT 1\n        ) lp ON true\n        LEFT JOIN users lu ON lu.id = lp.author_id\n        WHERE c.archived_at IS NULL AND space_readable(c.visibility, c.id, $1, $2)\n        ORDER BY s.position NULLS FIRST, s.id NULLS FIRST, c.position, c.id\n        ",
   "describe": {
     "columns": [
       {
@@ -53,8 +53,8 @@
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "spaces",
-            "name": "read_level"
+            "table": "space_grants",
+            "name": "level"
           }
         }
       },
@@ -202,5 +202,5 @@
       false
     ]
   },
-  "hash": "dc540f4d99e67bef28221ecd6ca29635c919d2cbad042ab3a3ee250fb52e0c4f"
+  "hash": "20e79d643287b586bc2b9d0626fac0cef0af7008f964398632ecce14e0700ad6"
 }

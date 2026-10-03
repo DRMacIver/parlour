@@ -13,6 +13,7 @@ use crate::db::{Handle, KEY};
 use chrono::{DateTime, Utc};
 
 use crate::markdown;
+use crate::permissions::{Grant, Level};
 
 /// Turns a title into the readable part of a thread URL.
 pub fn slugify(title: &str) -> String {
@@ -102,55 +103,112 @@ pub struct NewSpace {
     pub name: String,
     pub description: String,
     pub position: i32,
-    /// `public`, `members` or `groups`.
-    pub read_level: String,
-    /// `members`, `groups` or `staff`.
-    pub write_level: String,
+    pub created_by: Option<i64>,
+    pub read: Grant,
+    pub reply: Grant,
+    pub start: Grant,
+    pub administer: Grant,
 }
 
+impl NewSpace {
+    /// A space described the short way tests and the seed do: a level for
+    /// reading (`public`, `members`, `staff` or `listed`) and one for both
+    /// replying and starting threads (`members`, `staff` or `listed`),
+    /// naming nobody yet. Staff alone administer it.
+    pub fn with_levels(
+        section_id: Option<i64>,
+        slug: &str,
+        name: &str,
+        description: &str,
+        position: i32,
+        read_level: &str,
+        write_level: &str,
+    ) -> NewSpace {
+        let level = |level: &str| match level {
+            "groups" => Grant::listed([], []),
+            other => Grant::from_parts(other, &[], &[]),
+        };
+        NewSpace {
+            section_id,
+            slug: slug.to_owned(),
+            name: name.to_owned(),
+            description: description.to_owned(),
+            position,
+            created_by: None,
+            read: level(read_level),
+            reply: level(write_level),
+            start: level(write_level),
+            administer: Grant::staff(),
+        }
+    }
+}
+
+/// Creates a space with its grants, without checking anything.
 pub async fn create_space<'c>(db: impl Handle<'c>, space: &NewSpace) -> sqlx::Result<i64> {
-    let mut conn = db.open(KEY).acquire().await?;
-    sqlx::query_scalar!(
-        r#"INSERT INTO spaces (section_id, slug, name, description, position, read_level, write_level)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"#,
+    let mut tx = db.open(KEY).begin().await?;
+    let id = sqlx::query_scalar!(
+        r#"INSERT INTO spaces (section_id, slug, name, description, position, created_by, visibility)
+           VALUES ($1, $2, $3, $4, $5, $6, 'restricted') RETURNING id"#,
         space.section_id,
         space.slug,
         space.name,
         space.description,
         space.position,
-        space.read_level,
-        space.write_level,
+        space.created_by,
     )
-    .fetch_one(&mut *conn)
-    .await
+    .fetch_one(&mut *tx)
+    .await?;
+    for (verb, grant) in [
+        ("read", &space.read),
+        ("reply", &space.reply),
+        ("start", &space.start),
+        ("administer", &space.administer),
+    ] {
+        upsert_grant(&mut tx, id, verb, grant).await?;
+    }
+    tx.commit().await?;
+    Ok(id)
 }
 
 // ---------------------------------------------------------------------------
-// Sections and spaces, as admins manage them
+// Spaces, as their administrators manage them
 
-pub const READ_LEVELS: [&str; 3] = ["public", "members", "groups"];
-pub const WRITE_LEVELS: [&str; 3] = ["members", "groups", "staff"];
 pub const MAX_SECTION_NAME_CHARS: usize = 80;
 pub const MAX_SPACE_NAME_CHARS: usize = 80;
 pub const MAX_SPACE_DESCRIPTION_CHARS: usize = 500;
 pub const MAX_SPACE_SLUG_CHARS: usize = 40;
 
-/// Everything about a space that an admin sets.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// Everything about a space that its administrators set.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpaceSettings {
     pub section_id: Option<i64>,
     pub slug: String,
     pub name: String,
     pub description: String,
     pub position: i32,
-    /// `public`, `members` or `groups`.
-    pub read_level: String,
-    /// `members`, `groups` or `staff`.
-    pub write_level: String,
-    /// With the `groups` read level, the groups whose members may read.
-    pub read_groups: Vec<i64>,
-    /// With the `groups` write level, the groups whose members may post.
-    pub write_groups: Vec<i64>,
+    pub read: Grant,
+    pub reply: Grant,
+    pub start: Grant,
+    pub administer: Grant,
+}
+
+impl Default for SpaceSettings {
+    /// The defaults for a new space (DESIGN.md §3.1): members read, reply
+    /// and start threads; nobody but staff administers until the maker is
+    /// named.
+    fn default() -> SpaceSettings {
+        SpaceSettings {
+            section_id: None,
+            slug: String::new(),
+            name: String::new(),
+            description: String::new(),
+            position: 0,
+            read: Grant::members(),
+            reply: Grant::members(),
+            start: Grant::members(),
+            administer: Grant::listed([], []),
+        }
+    }
 }
 
 fn one_line(text: &str) -> String {
@@ -161,31 +219,19 @@ fn one_line(text: &str) -> String {
 }
 
 impl SpaceSettings {
-    /// Tidies the settings, returning the problems with them if any. Group
-    /// lists are sorted and deduplicated, and dropped for levels that don't
-    /// use them.
+    /// Tidies the settings, returning the problems with them if any.
     pub fn clean(&self) -> Result<SpaceSettings, Vec<String>> {
-        let mut clean = SpaceSettings {
+        let clean = SpaceSettings {
             section_id: self.section_id,
             slug: self.slug.trim().to_ascii_lowercase(),
             name: one_line(&self.name),
             description: one_line(&self.description),
             position: self.position,
-            read_level: self.read_level.clone(),
-            write_level: self.write_level.clone(),
-            read_groups: self.read_groups.clone(),
-            write_groups: self.write_groups.clone(),
+            read: self.read.clone(),
+            reply: self.reply.clone(),
+            start: self.start.clone(),
+            administer: self.administer.clone(),
         };
-        for groups in [&mut clean.read_groups, &mut clean.write_groups] {
-            groups.sort();
-            groups.dedup();
-        }
-        if clean.read_level != "groups" {
-            clean.read_groups.clear();
-        }
-        if clean.write_level != "groups" {
-            clean.write_groups.clear();
-        }
         let mut problems = Vec::new();
         if !crate::groups::valid_slug(&clean.slug) || clean.slug.len() > MAX_SPACE_SLUG_CHARS {
             problems.push(format!(
@@ -202,22 +248,11 @@ impl SpaceSettings {
                 "Keep the description to {MAX_SPACE_DESCRIPTION_CHARS} characters."
             ));
         }
-        if !READ_LEVELS.contains(&clean.read_level.as_str()) {
-            problems.push("Choose who can read the space.".to_owned());
-        }
-        if !WRITE_LEVELS.contains(&clean.write_level.as_str()) {
-            problems.push("Choose who can post in the space.".to_owned());
-        }
-        // Nobody can post where they can't read, so a group that may post
-        // but not read would be a mistake.
-        if clean.read_level == "groups"
-            && clean.write_level == "groups"
-            && !clean
-                .write_groups
-                .iter()
-                .all(|g| clean.read_groups.contains(g))
+        if [&clean.reply, &clean.start, &clean.administer]
+            .iter()
+            .any(|grant| grant.level == Level::Public)
         {
-            problems.push("Groups that can post must also be able to read.".to_owned());
+            problems.push("Only reading can be open to everyone.".to_owned());
         }
         if problems.is_empty() {
             Ok(clean)
@@ -225,54 +260,91 @@ impl SpaceSettings {
             Err(problems)
         }
     }
+
+    fn grants(&self) -> [(&'static str, &Grant); 4] {
+        [
+            ("read", &self.read),
+            ("reply", &self.reply),
+            ("start", &self.start),
+            ("administer", &self.administer),
+        ]
+    }
 }
 
-const SPACE_SLUG_TAKEN: &str = "Another space has that address.";
+pub const SPACE_SLUG_TAKEN: &str = "Another space has that address.";
+pub const SPACE_SLUG_IS_USERNAME: &str =
+    "That address is a member’s name. Space addresses and usernames can’t be the same.";
 
 fn slug_clash(err: &sqlx::Error) -> bool {
     matches!(err, sqlx::Error::Database(err) if err.is_unique_violation())
 }
 
-/// Replaces the groups named for a space.
-async fn set_space_groups(
+/// Whether a space address is some member's name, now or before they
+/// deleted their account (DESIGN.md §3.1: the two share one namespace).
+async fn slug_is_username(conn: &mut sqlx::PgConnection, slug: &str) -> sqlx::Result<bool> {
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM users WHERE username = $1::citext)
+               OR EXISTS (SELECT 1 FROM retired_usernames WHERE username_hash = username_hash($1)) AS "taken!""#,
+        slug
+    )
+    .fetch_one(conn)
+    .await
+}
+
+async fn upsert_grant(
     conn: &mut sqlx::PgConnection,
     space_id: i64,
-    settings: &SpaceSettings,
+    verb: &str,
+    grant: &Grant,
 ) -> sqlx::Result<()> {
-    sqlx::query!("DELETE FROM space_groups WHERE space_id = $1", space_id)
-        .execute(&mut *conn)
-        .await?;
     sqlx::query!(
-        "INSERT INTO space_groups (space_id, group_id, access)
-         SELECT $1::bigint, g, 'read' FROM unnest($2::bigint[]) g
-         UNION ALL
-         SELECT $1::bigint, g, 'write' FROM unnest($3::bigint[]) g",
+        "INSERT INTO space_grants (space_id, verb, level, group_ids, user_ids)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (space_id, verb)
+         DO UPDATE SET level = EXCLUDED.level, group_ids = EXCLUDED.group_ids, user_ids = EXCLUDED.user_ids",
         space_id,
-        &settings.read_groups,
-        &settings.write_groups,
+        verb,
+        grant.level.as_str(),
+        &grant.group_ids(),
+        &grant.user_ids(),
     )
-    .execute(&mut *conn)
+    .execute(conn)
     .await?;
     Ok(())
 }
 
-/// Makes a space from settings that [`SpaceSettings::clean`]
-/// accepted. Returns the problem if another space has its address.
+/// Replaces one of a space's grants, without checking anything.
+pub async fn set_grant<'c>(
+    db: impl Handle<'c>,
+    space_id: i64,
+    verb: &str,
+    grant: &Grant,
+) -> sqlx::Result<()> {
+    let mut conn = db.open(KEY).acquire().await?;
+    upsert_grant(&mut conn, space_id, verb, grant).await
+}
+
+/// Makes a space from settings that [`SpaceSettings::clean`] accepted, by
+/// `created_by` if a member made it. Returns the problem if its address is
+/// taken or is a member's name.
 pub async fn add_space<'c>(
     db: impl Handle<'c>,
     settings: &SpaceSettings,
+    created_by: Option<i64>,
 ) -> sqlx::Result<Result<i64, String>> {
     let mut tx = db.open(KEY).begin().await?;
+    if slug_is_username(&mut tx, &settings.slug).await? {
+        return Ok(Err(SPACE_SLUG_IS_USERNAME.to_owned()));
+    }
     let inserted = sqlx::query_scalar!(
-        r#"INSERT INTO spaces (section_id, slug, name, description, position, read_level, write_level)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"#,
+        r#"INSERT INTO spaces (section_id, slug, name, description, position, created_by, visibility)
+           VALUES ($1, $2, $3, $4, $5, $6, 'restricted') RETURNING id"#,
         settings.section_id,
         settings.slug,
         settings.name,
         settings.description,
         settings.position,
-        settings.read_level,
-        settings.write_level,
+        created_by,
     )
     .fetch_one(&mut *tx)
     .await;
@@ -281,23 +353,34 @@ pub async fn add_space<'c>(
         Err(err) if slug_clash(&err) => return Ok(Err(SPACE_SLUG_TAKEN.to_owned())),
         Err(err) => return Err(err),
     };
-    set_space_groups(&mut tx, id, settings).await?;
+    for (verb, grant) in settings.grants() {
+        upsert_grant(&mut tx, id, verb, grant).await?;
+    }
     tx.commit().await?;
     Ok(Ok(id))
 }
 
-/// Changes a space to settings that [`SpaceSettings::clean`]
-/// accepted. Its threads' visibility follows its new read level (a trigger
-/// sees to that). `Ok(Ok(false))` if there is no such space.
+/// Changes a space to settings that [`SpaceSettings::clean`] accepted.
+/// Its threads' visibility follows its new read grant (triggers see to
+/// that). `Ok(Ok(false))` if there is no such space.
 pub async fn update_space<'c>(
     db: impl Handle<'c>,
     id: i64,
     settings: &SpaceSettings,
 ) -> sqlx::Result<Result<bool, String>> {
     let mut tx = db.open(KEY).begin().await?;
+    let current_slug = sqlx::query_scalar!("SELECT slug FROM spaces WHERE id = $1", id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(current_slug) = current_slug else {
+        return Ok(Ok(false));
+    };
+    if current_slug != settings.slug && slug_is_username(&mut tx, &settings.slug).await? {
+        return Ok(Err(SPACE_SLUG_IS_USERNAME.to_owned()));
+    }
     let updated = sqlx::query!(
         r#"UPDATE spaces SET section_id = $2, slug = $3, name = $4, description = $5, position = $6,
-                  read_level = $7, write_level = $8, version = version + 1
+                  version = version + 1
            WHERE id = $1"#,
         id,
         settings.section_id,
@@ -305,8 +388,6 @@ pub async fn update_space<'c>(
         settings.name,
         settings.description,
         settings.position,
-        settings.read_level,
-        settings.write_level,
     )
     .execute(&mut *tx)
     .await;
@@ -316,9 +397,25 @@ pub async fn update_space<'c>(
         Err(err) if slug_clash(&err) => return Ok(Err(SPACE_SLUG_TAKEN.to_owned())),
         Err(err) => return Err(err),
     }
-    set_space_groups(&mut tx, id, settings).await?;
+    for (verb, grant) in settings.grants() {
+        upsert_grant(&mut tx, id, verb, grant).await?;
+    }
     tx.commit().await?;
     Ok(Ok(true))
+}
+
+/// Archives a space (read-only, out of the index) or opens it again.
+/// Returns whether anything changed.
+pub async fn set_archived(db: &crate::db::Db, id: i64, archived: bool) -> sqlx::Result<bool> {
+    let done = sqlx::query!(
+        "UPDATE spaces SET archived_at = CASE WHEN $2 THEN now() END, version = version + 1
+         WHERE id = $1 AND (archived_at IS NULL) = $2",
+        id,
+        archived
+    )
+    .execute(db.pool())
+    .await?;
+    Ok(done.rows_affected() == 1)
 }
 
 /// Deletes a space that has never had threads. Returns the problem if
@@ -342,7 +439,6 @@ pub async fn delete_space(db: &crate::db::Db, id: i64) -> sqlx::Result<Result<bo
     tx.commit().await?;
     Ok(Ok(done.rows_affected() == 1))
 }
-
 /// Tidies a section name, or says what is wrong with it.
 pub fn clean_section_name(name: &str) -> Result<String, String> {
     let name = one_line(name);

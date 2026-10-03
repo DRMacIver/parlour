@@ -57,7 +57,7 @@ test("an admin gives a new group a space of its own", async ({ page, browser }) 
   await logIn(page, admin());
 
   // The admin pages for spaces and groups fit the screen.
-  for (const path of ["/admin/spaces", "/admin/groups", "/admin/spaces/new"]) {
+  for (const path of ["/admin/spaces", "/admin/groups", "/spaces", "/spaces/new"]) {
     const response = await page.goto(path);
     expect(response?.status(), path).toBe(200);
     await expectFits(page);
@@ -82,7 +82,14 @@ test("an admin gives a new group a space of its own", async ({ page, browser }) 
   await page.locator("form a", { hasText: "Keep it" }).click();
   await expect(page.locator("h1")).toHaveText(groupName);
 
-  await page.goto("/admin/spaces/new");
+  // Spaces are made with a name and address; who reads them is set in
+  // the space's settings, where the maker lands.
+  await page.goto("/spaces/new");
+  await page.fill("#name", `Private ${project}`);
+  await page.fill("#slug", slug);
+  await page.locator("form[action='/spaces/new'] button[type=submit]").click();
+  await expect(page.locator(".notice-success")).toContainText("The space is ready");
+  await expectFits(page);
   // Each choice's text starts beside its radio or checkbox, wrapping
   // under itself rather than dropping below the control.
   const misplaced = await page.evaluate(() =>
@@ -96,12 +103,12 @@ test("an admin gives a new group a space of its own", async ({ page, browser }) 
     }),
   );
   expect(misplaced).toEqual([]);
-  await page.fill("#name", `Private ${project}`);
-  await page.fill("#slug", slug);
-  await page.check("input[name=read_level][value=groups]");
+  await page.check("input[name=read_level][value=listed]");
   await page.locator("label.choice", { hasText: groupName }).locator("input[name=read_group]").check();
-  await page.locator("form[action='/admin/spaces/new'] button[type=submit]").click();
+  await page.locator(`form[action='/c/${slug}/settings'] button[type=submit]`).click();
   await expect(page.locator(".notice-success")).toHaveText("Saved.");
+  await expectFits(page);
+  await page.goto("/admin/spaces");
   await expect(page.locator(".admin-spaces a", { hasText: `Private ${project}` })).toBeVisible();
   await expectFits(page);
 
@@ -151,14 +158,16 @@ async function longGroupNamesFit(page: Page, browser: Browser) {
     { slug: `wide-long-${project}`, groups: ids.slice(3) },
   ];
   for (const { slug, groups } of spaces) {
-    await page.goto("/admin/spaces/new");
+    await page.goto("/spaces/new");
     await page.fill("#name", `Planning ${slug}`);
     await page.fill("#slug", slug);
-    await page.check("input[name=read_level][value=groups]");
+    await page.locator("form[action='/spaces/new'] button[type=submit]").click();
+    await expect(page.locator(".notice-success")).toContainText("The space is ready");
+    await page.check("input[name=read_level][value=listed]");
     for (const id of groups) {
       await page.check(`input[name=read_group][value='${id}']`);
     }
-    await page.locator("form[action='/admin/spaces/new'] button[type=submit]").click();
+    await page.locator(`form[action='/c/${slug}/settings'] button[type=submit]`).click();
     await expect(page.locator(".notice-success")).toHaveText("Saved.");
   }
   await expectFits(page);
