@@ -14,7 +14,7 @@ These are choices the agents made that you should confirm or change. Each one is
 6. **Moderators granting groups.** Moderators (not only admins) can create invites that add people to any group. Should this be admin-only?
 7. **Account enumeration.** The magic-link code endpoint (`POST /login/code`) can reveal whether an email address has an account (410 vs 401 "N tries left").
 8. **Leaving conversations.** Leaving a conversation is permanent: nobody, staff included, can add the person back. People can only be added to conversations that started with 3 or more people.
-9. **Staff and DMs.** Staff can't read DMs they're not in unless a message is reported; reporting opens that conversation to staff permanently. This resolves the conflict between DESIGN §3.1 ("staff see everything") and §3.7.
+9. **Staff and DMs.** Staff can't read DMs they're not in unless a message is reported; reporting opens that conversation to staff permanently. This resolved the conflict between DESIGN v0.1 §3.1 ("staff see everything") and §3.7. **Superseded by DESIGN v0.2 §8:** a report carries no content, and a staff member opening it breaks glass for 72 hours, logged and announced to the participants.
 10. **Unread for new members.** Threads a member has never opened count as entirely unread, so a new member sees everything as new until they use "Mark all read".
 11. **Times.** All times are shown as absolute UTC ("1 Oct 2026, 21:14"), because relative times would go stale in the anonymous cache. A site or per-user time zone setting is still open.
 12. **Search language.** Search uses Postgres's `english` text-search configuration (stemming and stop words). Supporting other languages would need a migration.
