@@ -461,11 +461,18 @@ fn describe(row: Row, staff: bool) -> LogEntry {
                 Role::Admin => vec![text("made "), who(), text(" an admin")],
             }
         }
-        "edit_space" | "archive_space" | "unarchive_space" | "delete_space" => {
+        "edit_space"
+        | "archive_space"
+        | "unarchive_space"
+        | "delete_space"
+        | "mark_space_essential"
+        | "unmark_space_essential" => {
             let verb = match row.action.as_str() {
                 "edit_space" => "changed the settings of ",
                 "archive_space" => "archived ",
                 "unarchive_space" => "opened again ",
+                "mark_space_essential" => "made essential the space ",
+                "unmark_space_essential" => "made no longer essential the space ",
                 _ => "deleted the space ",
             };
             let name = row.details["name"].as_str().unwrap_or("a space").to_owned();

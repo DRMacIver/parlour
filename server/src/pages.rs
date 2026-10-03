@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 
 use crate::AppState;
 use crate::content::{
-    self, Deps, Embed, IndexSection, LATEST_ON_INDEX, POSTS_PER_PAGE, PostBody, ReactionType,
+    self, Deps, Embed, FrontPage, LATEST_ON_INDEX, POSTS_PER_PAGE, PostBody, ReactionType,
     SpacePage, THREADS_PER_PAGE, ThreadPage, ThreadRow, page_count, page_of_seq,
 };
 use crate::error::AppError;
@@ -72,7 +72,7 @@ impl ThreadRow {
 #[template(path = "index.html")]
 struct IndexTemplate {
     layout: Layout,
-    sections: Vec<IndexSection>,
+    front: FrontPage,
     latest: Vec<ThreadRow>,
 }
 
@@ -85,12 +85,12 @@ pub async fn index(
         return Ok(redirect);
     }
     let mut deps = Deps::new();
-    let sections = content::index_sections(&state.db, &viewer, &mut deps).await?;
+    let front = content::front_page(&state.db, &viewer, &mut deps).await?;
     let latest = content::latest(&state.db, &viewer, 1, LATEST_ON_INDEX, &mut deps).await?;
     cacheable(
         &IndexTemplate {
             layout: Layout::load(&state, &viewer, Nav::Index).await?,
-            sections,
+            front,
             latest: latest.threads,
         },
         &deps,

@@ -1,6 +1,6 @@
-//! Low-level writes for the content model: creating users, sections,
-//! spaces, threads and posts with their bookkeeping (post numbering,
-//! thread activity, rendered HTML) kept consistent.
+//! Low-level writes for the content model: creating users, spaces,
+//! threads and posts with their bookkeeping (post numbering, thread
+//! activity, rendered HTML, each member's layout) kept consistent.
 //!
 //! Each takes a [`Handle`]: the database, or an open transaction.
 //!
@@ -12,6 +12,7 @@
 use crate::db::{Handle, KEY};
 use chrono::{DateTime, Utc};
 
+use crate::layouts;
 use crate::markdown;
 use crate::permissions::{Grant, Level};
 
@@ -59,9 +60,11 @@ pub struct NewUser {
     pub created_at: Option<DateTime<Utc>>,
 }
 
+/// Creates an account, with its copy of the default front page
+/// (DESIGN.md §3.5).
 pub async fn create_user<'c>(db: impl Handle<'c>, user: &NewUser) -> sqlx::Result<i64> {
-    let mut conn = db.open(KEY).acquire().await?;
-    sqlx::query_scalar!(
+    let mut tx = db.open(KEY).begin().await?;
+    let id = sqlx::query_scalar!(
         r#"INSERT INTO users (username, display_name, email, role, title, pronouns, status_line,
                               location, invited_by_user_id, created_at)
            VALUES ($1, $2, $3, coalesce($4, 'user'), $5, $6, $7, $8, $9, coalesce($10, now()))
@@ -77,32 +80,18 @@ pub async fn create_user<'c>(db: impl Handle<'c>, user: &NewUser) -> sqlx::Resul
         user.invited_by_user_id,
         user.created_at,
     )
-    .fetch_one(&mut *conn)
-    .await
-}
-
-pub async fn create_section<'c>(
-    db: impl Handle<'c>,
-    name: &str,
-    position: i32,
-) -> sqlx::Result<i64> {
-    let mut conn = db.open(KEY).acquire().await?;
-    sqlx::query_scalar!(
-        "INSERT INTO sections (name, position) VALUES ($1, $2) RETURNING id",
-        name,
-        position
-    )
-    .fetch_one(&mut *conn)
-    .await
+    .fetch_one(&mut *tx)
+    .await?;
+    layouts::create_member_copy(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(id)
 }
 
 #[derive(Clone, Debug)]
 pub struct NewSpace {
-    pub section_id: Option<i64>,
     pub slug: String,
     pub name: String,
     pub description: String,
-    pub position: i32,
     pub created_by: Option<i64>,
     pub read: Grant,
     pub reply: Grant,
@@ -116,11 +105,9 @@ impl NewSpace {
     /// replying and starting threads (`members`, `staff` or `listed`),
     /// naming nobody yet. Staff alone administer it.
     pub fn with_levels(
-        section_id: Option<i64>,
         slug: &str,
         name: &str,
         description: &str,
-        position: i32,
         read_level: &str,
         write_level: &str,
     ) -> NewSpace {
@@ -129,11 +116,9 @@ impl NewSpace {
             other => Grant::from_parts(other, &[], &[]),
         };
         NewSpace {
-            section_id,
             slug: slug.to_owned(),
             name: name.to_owned(),
             description: description.to_owned(),
-            position,
             created_by: None,
             read: level(read_level),
             reply: level(write_level),
@@ -143,17 +128,16 @@ impl NewSpace {
     }
 }
 
-/// Creates a space with its grants, without checking anything.
+/// Creates a space with its grants, without checking anything. It is on
+/// nobody's front page until a layout lists it ([`crate::layouts`]).
 pub async fn create_space<'c>(db: impl Handle<'c>, space: &NewSpace) -> sqlx::Result<i64> {
     let mut tx = db.open(KEY).begin().await?;
     let id = sqlx::query_scalar!(
-        r#"INSERT INTO spaces (section_id, slug, name, description, position, created_by, visibility)
-           VALUES ($1, $2, $3, $4, $5, $6, 'restricted') RETURNING id"#,
-        space.section_id,
+        r#"INSERT INTO spaces (slug, name, description, created_by, visibility)
+           VALUES ($1, $2, $3, $4, 'restricted') RETURNING id"#,
         space.slug,
         space.name,
         space.description,
-        space.position,
         space.created_by,
     )
     .fetch_one(&mut *tx)
@@ -173,19 +157,18 @@ pub async fn create_space<'c>(db: impl Handle<'c>, space: &NewSpace) -> sqlx::Re
 // ---------------------------------------------------------------------------
 // Spaces, as their administrators manage them
 
-pub const MAX_SECTION_NAME_CHARS: usize = 80;
 pub const MAX_SPACE_NAME_CHARS: usize = 80;
 pub const MAX_SPACE_DESCRIPTION_CHARS: usize = 500;
 pub const MAX_SPACE_SLUG_CHARS: usize = 40;
 
-/// Everything about a space that its administrators set.
+/// Everything about a space that its administrators set. Where it sits
+/// on the default front page, and whether it is essential, are the
+/// admins' to say, through [`crate::layouts`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpaceSettings {
-    pub section_id: Option<i64>,
     pub slug: String,
     pub name: String,
     pub description: String,
-    pub position: i32,
     pub read: Grant,
     pub reply: Grant,
     pub start: Grant,
@@ -198,11 +181,9 @@ impl Default for SpaceSettings {
     /// named.
     fn default() -> SpaceSettings {
         SpaceSettings {
-            section_id: None,
             slug: String::new(),
             name: String::new(),
             description: String::new(),
-            position: 0,
             read: Grant::members(),
             reply: Grant::members(),
             start: Grant::members(),
@@ -222,11 +203,9 @@ impl SpaceSettings {
     /// Tidies the settings, returning the problems with them if any.
     pub fn clean(&self) -> Result<SpaceSettings, Vec<String>> {
         let clean = SpaceSettings {
-            section_id: self.section_id,
             slug: self.slug.trim().to_ascii_lowercase(),
             name: one_line(&self.name),
             description: one_line(&self.description),
-            position: self.position,
             read: self.read.clone(),
             reply: self.reply.clone(),
             start: self.start.clone(),
@@ -337,13 +316,11 @@ pub async fn add_space<'c>(
         return Ok(Err(SPACE_SLUG_IS_USERNAME.to_owned()));
     }
     let inserted = sqlx::query_scalar!(
-        r#"INSERT INTO spaces (section_id, slug, name, description, position, created_by, visibility)
-           VALUES ($1, $2, $3, $4, $5, $6, 'restricted') RETURNING id"#,
-        settings.section_id,
+        r#"INSERT INTO spaces (slug, name, description, created_by, visibility)
+           VALUES ($1, $2, $3, $4, 'restricted') RETURNING id"#,
         settings.slug,
         settings.name,
         settings.description,
-        settings.position,
         created_by,
     )
     .fetch_one(&mut *tx)
@@ -358,6 +335,14 @@ pub async fn add_space<'c>(
     }
     tx.commit().await?;
     Ok(Ok(id))
+}
+
+/// The id of the space at this address, if there is one.
+pub async fn space_id_by_slug<'c>(db: impl Handle<'c>, slug: &str) -> sqlx::Result<Option<i64>> {
+    let mut conn = db.open(KEY).acquire().await?;
+    sqlx::query_scalar!("SELECT id FROM spaces WHERE slug = $1", slug)
+        .fetch_optional(&mut *conn)
+        .await
 }
 
 /// Changes a space to settings that [`SpaceSettings::clean`] accepted.
@@ -379,15 +364,12 @@ pub async fn update_space<'c>(
         return Ok(Err(SPACE_SLUG_IS_USERNAME.to_owned()));
     }
     let updated = sqlx::query!(
-        r#"UPDATE spaces SET section_id = $2, slug = $3, name = $4, description = $5, position = $6,
-                  version = version + 1
+        r#"UPDATE spaces SET slug = $2, name = $3, description = $4, version = version + 1
            WHERE id = $1"#,
         id,
-        settings.section_id,
         settings.slug,
         settings.name,
         settings.description,
-        settings.position,
     )
     .execute(&mut *tx)
     .await;
@@ -439,44 +421,6 @@ pub async fn delete_space(db: &crate::db::Db, id: i64) -> sqlx::Result<Result<bo
     tx.commit().await?;
     Ok(Ok(done.rows_affected() == 1))
 }
-/// Tidies a section name, or says what is wrong with it.
-pub fn clean_section_name(name: &str) -> Result<String, String> {
-    let name = one_line(name);
-    if name.is_empty() || name.chars().count() > MAX_SECTION_NAME_CHARS {
-        Err(format!(
-            "A section name should be between 1 and {MAX_SECTION_NAME_CHARS} characters."
-        ))
-    } else {
-        Ok(name)
-    }
-}
-
-/// Renames or moves a section. Returns whether there was one.
-pub async fn update_section(
-    db: &crate::db::Db,
-    id: i64,
-    name: &str,
-    position: i32,
-) -> sqlx::Result<bool> {
-    let done = sqlx::query!(
-        "UPDATE sections SET name = $2, position = $3 WHERE id = $1",
-        id,
-        name,
-        position
-    )
-    .execute(db.pool())
-    .await?;
-    Ok(done.rows_affected() == 1)
-}
-
-/// Deletes a section. Its spaces stay, outside any section.
-pub async fn delete_section(db: &crate::db::Db, id: i64) -> sqlx::Result<bool> {
-    let done = sqlx::query!("DELETE FROM sections WHERE id = $1", id)
-        .execute(db.pool())
-        .await?;
-    Ok(done.rows_affected() == 1)
-}
-
 /// Moves a thread to another space, returning the space it was in,
 /// or `None` if there is no such thread in a space. Its visibility
 /// follows its new space (a trigger sees to that).

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE spaces SET essential = $2, version = version + 1 WHERE id = $1 AND essential <> $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2dee1af36b7e3c4ee9671c37f6cc7eae64a5c81ce46ddf485edb53aa7c6d6e10"
+}

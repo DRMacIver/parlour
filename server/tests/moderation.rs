@@ -1957,7 +1957,7 @@ fn restrictions_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle
     tries.sort();
     rt.block_on(async {
         sqlx::raw_sql(
-            "TRUNCATE settings, jobs, reports, mod_actions, posts, threads, spaces, sections, users
+            "TRUNCATE settings, jobs, reports, mod_actions, posts, threads, spaces, layouts, users
              RESTART IDENTITY CASCADE",
         )
         .execute(db)

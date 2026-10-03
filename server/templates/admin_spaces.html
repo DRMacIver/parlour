@@ -5,7 +5,7 @@
 {% block content %}
 <h1 class="page-title">Spaces</h1>
 {% call an::admin_nav("spaces") %}{% endcall %}
-<p class="lede">Spaces are listed on the index under their sections, in order of position. Sections are only headings: who can read, post in and run each space is set in the space’s own settings, which staff can always open.</p>
+<p class="lede">This is the default front page: the sections, in order of position, that members start from and then arrange for themselves. Spaces on no section of it are listed last; staff put a space on it from the space’s settings, where admins can also mark it essential. Sections are only headings: who can read, post in and run each space is set in the space’s own settings, which staff can always open.</p>
 {% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
 {% call f::errors(errors) %}{% endcall %}
 <div class="toolbar">
@@ -15,7 +15,7 @@
 <section class="panel"><p class="empty">No spaces yet.</p></section>
 {% endif %}
 {% for row in rows %}
-<section class="panel" aria-label="{% if let Some(section) = row.section %}{{ section.name }}{% else %}Outside any section{% endif %}">
+<section class="panel" aria-label="{% if let Some(section) = row.section %}{{ section.name }}{% else %}Not on the default front page{% endif %}">
   {% if let Some(section) = row.section %}
   <div class="panel-bar admin-section-bar">
     <form class="form-inline admin-section-form" method="post" action="/admin/sections/{{ section.id }}">
@@ -28,7 +28,7 @@
     <a class="button button-small button-quiet" href="/admin/sections/{{ section.id }}/delete">Delete section…</a>
   </div>
   {% else %}
-  <h2 class="panel-bar">Outside any section</h2>
+  <h2 class="panel-bar">Not on the default front page</h2>
   {% endif %}
   {% if row.spaces.is_empty() %}
   <p class="empty">No spaces in this section.</p>
@@ -38,7 +38,7 @@
     <li>
       <span class="admin-space-name">
         <a href="/c/{{ space.space.slug }}/settings">{{ space.space.name }}</a>
-        <span class="row-meta">/c/{{ space.space.slug }} · position {{ space.position }}</span>
+        <span class="row-meta">/c/{{ space.space.slug }}{% if space.essential %} · Essential{% endif %}{% if space.archived() %} · Archived{% endif %}</span>
       </span>
       <span class="row-meta">Read: {{ self.access(space) }} · Post: {{ self.posting(space) }}</span>
     </li>

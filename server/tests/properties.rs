@@ -56,6 +56,7 @@ use parlour::content::{
 };
 use parlour::db::Db;
 use parlour::groups::{self, GroupFields};
+use parlour::layouts::{self, MuteOutcome};
 use parlour::pagination::page_href;
 use parlour::permissions::{Grant, Level};
 use parlour::sessions;
@@ -237,13 +238,16 @@ struct World {
     held: Vec<HeldModel>,
     /// How many of the mailer's sent emails have been checked.
     emails_checked: usize,
+    /// The default layout and its one section, where new spaces go.
+    default_layout: i64,
+    default_section: i64,
 }
 
 impl World {
     fn new(rt: Handle, db: PgPool, mode: Mode) -> World {
         rt.block_on(async {
             sqlx::raw_sql(
-                "TRUNCATE settings, jobs, posts, threads, spaces, sections, groups, users RESTART IDENTITY CASCADE",
+                "TRUNCATE settings, jobs, posts, threads, spaces, layouts, groups, users RESTART IDENTITY CASCADE",
             )
             .execute(&db)
             .await
@@ -283,7 +287,17 @@ impl World {
             member_silenced: false,
             member_suspended: false,
             held: Vec::new(),
+            default_layout: 0,
+            default_section: 0,
         };
+        world.default_layout = world.block(layouts::default_id(world.db())).unwrap();
+        world.default_section = world
+            .block(layouts::add_section(
+                world.db(),
+                world.default_layout,
+                "Spaces",
+            ))
+            .unwrap();
         for name in ["ruth", "jonah", "maya"] {
             let id = world
                 .block(store::create_user(
@@ -376,17 +390,18 @@ impl World {
         let id = self
             .block(store::create_space(
                 self.db(),
-                &NewSpace::with_levels(
-                    None,
-                    &slug,
-                    &format!("Space {token}"),
-                    "",
-                    self.spaces.len() as i32,
-                    level,
-                    "members",
-                ),
+                &NewSpace::with_levels(&slug, &format!("Space {token}"), "", level, "members"),
             ))
             .unwrap();
+        assert!(
+            self.block(layouts::follow(
+                self.db(),
+                self.default_layout,
+                self.default_section,
+                id
+            ))
+            .unwrap()
+        );
         self.changed(Change::SpaceChanged { space_id: id });
         self.spaces.push(SpaceModel {
             id,
@@ -1393,11 +1408,9 @@ impl World {
         let space = &self.spaces[c];
         let group_ids: Vec<i64> = read_groups.iter().map(|&g| self.groups[g]).collect();
         let settings = SpaceSettings {
-            section_id: None,
             slug: space.slug.clone(),
             name: format!("Space {}", space.token),
             description: String::new(),
-            position: c as i32,
             read: Grant::from_parts(space.read_level, &group_ids, &[]),
             reply: Grant::members(),
             start: Grant::members(),
@@ -1443,6 +1456,47 @@ impl World {
         )
         .unwrap();
         self.changed(Change::UserChanged { user_id: user });
+    }
+
+    /// An admin marks a space essential, or not; the front page shows
+    /// essential spaces first, so this changes cached pages.
+    #[rule]
+    fn toggle_essential(&mut self, tc: TestCase) {
+        let c = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
+        let id = self.spaces[c].id;
+        let essential: bool = self
+            .block(
+                sqlx::query_scalar("SELECT essential FROM spaces WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(self.db()),
+            )
+            .unwrap();
+        assert!(
+            self.block(layouts::set_essential(self.db(), id, !essential))
+                .unwrap()
+        );
+        self.changed(Change::SpaceChanged { space_id: id });
+    }
+
+    /// An admin takes a space off the default front page, or puts it back.
+    #[rule]
+    fn toggle_on_front_page(&mut self, tc: TestCase) {
+        let c = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
+        let id = self.spaces[c].id;
+        let placed = self
+            .block(layouts::section_of(self.db(), self.default_layout, id))
+            .unwrap();
+        let done = match placed {
+            Some(_) => self.block(layouts::unfollow(self.db(), self.default_layout, id)),
+            None => self.block(layouts::follow(
+                self.db(),
+                self.default_layout,
+                self.default_section,
+                id,
+            )),
+        };
+        assert!(done.unwrap());
+        self.changed(Change::SiteChanged);
     }
 
     #[rule]
@@ -1951,6 +2005,13 @@ struct UserModel {
     silenced: bool,
     /// Suspended: reads only what visitors read, and isn't staff.
     suspended: bool,
+    /// Their layout, and the spaces in its sections.
+    layout: i64,
+    sections: BTreeSet<usize>,
+    /// Whether they have edited the layout; until then it follows the
+    /// default.
+    edited: bool,
+    muted: BTreeSet<usize>,
 }
 
 impl UserModel {
@@ -1967,6 +2028,9 @@ struct AccessSpace {
     read_groups: BTreeSet<usize>,
     write_level: &'static str,
     write_groups: BTreeSet<usize>,
+    essential: bool,
+    /// Whether it is in the default layout's one section.
+    on_default: bool,
 }
 
 struct AccessThread {
@@ -2024,6 +2088,9 @@ struct Access {
     images: u64,
     /// The images in posts held for approval.
     held_images: Vec<String>,
+    /// The default layout and its one section.
+    default_layout: i64,
+    default_section: i64,
 }
 
 /// The members who never change role; there is always an admin among them.
@@ -2033,7 +2100,7 @@ impl Access {
     fn new(rt: Handle, pool: PgPool) -> Access {
         rt.block_on(async {
             sqlx::raw_sql(
-                "TRUNCATE settings, jobs, posts, threads, spaces, sections, groups, users RESTART IDENTITY CASCADE",
+                "TRUNCATE settings, jobs, posts, threads, spaces, layouts, groups, users RESTART IDENTITY CASCADE",
             )
             .execute(&pool)
             .await
@@ -2054,7 +2121,17 @@ impl Access {
             messages: Vec::new(),
             images: 0,
             held_images: Vec::new(),
+            default_layout: 0,
+            default_section: 0,
         };
+        world.default_layout = world.block(layouts::default_id(&world.db)).unwrap();
+        world.default_section = world
+            .block(layouts::add_section(
+                &world.db,
+                world.default_layout,
+                "Spaces",
+            ))
+            .unwrap();
         for (name, role) in [
             ("boss", "admin"),
             ("ruth", "user"),
@@ -2074,12 +2151,20 @@ impl Access {
                     },
                 ))
                 .unwrap();
+            let layout = world
+                .block(layouts::member_id(&world.db, id))
+                .unwrap()
+                .expect("every new member has a layout");
             world.users.push(UserModel {
                 id,
                 staff: role != "user",
                 groups: BTreeSet::new(),
                 silenced: false,
                 suspended: false,
+                layout,
+                sections: BTreeSet::new(),
+                edited: false,
+                muted: BTreeSet::new(),
             });
         }
         for _ in 0..2 {
@@ -2122,17 +2207,18 @@ impl Access {
         let id = self
             .block(store::create_space(
                 &self.pool,
-                &NewSpace::with_levels(
-                    None,
-                    &slug,
-                    &format!("Space {n}"),
-                    "",
-                    n as i32,
-                    level,
-                    "members",
-                ),
+                &NewSpace::with_levels(&slug, &format!("Space {n}"), "", level, "members"),
             ))
             .unwrap();
+        assert!(
+            self.block(layouts::follow(
+                &self.db,
+                self.default_layout,
+                self.default_section,
+                id
+            ))
+            .unwrap()
+        );
         self.spaces.push(AccessSpace {
             id,
             slug,
@@ -2140,7 +2226,41 @@ impl Access {
             read_groups: BTreeSet::new(),
             write_level: "members",
             write_groups: BTreeSet::new(),
+            essential: false,
+            on_default: true,
         });
+        self.default_changed();
+    }
+
+    /// The spaces on the default front page.
+    fn default_set(&self) -> BTreeSet<usize> {
+        (0..self.spaces.len())
+            .filter(|&c| self.spaces[c].on_default)
+            .collect()
+    }
+
+    /// What a change to the default layout does: every member who hasn't
+    /// edited their copy gets the default again.
+    fn default_changed(&mut self) {
+        let default = self.default_set();
+        for user in &mut self.users {
+            if !user.edited {
+                user.sections = default.clone();
+            }
+        }
+    }
+
+    /// The spaces the viewer's front page sections hold: their own
+    /// layout's, or the default's for a visitor.
+    fn following(&self, who: Option<usize>) -> BTreeSet<usize> {
+        match who {
+            None => self.default_set(),
+            Some(u) => self.users[u].sections.clone(),
+        }
+    }
+
+    fn muted(&self, who: Option<usize>, space: usize) -> bool {
+        who.is_some_and(|u| self.users[u].muted.contains(&space))
     }
 
     /// A new uploaded image (with no uploader, who could always fetch
@@ -2475,11 +2595,9 @@ impl Access {
         };
         let write = Grant::from_parts(write_level, &to_ids(&write_groups), &[]);
         let settings = SpaceSettings {
-            section_id: None,
             slug: space.slug.clone(),
             name: format!("Space {c}"),
             description: String::new(),
-            position: c as i32,
             read: Grant::from_parts(level, &to_ids(&read_groups), &[]),
             reply: write.clone(),
             start: write,
@@ -2544,17 +2662,27 @@ impl Access {
             .collect();
         assert_eq!(targets, readable_spaces, "{who:?}: readable spaces");
 
-        let sections = self
-            .block(content::index_sections(db, &viewer, &mut deps))
+        // The front page (DESIGN.md §3.5): the essential spaces the viewer
+        // can read, then the spaces in their layout's sections that they
+        // can read and haven't muted, each shown once with counts of what
+        // they can read in it.
+        let front = self
+            .block(content::front_page(db, &viewer, &mut deps))
             .unwrap();
-        let mut listed = BTreeSet::new();
-        for summary in sections.iter().flat_map(|s| &s.spaces) {
-            listed.insert(summary.space.id);
+        let following = self.following(who);
+        let mut shown = BTreeSet::new();
+        for summary in front
+            .essential
+            .iter()
+            .chain(front.sections.iter().flat_map(|s| &s.spaces))
+        {
+            assert!(shown.insert(summary.space.id), "{who:?}: shown twice");
             let c = self
                 .spaces
                 .iter()
                 .position(|c| c.id == summary.space.id)
                 .unwrap();
+            assert_eq!(summary.essential, self.spaces[c].essential);
             let threads_here = (0..self.threads.len())
                 .filter(|&t| self.threads[t].space == c && self.reads_thread(who, t))
                 .count() as i64;
@@ -2567,7 +2695,35 @@ impl Access {
                 assert!(self.reads_thread(who, t) && self.threads[t].space == c);
             }
         }
-        assert_eq!(listed, readable_spaces, "{who:?}: index");
+        let essential: BTreeSet<i64> = front.essential.iter().map(|s| s.space.id).collect();
+        let expected = Self::ids(
+            &self.spaces,
+            |c| self.spaces[c].essential && self.reads_space(who, c) && !self.muted(who, c),
+            |c| c.id,
+        );
+        assert_eq!(essential, expected, "{who:?}: essential spaces");
+        let in_sections: BTreeSet<i64> = front
+            .sections
+            .iter()
+            .flat_map(|s| &s.spaces)
+            .map(|s| s.space.id)
+            .collect();
+        let expected = Self::ids(
+            &self.spaces,
+            |c| {
+                !self.spaces[c].essential
+                    && following.contains(&c)
+                    && self.reads_space(who, c)
+                    && !self.muted(who, c)
+            },
+            |c| c.id,
+        );
+        assert_eq!(in_sections, expected, "{who:?}: front page sections");
+        assert!(
+            front.sections.iter().all(|s| !s.spaces.is_empty()),
+            "{who:?}: an empty section is shown"
+        );
+        assert_eq!(front.any_spaces, !readable_spaces.is_empty());
 
         let latest = self
             .block(content::latest(db, &viewer, 1, 10_000, &mut deps))
@@ -2860,6 +3016,108 @@ impl Access {
     fn set_access(&mut self, tc: TestCase) {
         let c = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
         self.set_space_access(&tc, c);
+    }
+
+    /// An admin takes a space off the default front page, or puts it
+    /// back; members who follow the default follow this too.
+    #[rule]
+    fn toggle_on_front_page(&mut self, tc: TestCase) {
+        let c = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
+        let id = self.spaces[c].id;
+        let done = if self.spaces[c].on_default {
+            self.block(layouts::unfollow(&self.db, self.default_layout, id))
+        } else {
+            self.block(layouts::follow(
+                &self.db,
+                self.default_layout,
+                self.default_section,
+                id,
+            ))
+        };
+        assert!(done.unwrap());
+        self.spaces[c].on_default = !self.spaces[c].on_default;
+        self.default_changed();
+    }
+
+    /// An admin marks a space essential, which unmutes it for everyone,
+    /// or not.
+    #[rule]
+    fn toggle_essential(&mut self, tc: TestCase) {
+        let c = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
+        let essential = !self.spaces[c].essential;
+        assert!(
+            self.block(layouts::set_essential(
+                &self.db,
+                self.spaces[c].id,
+                essential
+            ))
+            .unwrap()
+        );
+        self.spaces[c].essential = essential;
+        if essential {
+            for user in &mut self.users {
+                user.muted.remove(&c);
+            }
+        }
+    }
+
+    /// A member mutes a space (unless it is essential), or unmutes it.
+    /// Muting takes it out of their sections; unmuting doesn't put it
+    /// back.
+    #[rule]
+    fn toggle_mute(&mut self, tc: TestCase) {
+        let u = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
+        let c = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
+        let (user_id, space_id) = (self.users[u].id, self.spaces[c].id);
+        if self.users[u].muted.contains(&c) {
+            assert!(
+                self.block(layouts::unmute(&self.db, user_id, space_id))
+                    .unwrap()
+            );
+            self.users[u].muted.remove(&c);
+        } else {
+            let outcome = self
+                .block(layouts::mute(&self.db, user_id, space_id))
+                .unwrap();
+            if self.spaces[c].essential {
+                assert_eq!(outcome, MuteOutcome::Essential);
+            } else {
+                assert_eq!(outcome, MuteOutcome::Muted);
+                self.users[u].muted.insert(c);
+                self.users[u].sections.remove(&c);
+            }
+        }
+    }
+
+    /// A member follows a space (into the first section of their layout,
+    /// which unmutes it) or unfollows it. Either makes the layout theirs:
+    /// the default no longer reaches it.
+    #[rule]
+    fn toggle_follow(&mut self, tc: TestCase) {
+        let u = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
+        let c = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
+        let (layout, space_id) = (self.users[u].layout, self.spaces[c].id);
+        if self.users[u].sections.contains(&c) {
+            assert!(
+                self.block(layouts::unfollow(&self.db, layout, space_id))
+                    .unwrap()
+            );
+            self.users[u].sections.remove(&c);
+        } else {
+            let section = self
+                .block(layouts::read(&self.db, layout))
+                .unwrap()
+                .expect("the member's layout exists")
+                .sections[0]
+                .id;
+            assert!(
+                self.block(layouts::follow(&self.db, layout, section, space_id))
+                    .unwrap()
+            );
+            self.users[u].sections.insert(c);
+            self.users[u].muted.remove(&c);
+        }
+        self.users[u].edited = true;
     }
 
     #[rule]

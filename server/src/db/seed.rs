@@ -23,6 +23,7 @@ use sqlx::{PgConnection, PgPool};
 use serde_json::json;
 
 use crate::db::moderation::{self as mod_records, HeldPlace, NewAction, NewReport, ReportAbout};
+use crate::layouts;
 use crate::markdown;
 use crate::permissions::Grant;
 use crate::store::{self, CreatedThread, NewPost, NewSpace, NewThread, NewUser};
@@ -86,7 +87,7 @@ pub struct SeedSummary {
 /// emptied by the CASCADE and should be added here too.
 const HIGH_WATER_MARK: &str = "jsonb_build_object(
     'users', (SELECT coalesce(max(id), 0) FROM users),
-    'sections', (SELECT coalesce(max(id), 0) FROM sections),
+    'layout_sections', (SELECT coalesce(max(id), 0) FROM layout_sections),
     'spaces', (SELECT coalesce(max(id), 0) FROM spaces),
     'groups', (SELECT coalesce(max(id), 0) FROM groups),
     'threads', (SELECT coalesce(max(id), 0) FROM threads),
@@ -97,11 +98,11 @@ const HIGH_WATER_MARK: &str = "jsonb_build_object(
 /// Settings other than the seed's own record are kept.
 pub async fn reset(db: &PgPool) -> Result<(), SeedError> {
     let mut tx = db.begin().await?;
-    sqlx::raw_sql("LOCK TABLE users, sections, spaces, groups, threads, posts IN EXCLUSIVE MODE")
+    sqlx::raw_sql("LOCK TABLE users, layouts, spaces, groups, threads, posts IN EXCLUSIVE MODE")
         .execute(&mut *tx)
         .await?;
     let (empty, matches): (bool, Option<bool>) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT NOT EXISTS (SELECT 1 FROM users) AND NOT EXISTS (SELECT 1 FROM sections)
+        "SELECT NOT EXISTS (SELECT 1 FROM users) AND NOT EXISTS (SELECT 1 FROM layout_sections)
                 AND NOT EXISTS (SELECT 1 FROM spaces),
                 (SELECT value = {HIGH_WATER_MARK} FROM settings WHERE key = 'dev_seed')"
     )))
@@ -113,7 +114,7 @@ pub async fn reset(db: &PgPool) -> Result<(), SeedError> {
         (false, Some(false)) => return Err(SeedError::ChangedSinceSeed),
     }
     sqlx::raw_sql(
-        "TRUNCATE posts, threads, spaces, sections, groups, users, retired_usernames
+        "TRUNCATE posts, threads, spaces, layouts, groups, users, retired_usernames
              RESTART IDENTITY CASCADE;
          DELETE FROM settings WHERE key = 'dev_seed';",
     )
@@ -606,9 +607,12 @@ impl Seeder<'_> {
         }
         self.summary.users = self.users.len();
 
-        let community = store::create_section(&mut *self.db, "Community", 1).await?;
-        let hobbies = store::create_section(&mut *self.db, "Hobbies", 2).await?;
-        let members = store::create_section(&mut *self.db, "Members only", 3).await?;
+        // The default front page: three sections. The members made above
+        // follow it, so their copies fill in as it does.
+        let default = layouts::default_id(&mut *self.db).await?;
+        let community = layouts::add_section(&mut *self.db, default, "Community").await?;
+        let hobbies = layouts::add_section(&mut *self.db, default, "Hobbies").await?;
+        let members = layouts::add_section(&mut *self.db, default, "Members only").await?;
 
         let announcements = self
             .space(
@@ -699,6 +703,11 @@ impl Seeder<'_> {
             )
             .await?;
         self.organisers_group(organisers).await?;
+        // The two the setup wizard would have made are essential, as it
+        // makes them.
+        for space in [announcements, general] {
+            layouts::set_essential(&mut *self.db, space, true).await?;
+        }
 
         // Announcements
         self.thread(
@@ -1726,11 +1735,12 @@ impl Seeder<'_> {
             .unwrap_or_else(|| panic!("no seed user {username}"))
     }
 
+    /// A space, placed at `index` in `section` of the default front page.
     #[allow(clippy::too_many_arguments)]
     async fn space(
         &mut self,
-        section_id: i64,
-        position: i32,
+        section: i64,
+        index: i32,
         slug: &str,
         name: &str,
         description: &str,
@@ -1738,19 +1748,14 @@ impl Seeder<'_> {
         write_level: &str,
     ) -> sqlx::Result<i64> {
         self.summary.spaces += 1;
-        store::create_space(
+        let id = store::create_space(
             &mut *self.db,
-            &NewSpace::with_levels(
-                Some(section_id),
-                slug,
-                name,
-                description,
-                position,
-                read_level,
-                write_level,
-            ),
+            &NewSpace::with_levels(slug, name, description, read_level, write_level),
         )
-        .await
+        .await?;
+        let default = layouts::default_id(&mut *self.db).await?;
+        layouts::move_space(&mut *self.db, default, id, section, index).await?;
+        Ok(id)
     }
 
     /// The Organisers group, which alone reads and posts in `space`.

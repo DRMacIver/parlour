@@ -4,6 +4,7 @@ mod common;
 
 use axum::http::StatusCode;
 use common::Forum;
+use parlour::layouts;
 use parlour::permissions::Grant;
 use sqlx::PgPool;
 
@@ -260,8 +261,18 @@ fn space_fields<'a>(
     ]
 }
 
+/// The section the space is in on the default front page, as a form value.
+async fn default_section(a: &Admin, space_id: i64) -> String {
+    let default = layouts::default_id(&a.forum.db).await.unwrap();
+    layouts::section_of(&a.forum.db, default, space_id)
+        .await
+        .unwrap()
+        .map(|id| id.to_string())
+        .unwrap_or_default()
+}
+
 #[sqlx::test]
-async fn admins_arrange_sections_and_spaces(db: PgPool) {
+async fn admins_arrange_the_default_front_page(db: PgPool) {
     let a = admin(db).await;
     let page = a.page("/admin/spaces").await;
     assert!(page.contains("href=\"/admin/groups\""));
@@ -274,11 +285,21 @@ async fn admins_arrange_sections_and_spaces(db: PgPool) {
         )
         .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
-    let hobbies = a.id("SELECT id FROM sections WHERE name = 'Hobbies'").await;
+    let hobbies = a
+        .id("SELECT id FROM layout_sections WHERE name = 'Hobbies'")
+        .await;
     let section = hobbies.to_string();
+    // The section is the default layout's, not anyone's copy.
+    let default = layouts::default_id(&a.forum.db).await.unwrap();
+    let layout_of: i64 = a
+        .id(&format!(
+            "SELECT layout_id FROM layout_sections WHERE id = {hobbies}"
+        ))
+        .await;
+    assert_eq!(layout_of, default);
 
     // Spaces are made the way any member makes them, and staff place them
-    // in sections from the space's settings.
+    // on the default front page from the space's settings.
     let response = a
         .submit(
             "/spaces/new",
@@ -293,6 +314,8 @@ async fn admins_arrange_sections_and_spaces(db: PgPool) {
     let games = a
         .id("SELECT id FROM spaces WHERE slug = 'board-games'")
         .await;
+    // Not on the front page until it is put there.
+    assert!(!a.forum.page("/").await.contains("Board games"));
     let form = a.page("/c/board-games/settings").await;
     assert!(form.contains("Hobbies"));
     let response = a
@@ -305,6 +328,9 @@ async fn admins_arrange_sections_and_spaces(db: PgPool) {
     let index = a.forum.page("/").await;
     assert!(index.contains("Hobbies") && index.contains("Board games"));
     assert!(index.contains("All about it."));
+    assert_eq!(default_section(&a, games).await, section);
+    let admin_page = a.page("/admin/spaces").await;
+    assert!(admin_page.contains("Hobbies") && admin_page.contains("Board games"));
 
     // A clash or a bad address is refused, keeping what was typed.
     for slug in ["board-games", "Board Games!"] {
@@ -318,7 +344,7 @@ async fn admins_arrange_sections_and_spaces(db: PgPool) {
         assert!(response.body.contains("value=\"Again\""));
     }
 
-    // Renaming and moving.
+    // Renaming, and taking it off the default front page.
     let response = a
         .submit(
             "/c/board-games/settings",
@@ -328,11 +354,19 @@ async fn admins_arrange_sections_and_spaces(db: PgPool) {
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     assert_eq!(response.location(), "/c/games/settings?done=saved");
     let index = a.forum.page("/").await;
-    assert!(index.contains("href=\"/c/games\"") && !index.contains("Board games"));
+    assert!(!index.contains("href=\"/c/games\"") && !index.contains("Board games"));
+    assert!(a.forum.page("/spaces").await.contains("href=\"/c/games\""));
     assert_eq!(
         a.forum.get("/c/board-games").await.status,
         StatusCode::NOT_FOUND
     );
+    assert_eq!(default_section(&a, games).await, "");
+    let admin_page = a.page("/admin/spaces").await;
+    assert!(
+        admin_page.contains("Not on the default front page"),
+        "{admin_page}"
+    );
+    assert!(admin_page.contains("href=\"/c/games/settings\""));
     // The old admin addresses lead to the space's own pages.
     let response = a
         .forum
@@ -362,7 +396,8 @@ async fn admins_arrange_sections_and_spaces(db: PgPool) {
         .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
     let index = a.forum.page("/").await;
-    assert!(!index.contains("Pastimes") && index.contains("href=\"/c/games\""));
+    assert!(!index.contains("Pastimes") && !index.contains("href=\"/c/games\""));
+    assert_eq!(a.forum.get("/c/games").await.status, StatusCode::OK);
 
     // Only empty spaces can be deleted.
     let sam = a.id("SELECT id FROM users WHERE username = 'sam'").await;
@@ -377,6 +412,60 @@ async fn admins_arrange_sections_and_spaces(db: PgPool) {
 }
 
 #[sqlx::test]
+async fn admins_mark_spaces_essential_and_moderators_dont(db: PgPool) {
+    let a = admin(db).await;
+    let games = a.forum.space("games", "public", None, 0).await;
+    let section = default_section(&a, games).await;
+    let kit = a.forum.member("kit", "moderator", None).await;
+    let kit_cookie = a.forum.session(kit).await;
+
+    // Moderators place spaces on the default front page but can't mark
+    // them essential.
+    let settings = a.forum.page_as("/c/games/settings", &kit_cookie).await;
+    assert!(settings.contains("name=\"section\""));
+    assert!(!settings.contains("name=\"essential\""));
+    let mut fields = space_fields("games", "Games", &section, "public", "members");
+    fields.push(("essential", "on"));
+    let response = a
+        .forum
+        .submit("/c/games/settings", &fields, Some(&kit_cookie))
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let essential = |a: &Admin| {
+        let db = a.forum.db.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>("SELECT essential FROM spaces WHERE id = $1")
+                .bind(games)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+    assert!(!essential(&a).await);
+
+    let settings = a.page("/c/games/settings").await;
+    assert!(settings.contains("name=\"essential\""));
+    let response = a.submit("/c/games/settings", &fields).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert!(essential(&a).await);
+    assert!(
+        a.page("/c/games/settings")
+            .await
+            .contains("name=\"essential\" value=\"on\" checked")
+    );
+    assert!(a.page("/admin/spaces").await.contains("Essential"));
+    // Leaving the box unticked clears it.
+    let response = a
+        .submit(
+            "/c/games/settings",
+            &space_fields("games", "Games", &section, "public", "members"),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert!(!essential(&a).await);
+}
+
+#[sqlx::test]
 async fn changing_who_can_read_a_space_takes_effect_for_visitors_at_once(db: PgPool) {
     let a = admin(db).await;
     let sam = a.id("SELECT id FROM users WHERE username = 'sam'").await;
@@ -387,12 +476,13 @@ async fn changing_who_can_read_a_space_takes_effect_for_visitors_at_once(db: PgP
     assert!(a.forum.page(&thread_path).await.contains("Fast cars"));
     assert!(a.forum.page("/").await.contains("Heat"));
     let path = "/c/games/settings";
+    let section = default_section(&a, games).await;
     let form = a.page(path).await;
     assert!(form.contains("value=\"games\""));
     let response = a
         .submit(
             path,
-            &space_fields("games", "Games", "", "members", "members"),
+            &space_fields("games", "Games", &section, "members", "members"),
         )
         .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
@@ -410,7 +500,7 @@ async fn changing_who_can_read_a_space_takes_effect_for_visitors_at_once(db: PgP
     // And back again.
     a.submit(
         path,
-        &space_fields("games", "Games", "", "public", "members"),
+        &space_fields("games", "Games", &section, "public", "members"),
     )
     .await;
     assert!(a.forum.page(&thread_path).await.contains("Fast cars"));
@@ -452,7 +542,8 @@ async fn admins_manage_groups_and_who_is_in_them(db: PgPool) {
     // A space only the organisers read.
     let planning = a.forum.space("planning", "public", None, 0).await;
     let group = organisers.to_string();
-    let mut fields = space_fields("planning", "Planning", "", "listed", "listed");
+    let section = default_section(&a, planning).await;
+    let mut fields = space_fields("planning", "Planning", &section, "listed", "listed");
     fields.push(("read_group", &group));
     fields.push(("reply_group", &group));
     fields.push(("start_group", &group));
@@ -532,16 +623,17 @@ async fn admins_manage_groups_and_who_is_in_them(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn staff_place_spaces_in_sections_and_members_dont(db: PgPool) {
+async fn staff_place_spaces_on_the_default_front_page_and_members_dont(db: PgPool) {
     let a = admin(db).await;
     let hobbies = a.forum.section("Hobbies", 0).await;
     let ruth = a.forum.member("ruth", "user", None).await;
     let ruth_cookie = a.forum.session(ruth).await;
-    let games = a.forum.space("games", "public", None, 0).await;
+    let games = a.forum.unlisted_space("games", "public").await;
     a.forum
         .set_grant(games, "administer", Grant::listed([], [ruth]))
         .await;
-    // Ruth runs the space, but the section is the admin's to choose.
+    // Ruth runs the space, but the default front page is the admin's to
+    // arrange.
     let settings = a.forum.page_as("/c/games/settings", &ruth_cookie).await;
     assert!(!settings.contains("name=\"section\""));
     let section = hobbies.to_string();
@@ -554,23 +646,29 @@ async fn staff_place_spaces_in_sections_and_members_dont(db: PgPool) {
         .submit("/c/games/settings", &fields, Some(&ruth_cookie))
         .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
-    let section: Option<i64> = sqlx::query_scalar("SELECT section_id FROM spaces WHERE id = $1")
-        .bind(games)
-        .fetch_one(&a.forum.db)
-        .await
-        .unwrap();
-    assert_eq!(section, None);
+    assert_eq!(default_section(&a, games).await, "");
     let settings = a.page("/c/games/settings").await;
     assert!(settings.contains("name=\"section\""));
     let response = a.submit("/c/games/settings", &fields).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
-    let section: Option<i64> = sqlx::query_scalar("SELECT section_id FROM spaces WHERE id = $1")
-        .bind(games)
-        .fetch_one(&a.forum.db)
+    assert_eq!(default_section(&a, games).await, section);
+    // Ruth's own copy of the front page follows the default, since she
+    // hasn't rearranged it.
+    assert!(
+        a.forum
+            .page_as("/", &ruth_cookie)
+            .await
+            .contains("href=\"/c/games\"")
+    );
+    // A section of someone's own layout isn't on offer.
+    let ruth_layout = layouts::member_id(&a.forum.db, ruth)
+        .await
+        .unwrap()
+        .unwrap();
+    let hers = layouts::add_section(&a.forum.db, ruth_layout, "Hers")
         .await
         .unwrap();
-    assert_eq!(section, Some(hobbies));
-    for (key, value) in [("section", "999"), ("position", "first")] {
+    for (key, value) in [("section", "999"), ("section", &hers.to_string())] {
         let mut fields = fields.clone();
         fields.retain(|(k, _)| *k != key);
         fields.push((key, value));
@@ -752,10 +850,53 @@ async fn deleting_a_section_asks_first_and_names_its_spaces(db: PgPool) {
     assert!(confirm.contains("Board games"));
     assert!(confirm.contains(&format!("action=\"{delete_path}\"")));
     assert!(confirm.contains("href=\"/admin/spaces\""));
-    assert_eq!(a.id("SELECT count(*) FROM sections").await, 1);
+    let default = layouts::default_id(&a.forum.db).await.unwrap();
+    let sections = |a: &Admin| {
+        let db = a.forum.db.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM layout_sections WHERE layout_id = $1",
+            )
+            .bind(default)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(sections(&a).await, 1);
 
     let response = a.submit(&delete_path, &[]).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
-    assert_eq!(a.id("SELECT count(*) FROM sections").await, 0);
+    assert_eq!(sections(&a).await, 0);
     assert_eq!(a.id("SELECT count(*) FROM spaces").await, 1);
+
+    // A section of a member's own layout isn't an admin's to delete.
+    let ruth = a.forum.member("ruth", "user", None).await;
+    let ruth_layout = layouts::member_id(&a.forum.db, ruth)
+        .await
+        .unwrap()
+        .unwrap();
+    let hers = layouts::add_section(&a.forum.db, ruth_layout, "Hers")
+        .await
+        .unwrap();
+    let delete_hers = format!("/admin/sections/{hers}/delete");
+    assert_eq!(
+        a.forum.get_as(&delete_hers, Some(&a.cookie)).await.status,
+        StatusCode::NOT_FOUND
+    );
+    for path in [delete_hers, format!("/admin/sections/{hers}")] {
+        let response = a
+            .submit(&path, &[("name", "Theirs"), ("position", "0")])
+            .await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "{path}");
+    }
+    assert!(
+        layouts::read(&a.forum.db, ruth_layout)
+            .await
+            .unwrap()
+            .unwrap()
+            .sections
+            .iter()
+            .any(|s| s.id == hers && s.name == "Hers")
+    );
 }

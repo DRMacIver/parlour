@@ -344,6 +344,7 @@ pub async fn create_first_admin(
     match inserted {
         Ok(id) => {
             savepoint.commit().await?;
+            crate::layouts::create_member_copy(&mut *conn, id).await?;
             Ok(FirstAdmin::Created(id))
         }
         Err(sqlx::Error::Database(err)) if err.is_unique_violation() => Ok(FirstAdmin::Taken),
@@ -424,9 +425,9 @@ pub enum Deletion {
 /// Their picture is deleted too, unless a post shows the same image.
 /// Everything else that is theirs alone goes: sessions, tokens, recorded
 /// addresses, notifications, reactions, watches, blocks, read markers,
-/// group memberships and staff notes about them. They leave their
-/// conversations, unused invites are revoked, and posts waiting for
-/// approval are rejected.
+/// group memberships, their front page and mutes, and staff notes about
+/// them. They leave their conversations, unused invites are revoked, and
+/// posts waiting for approval are rejected.
 pub async fn delete_account(db: &Db, user_id: i64) -> sqlx::Result<Deletion> {
     let mut tx = db.pool().begin().await?;
     let admins = sqlx::query_scalar!(
@@ -494,6 +495,8 @@ pub async fn delete_account(db: &Db, user_id: i64) -> sqlx::Result<Deletion> {
     remove!("DELETE FROM blocks WHERE user_id = $1 OR blocked_user_id = $1");
     remove!("DELETE FROM thread_reads WHERE user_id = $1");
     remove!("DELETE FROM group_members WHERE user_id = $1");
+    remove!("DELETE FROM layouts WHERE user_id = $1");
+    remove!("DELETE FROM space_mutes WHERE user_id = $1");
     remove!("DELETE FROM user_notes WHERE user_id = $1");
     remove!("UPDATE uploads SET user_id = NULL WHERE user_id = $1");
     remove!(

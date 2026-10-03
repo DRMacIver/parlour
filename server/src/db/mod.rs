@@ -5,7 +5,8 @@
 //! can pass to the functions in these modules but can't run queries on.
 //! Every read of forum content goes through [`content`], whose functions
 //! take the [`crate::viewer::Viewer`] and filter with the one shared SQL
-//! visibility condition; writes go through [`store`] and [`groups`]; and
+//! visibility condition; writes go through [`store`], [`groups`] and
+//! [`layouts`]; and
 //! accounts, sessions, invites, settings and jobs have their own modules.
 //!
 //! [`Handle`] is what these functions take when they can work inside a
@@ -23,6 +24,7 @@ pub mod groups;
 pub mod header;
 pub mod invites;
 pub mod jobs;
+pub mod layouts;
 pub mod login_tokens;
 pub mod members;
 pub mod moderation;

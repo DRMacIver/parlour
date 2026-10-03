@@ -636,6 +636,7 @@ async fn insert_member(
     .await?;
     // The invite's groups that still exist; the inviter added them.
     groups::grant(&mut *tx, user_id, &grant, Some(invited_by)).await?;
+    crate::layouts::create_member_copy(&mut *tx, user_id).await?;
     Ok(Some(user_id))
 }
 

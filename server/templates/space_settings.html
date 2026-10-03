@@ -44,20 +44,21 @@
       <input id="description" name="description" type="text" maxlength="500" value="{{ form.description }}">
     </div>
     {% if staff %}
-    <div class="field-row">
-      <div class="field">
-        <label for="section">Section <span class="field-hint">(staff)</span></label>
-        <select id="section" name="section">
-          <option value=""{% if form.section.is_empty() %} selected{% endif %}>None</option>
-          {% for section in sections %}
-          <option value="{{ section.id }}"{% if self.section_chosen(section.id) %} selected{% endif %}>{{ section.name }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="field">
-        <label for="position">Position <span class="field-hint">(staff)</span></label>
-        <input id="position" name="position" type="number" value="{{ form.position }}">
-      </div>
+    <div class="field">
+      <label for="section">Section on the default front page <span class="field-hint">(staff)</span></label>
+      <select id="section" name="section">
+        <option value=""{% if form.section.is_empty() %} selected{% endif %}>Not on it</option>
+        {% for section in sections %}
+        <option value="{{ section.id }}"{% if self.section_chosen(section.id) %} selected{% endif %}>{{ section.name }}</option>
+        {% endfor %}
+      </select>
+      <span class="field-hint">Members start from the default front page and arrange their own; this is where new members find the space.</span>
+    </div>
+    {% endif %}
+    {% if admin %}
+    <div class="field">
+      <label class="choice"><input type="checkbox" name="essential" value="on"{% if form.essential %} checked{% endif %}> Essential <span class="field-hint">(admins)</span></label>
+      <span class="field-hint">An essential space is at the top of everyone’s front page, whatever they have arranged, and can’t be muted.</span>
     </div>
     {% endif %}
   </div>

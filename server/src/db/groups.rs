@@ -304,7 +304,7 @@ pub async fn detail(db: &Db, id: i64) -> sqlx::Result<Option<GroupDetail>> {
            FROM space_grants g JOIN spaces c ON c.id = g.space_id
            WHERE g.group_ids @> ARRAY[$1]::bigint[]
            GROUP BY c.id
-           ORDER BY c.position, c.id"#,
+           ORDER BY lower(c.name), c.id"#,
         id
     )
     .fetch_all(db.pool())

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,\n               c.archived_at IS NOT NULL AS \"archived!\", s.name AS \"section_name?\",\n               array(SELECT g.name FROM groups g\n                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)\n                     ORDER BY lower(g.name), g.id) AS \"group_names!\",\n               (SELECT count(*) FROM threads t\n                WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                  AND thread_readable(t.visibility, t.space_id, $2, $3)) AS \"thread_count!\"\n        FROM spaces c\n        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'\n        LEFT JOIN sections s ON s.id = c.section_id\n        WHERE c.slug = $1 AND space_readable(c.visibility, c.id, $2, $3)\n        ",
+  "query": "\n        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,\n               c.archived_at IS NOT NULL AS \"archived!\",\n               array(SELECT g.name FROM groups g\n                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)\n                     ORDER BY lower(g.name), g.id) AS \"group_names!\",\n               (SELECT count(*) FROM threads t\n                WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                  AND thread_readable(t.visibility, t.space_id, $2, $3)) AS \"thread_count!\"\n        FROM spaces c\n        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'\n        WHERE c.slug = $1 AND space_readable(c.visibility, c.id, $2, $3)\n        ",
   "describe": {
     "columns": [
       {
@@ -66,23 +66,12 @@
       },
       {
         "ordinal": 6,
-        "name": "section_name?",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "sections",
-            "name": "name"
-          }
-        }
-      },
-      {
-        "ordinal": 7,
         "name": "group_names!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 8,
+        "ordinal": 7,
         "name": "thread_count!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -102,10 +91,9 @@
       false,
       false,
       null,
-      true,
       null,
       null
     ]
   },
-  "hash": "54eec05ce9097cb23539b27051aa7bb1108bbb70f3fc7b6922440cfd4c9b1ef2"
+  "hash": "58e9e9cf1b7be806ced62684865da260d6cf29d950473a4c1625979aa92671b3"
 }

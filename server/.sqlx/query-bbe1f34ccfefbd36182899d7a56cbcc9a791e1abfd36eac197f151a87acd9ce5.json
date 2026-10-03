@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "DELETE FROM sections WHERE id = $1",
+  "query": "DELETE FROM space_mutes WHERE user_id = $1",
   "describe": {
     "columns": [],
     "parameters": {
@@ -10,5 +10,5 @@
     },
     "nullable": []
   },
-  "hash": "b295c31c8a667b99c0cf4c7d363efb69dfec42a685e78e54018fa224a2d34105"
+  "hash": "bbe1f34ccfefbd36182899d7a56cbcc9a791e1abfd36eac197f151a87acd9ce5"
 }

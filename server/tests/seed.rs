@@ -214,7 +214,14 @@ async fn seed_refuses_to_touch_a_forum_with_content(pool: PgPool) {
 async fn reset_empties_the_content_tables(pool: PgPool) {
     seed::seed(&pool).await.unwrap();
     seed::reset(&pool).await.unwrap();
-    for table in ["users", "sections", "spaces", "groups", "threads", "posts"] {
+    for table in [
+        "users",
+        "layout_sections",
+        "spaces",
+        "groups",
+        "threads",
+        "posts",
+    ] {
         let n: i64 =
             sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
                 .fetch_one(&pool)
@@ -282,7 +289,12 @@ async fn a_failed_seed_leaves_nothing_behind(pool: PgPool) {
         Err(SeedError::Database(_))
     ));
     for table in [
-        "users", "sections", "spaces", "threads", "posts", "settings",
+        "users",
+        "layout_sections",
+        "spaces",
+        "threads",
+        "posts",
+        "settings",
     ] {
         assert_eq!(count(&pool, table).await, 0, "{table}");
     }

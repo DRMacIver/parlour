@@ -1,27 +1,19 @@
 {% extends "base.html" %}
 {%- import "_macros.html" as m -%}
-{% block content %}
-<h1 class="page-title visually-hidden">Forum index</h1>
-<div class="index-layout">
-  <div class="index-main">
-  {% if sections.is_empty() %}
-    <section class="panel">
-      <h2 class="panel-bar">Spaces</h2>
-      <p class="empty">There are no spaces yet.{% if layout.user.is_some() %} <a href="/spaces/new">Make the first one.</a>{% endif %}</p>
-    </section>
-  {% endif %}
-  {% for section in sections %}
+
+{#- One section of the front page: a heading and the spaces under it. -#}
+{% macro space_table(heading, spaces) %}
     <table class="list space-list">
       <thead>
         <tr>
-          <th scope="col">{% if let Some(name) = section.name %}{{ name }}{% else %}Spaces{% endif %}</th>
+          <th scope="col">{{ heading }}</th>
           <th scope="col" class="num">Threads</th>
           <th scope="col" class="num">Posts</th>
           <th scope="col" class="last-col">Last post</th>
         </tr>
       </thead>
       <tbody>
-      {% for summary in section.spaces %}
+      {% for summary in spaces %}
         <tr>
           <td class="main-col">
             <div class="row-title">
@@ -48,6 +40,29 @@
       {% endfor %}
       </tbody>
     </table>
+{% endmacro %}
+
+{% block content %}
+<h1 class="page-title visually-hidden">Forum index</h1>
+<div class="index-layout">
+  <div class="index-main">
+  {% if front.is_empty() %}
+    <section class="panel">
+      <h2 class="panel-bar">Spaces</h2>
+      {% if !front.any_spaces %}
+      <p class="empty">There are no spaces yet.{% if layout.user.is_some() %} <a href="/spaces/new">Make the first one.</a>{% endif %}</p>
+      {% else if layout.user.is_some() %}
+      <p class="empty">Nothing is on your front page yet. <a href="/spaces">See every space</a>.</p>
+      {% else %}
+      <p class="empty">Nothing is on the front page yet. <a href="/spaces">See every space</a>.</p>
+      {% endif %}
+    </section>
+  {% endif %}
+  {% if !front.essential.is_empty() %}
+    {% call space_table("Spaces", &front.essential) %}{% endcall %}
+  {% endif %}
+  {% for section in front.sections %}
+    {% call space_table(section.name, &section.spaces) %}{% endcall %}
   {% endfor %}
   </div>
   <aside class="panel latest" aria-labelledby="latest-heading">

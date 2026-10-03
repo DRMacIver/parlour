@@ -5,6 +5,7 @@ mod common;
 use axum::http::{StatusCode, header};
 use common::smtp::FakeSmtp;
 use common::{Forum, cookie_set_by, hidden_field};
+use parlour::layouts;
 use parlour::setup;
 use sqlx::PgPool;
 
@@ -91,6 +92,102 @@ async fn setup_creates_the_admin_with_the_printed_token(db: PgPool) {
         .await;
     assert_eq!(again.status, StatusCode::NOT_FOUND);
     assert!(setup::prepare(&forum.state).await.unwrap().is_none());
+}
+
+/// Setup makes the first two spaces, Announcements (only staff start
+/// threads) and General, both essential, and the default front page: a
+/// "Forum" section holding them and an empty "Feeds" section (DESIGN.md
+/// §3.5). The admin's own copy follows.
+#[sqlx::test]
+async fn setup_makes_the_first_spaces_and_the_default_front_page(db: PgPool) {
+    let forum = Forum::new(db);
+    let token = token_of(&setup::prepare(&forum.state).await.unwrap().unwrap());
+    let response = forum
+        .submit("/setup", &with_token(&token, ADMIN), None)
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let sam = forum.user_id("sam").await;
+
+    let spaces: Vec<(String, String, bool, String, String)> = sqlx::query_as(
+        "SELECT c.slug, c.name, c.essential, st.level, a.level
+         FROM spaces c
+         JOIN space_grants st ON st.space_id = c.id AND st.verb = 'start'
+         JOIN space_grants a ON a.space_id = c.id AND a.verb = 'administer'
+         ORDER BY c.id",
+    )
+    .fetch_all(&forum.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        spaces,
+        vec![
+            (
+                "announcements".to_owned(),
+                "Announcements".to_owned(),
+                true,
+                "staff".to_owned(),
+                "staff".to_owned()
+            ),
+            (
+                "general".to_owned(),
+                "General".to_owned(),
+                true,
+                "members".to_owned(),
+                "staff".to_owned()
+            ),
+        ]
+    );
+    let created_by: Vec<Option<i64>> = sqlx::query_scalar("SELECT created_by FROM spaces")
+        .fetch_all(&forum.db)
+        .await
+        .unwrap();
+    assert_eq!(created_by, vec![Some(sam), Some(sam)]);
+
+    let shape = |layout_id: i64| {
+        let db = forum.db.clone();
+        async move {
+            layouts::read(&db, layout_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .sections
+                .into_iter()
+                .map(|s| {
+                    (
+                        s.name,
+                        s.spaces.into_iter().map(|c| c.slug).collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        }
+    };
+    let expected = vec![
+        (
+            "Forum".to_owned(),
+            vec!["announcements".to_owned(), "general".to_owned()],
+        ),
+        ("Feeds".to_owned(), vec![]),
+    ];
+    let default = layouts::default_id(&forum.db).await.unwrap();
+    assert_eq!(shape(default).await, expected);
+    let mine = layouts::member_id(&forum.db, sam).await.unwrap().unwrap();
+    assert_eq!(shape(mine).await, expected);
+
+    // The front page shows them, to the admin and to visitors alike.
+    let cookie = cookie_set_by(&response).unwrap();
+    for page in [forum.page("/").await, forum.page_as("/", &cookie).await] {
+        let announcements = page
+            .find("href=\"/c/announcements\"")
+            .expect("announcements");
+        let general = page.find("href=\"/c/general\"").expect("general");
+        assert!(announcements < general, "{page}");
+    }
+    assert!(
+        forum
+            .page_as("/c/announcements/new", &cookie)
+            .await
+            .contains("Announcements")
+    );
 }
 
 #[sqlx::test]

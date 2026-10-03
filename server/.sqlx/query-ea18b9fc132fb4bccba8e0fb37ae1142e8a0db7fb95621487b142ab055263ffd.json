@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE layout_section_spaces x SET position = o.ord - 1\n         FROM unnest($2::bigint[]) WITH ORDINALITY AS o (space_id, ord)\n         WHERE x.section_id = $1 AND x.space_id = o.space_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ea18b9fc132fb4bccba8e0fb37ae1142e8a0db7fb95621487b142ab055263ffd"
+}

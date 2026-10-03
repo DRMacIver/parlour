@@ -208,8 +208,10 @@ async fn space_lists_pinned_threads_first_then_by_activity(pool: PgPool) {
     assert_in_order(&page, &["Read me first", "Old but bumped", "Newer thread"]);
     assert!(page.contains("Pinned"));
     assert!(page.contains("Locked"));
-    // Breadcrumbs and heading.
-    assert_in_order(&page, &["href=\"/\"", "Hobbies", "<h1"]);
+    // Breadcrumbs and heading. Sections are each member's own, so the
+    // breadcrumbs don't name one.
+    assert_in_order(&page, &["href=\"/\"", "<h1"]);
+    assert!(!page.contains("Hobbies"));
     assert!(page.contains("All about games."));
 }
 

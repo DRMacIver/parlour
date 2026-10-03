@@ -97,9 +97,10 @@ afterwards.
 Run `cargo run` against an empty database instead of seeding it. The server
 logs a one-time link, `http://localhost:8080/setup?token=…`, which walks
 through creating the admin account, the email settings (with a test
-send) and the first invitations. Then make some spaces (any member can,
-from the Spaces page): members have nowhere to post until there are some.
-Admin → Spaces arranges them into sections on the index. By default
+send) and the first invitations, and makes the first two spaces,
+Announcements and General. Any member can make more from the Spaces page.
+Admin → Spaces shows the default front page, the sections members start
+from; staff put a space on it from the space's settings. By default
 each new member's first 2 posts are held for a moderator to approve; change
 that in Admin → Moderation (0 turns it off).
 

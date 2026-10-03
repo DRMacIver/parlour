@@ -1,0 +1,107 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT s.id AS section_id, s.name AS section_name, s.position AS section_position,\n               c.id AS \"space_id?\", c.slug AS \"slug?\", c.name AS \"space_name?\",\n               c.essential AS \"essential?\", c.archived_at IS NOT NULL AS \"archived?\"\n        FROM layout_sections s\n        LEFT JOIN layout_section_spaces x ON x.section_id = s.id\n        LEFT JOIN spaces c ON c.id = x.space_id\n        WHERE s.layout_id = $1\n        ORDER BY s.position, s.id, x.position, c.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "section_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "layout_sections",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "section_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "layout_sections",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "section_position",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "layout_sections",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "space_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "slug?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "space_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "essential?",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "essential"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "archived?",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "729e2b401a9bc57968c16fdf96d537cac98f993fa2bac1406c849f871409a65c"
+}

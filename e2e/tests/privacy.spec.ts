@@ -105,14 +105,19 @@ test("an admin gives a new group a space of its own", async ({ page, browser }) 
   expect(misplaced).toEqual([]);
   await page.check("input[name=read_level][value=listed]");
   await page.locator("label.choice", { hasText: groupName }).locator("input[name=read_group]").check();
+  // Staff also put it on the default front page, which members who
+  // haven't arranged their own follow.
+  await page.selectOption("#section", { label: "Members only" });
   await page.locator(`form[action='/c/${slug}/settings'] button[type=submit]`).click();
   await expect(page.locator(".notice-success")).toHaveText("Saved.");
+  await expect(page.locator("#section option:checked")).toHaveText("Members only");
   await expectFits(page);
   await page.goto("/admin/spaces");
   await expect(page.locator(".admin-spaces a", { hasText: `Private ${project}` })).toBeVisible();
   await expectFits(page);
 
-  // The member in the group reads it; visitors don't know it is there.
+  // The member in the group reads it, on their front page; visitors don't
+  // know it is there.
   const reader = await loggedIn(browser, member());
   await reader.goto("/");
   const row = reader.locator(".space-list tr", { has: reader.locator(`a[href='/c/${slug}']`) });
@@ -167,6 +172,7 @@ async function longGroupNamesFit(page: Page, browser: Browser) {
     for (const id of groups) {
       await page.check(`input[name=read_group][value='${id}']`);
     }
+    await page.selectOption("#section", { label: "Members only" });
     await page.locator(`form[action='/c/${slug}/settings'] button[type=submit]`).click();
     await expect(page.locator(".notice-success")).toHaveText("Saved.");
   }

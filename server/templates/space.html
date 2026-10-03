@@ -2,7 +2,7 @@
 {%- import "_macros.html" as m -%}
 {% block title %}{{ space.space.name }} · {{ layout.site_name }}{% endblock %}
 {% block content %}
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a>{% if let Some(section) = space.section_name %} › {{ section }}{% endif %} › <span aria-current="page">{{ space.space.name }}</span></nav>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <span aria-current="page">{{ space.space.name }}</span></nav>
 <h1 class="page-title">{{ space.space.name }} {% call m::access_flag(space.read_level, space.group_names) %}{% endcall %}{% if space.archived %} <span class="flag">Archived</span>{% endif %}</h1>
 {% if !space.description.is_empty() %}<p class="lede">{{ space.description }}</p>{% endif %}
 <div class="toolbar">

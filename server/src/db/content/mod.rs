@@ -100,12 +100,33 @@ pub struct SpaceRef {
 }
 
 // ---------------------------------------------------------------------------
-// The index page
+// The front page
+
+/// The front page as one viewer sees it (DESIGN.md §3.5): the essential
+/// spaces, then the sections of their layout (the default layout for
+/// visitors), each with the spaces in it they can read. Archived spaces,
+/// spaces they can't read, spaces they have muted and empty sections are
+/// left out.
+#[derive(Debug)]
+pub struct FrontPage {
+    /// Essential spaces, in their order on the layout, then by name.
+    pub essential: Vec<SpaceSummary>,
+    pub sections: Vec<IndexSection>,
+    /// Whether the viewer can read any live space at all, on the front
+    /// page or not.
+    pub any_spaces: bool,
+}
+
+impl FrontPage {
+    pub fn is_empty(&self) -> bool {
+        self.essential.is_empty() && self.sections.is_empty()
+    }
+}
 
 #[derive(Debug)]
 pub struct IndexSection {
-    /// `None` for spaces that aren't in a section; they come first.
-    pub name: Option<String>,
+    pub id: i64,
+    pub name: String,
     pub spaces: Vec<SpaceSummary>,
 }
 
@@ -117,6 +138,7 @@ pub struct SpaceSummary {
     pub read_level: String,
     /// For a listed space, the groups that may read it.
     pub group_names: Vec<String>,
+    pub essential: bool,
     pub thread_count: i64,
     pub post_count: i64,
     pub last: Option<LastActivity>,
@@ -132,17 +154,28 @@ pub struct LastActivity {
     pub post_id: Option<i64>,
 }
 
-/// The spaces on the index, by section: those the viewer can read that
-/// aren't archived.
-pub async fn index_sections(
-    db: &Db,
-    viewer: &Viewer,
-    deps: &mut Deps,
-) -> sqlx::Result<Vec<IndexSection>> {
+/// The front page for the viewer, from their own layout if they have one
+/// and the default otherwise.
+pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Result<FrontPage> {
     let filter = viewer.filter();
+    let user_id = viewer.user_id();
     let rows = sqlx::query!(
         r#"
-        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level, s.name AS "section_name?",
+        WITH chosen AS (
+            SELECT id FROM layouts
+            WHERE user_id IS NOT DISTINCT FROM $3::bigint
+               OR (user_id IS NULL AND NOT EXISTS (SELECT 1 FROM layouts WHERE user_id = $3))
+            ORDER BY user_id NULLS LAST
+            LIMIT 1
+        ), placed AS (
+            SELECT x.space_id, s.id AS section_id, s.name AS section_name,
+                   s.position AS section_position, x.position
+            FROM chosen l
+            JOIN layout_sections s ON s.layout_id = l.id
+            JOIN layout_section_spaces x ON x.section_id = s.id
+        )
+        SELECT c.id, c.slug, c.name, c.description, c.essential, r.level AS read_level,
+               p.section_id AS "section_id?", p.section_name AS "section_name?",
                array(SELECT g.name FROM groups g
                      WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)
                      ORDER BY lower(g.name), g.id) AS "group_names!",
@@ -152,7 +185,7 @@ pub async fn index_sections(
                lu.id AS "last_user_id?", lu.username AS "last_username?", lu.display_name AS "last_display_name?"
         FROM spaces c
         JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'
-        LEFT JOIN sections s ON s.id = c.section_id
+        LEFT JOIN placed p ON p.space_id = c.id
         CROSS JOIN LATERAL (
             SELECT count(*) AS threads, coalesce(sum(t.last_seq), 0)::bigint AS posts
             FROM threads t
@@ -174,16 +207,37 @@ pub async fn index_sections(
             LIMIT 1
         ) lp ON true
         LEFT JOIN users lu ON lu.id = lp.author_id
-        WHERE c.archived_at IS NULL AND space_readable(c.visibility, c.id, $1, $2)
-        ORDER BY s.position NULLS FIRST, s.id NULLS FIRST, c.position, c.id
+        WHERE (c.essential OR p.space_id IS NOT NULL)
+          AND c.archived_at IS NULL
+          AND space_readable(c.visibility, c.id, $1, $2)
+          AND ($3::bigint IS NULL
+               OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $3 AND m.space_id = c.id))
+        ORDER BY c.essential DESC, p.section_position NULLS LAST, p.section_id NULLS LAST,
+                 p.position, lower(c.name), c.id
         "#,
         &filter.visibilities,
         &filter.restricted_space_ids,
+        user_id,
     )
     .fetch_all(db.pool())
     .await?;
+    // Only an empty front page needs to know whether that is because
+    // there are no spaces at all.
+    let any_spaces = !rows.is_empty()
+        || sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM spaces c
+                              WHERE c.archived_at IS NULL AND space_readable(c.visibility, c.id, $1, $2)) AS "e!""#,
+            &filter.visibilities,
+            &filter.restricted_space_ids,
+        )
+        .fetch_one(db.pool())
+        .await?;
 
-    let mut sections: Vec<IndexSection> = Vec::new();
+    let mut page = FrontPage {
+        essential: Vec::new(),
+        sections: Vec::new(),
+        any_spaces,
+    };
     for row in rows {
         deps.add(Tag::Space(row.id));
         let summary = SpaceSummary {
@@ -195,6 +249,7 @@ pub async fn index_sections(
             description: row.description,
             read_level: row.read_level,
             group_names: row.group_names,
+            essential: row.essential,
             thread_count: row.thread_count,
             post_count: row.post_count,
             last: match (
@@ -212,15 +267,23 @@ pub async fn index_sections(
                 _ => None,
             },
         };
-        match sections.last_mut() {
-            Some(section) if section.name == row.section_name => section.spaces.push(summary),
-            _ => sections.push(IndexSection {
-                name: row.section_name,
+        if row.essential {
+            page.essential.push(summary);
+            continue;
+        }
+        let (Some(section_id), Some(section_name)) = (row.section_id, row.section_name) else {
+            continue;
+        };
+        match page.sections.last_mut() {
+            Some(section) if section.id == section_id => section.spaces.push(summary),
+            _ => page.sections.push(IndexSection {
+                id: section_id,
+                name: section_name,
                 spaces: vec![summary],
             }),
         }
     }
-    Ok(sections)
+    Ok(page)
 }
 
 fn user_ref(
@@ -262,7 +325,6 @@ pub struct ThreadRow {
 
 pub struct SpacePage {
     pub space: SpaceRef,
-    pub section_name: Option<String>,
     pub description: String,
     /// The level of the read grant, for the label beside the name.
     pub read_level: String,
@@ -286,7 +348,7 @@ pub async fn space_page(
     let Some(space) = sqlx::query!(
         r#"
         SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,
-               c.archived_at IS NOT NULL AS "archived!", s.name AS "section_name?",
+               c.archived_at IS NOT NULL AS "archived!",
                array(SELECT g.name FROM groups g
                      WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)
                      ORDER BY lower(g.name), g.id) AS "group_names!",
@@ -295,7 +357,6 @@ pub async fn space_page(
                   AND thread_readable(t.visibility, t.space_id, $2, $3)) AS "thread_count!"
         FROM spaces c
         JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'
-        LEFT JOIN sections s ON s.id = c.section_id
         WHERE c.slug = $1 AND space_readable(c.visibility, c.id, $2, $3)
         "#,
         slug,
@@ -315,7 +376,6 @@ pub async fn space_page(
             slug: space.slug,
             name: space.name,
         },
-        section_name: space.section_name,
         description: space.description,
         read_level: space.read_level,
         group_names: space.group_names,
@@ -616,8 +676,7 @@ pub async fn thread_page(
         r#"
         SELECT t.id, t.title, t.slug, t.created_at, t.last_seq, t.pinned, t.locked, t.forked_from_post_id,
                c.id AS "space_id!", c.slug AS "space_slug!", c.name AS "space_name!",
-               c.description AS "space_description!", c.position AS "space_position!",
-               c.section_id AS "section_id?", c.section_name AS "section_name?",
+               c.description AS "space_description!", c.essential AS "essential!",
                c.visibility AS "visibility!", c.created_by AS "created_by?",
                c.created_at AS "space_created_at!", c.archived_at AS "archived_at?",
                c.read_level AS "read_level!", c.read_group_ids AS "read_group_ids!", c.read_user_ids AS "read_user_ids!",
@@ -670,10 +729,8 @@ pub async fn thread_page(
                 slug: thread.space_slug,
                 name: thread.space_name,
             },
-            section_id: thread.section_id,
-            section_name: thread.section_name,
             description: thread.space_description,
-            position: thread.space_position,
+            essential: thread.essential,
             visibility: thread.visibility,
             group_names: thread.group_names,
             created_by: thread.created_by,
@@ -1189,10 +1246,9 @@ pub async fn thread_slug(db: &Db, viewer: &Viewer, thread_id: i64) -> sqlx::Resu
 #[derive(Clone, Debug)]
 pub struct SpaceTarget {
     pub space: SpaceRef,
-    pub section_id: Option<i64>,
-    pub section_name: Option<String>,
     pub description: String,
-    pub position: i32,
+    /// Shown at the top of every front page (DESIGN.md §3.1).
+    pub essential: bool,
     /// `public`, `members` or `restricted`, as `spaces.visibility` has it.
     pub visibility: String,
     /// The names of the groups the read grant lists.
@@ -1220,11 +1276,9 @@ impl SpaceTarget {
     /// The space's settings, as its administrators edit them.
     pub fn settings(&self) -> SpaceSettings {
         SpaceSettings {
-            section_id: self.section_id,
             slug: self.space.slug.clone(),
             name: self.space.name.clone(),
             description: self.description.clone(),
-            position: self.position,
             read: self.rules.read.clone(),
             reply: self.rules.reply.clone(),
             start: self.rules.start.clone(),
@@ -1253,33 +1307,13 @@ pub async fn space_thread_count(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Resu
     .await
 }
 
-/// A display-only heading on the index.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Section {
-    pub id: i64,
-    pub name: String,
-    pub position: i32,
-}
-
-/// Every section, in index order. Sections hold no content of their own,
-/// so every viewer may know them.
-pub async fn sections(db: &Db) -> sqlx::Result<Vec<Section>> {
-    sqlx::query_as!(
-        Section,
-        "SELECT id, name, position FROM sections ORDER BY position, id"
-    )
-    .fetch_all(db.pool())
-    .await
-}
-
-/// Every space the viewer can read, archived ones included, in index
-/// order.
+/// Every space the viewer can read, archived ones included, by name.
 pub async fn readable_spaces(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<SpaceTarget>> {
     space_targets(db, viewer, None, None).await
 }
 
-/// The spaces the viewer can read, in index order: all of them, or
-/// (with `id` or `slug`) just the one so named.
+/// The spaces the viewer can read, by name: all of them, or (with `id` or
+/// `slug`) just the one so named.
 async fn space_targets(
     db: &Db,
     viewer: &Viewer,
@@ -1290,7 +1324,7 @@ async fn space_targets(
     let rows = sqlx::query!(
         r#"
         SELECT c.id AS "id!", c.slug AS "slug!", c.name AS "name!", c.description AS "description!",
-               c.position AS "position!", c.section_id AS "section_id?", c.section_name AS "section_name?",
+               c.essential AS "essential!",
                c.visibility AS "visibility!", c.created_by AS "created_by?", c.created_at AS "created_at!",
                c.archived_at AS "archived_at?",
                c.read_level AS "read_level!", c.read_group_ids AS "read_group_ids!", c.read_user_ids AS "read_user_ids!",
@@ -1303,7 +1337,7 @@ async fn space_targets(
         WHERE space_readable(c.visibility, c.id, $1, $2)
           AND ($3::bigint IS NULL OR c.id = $3)
           AND ($4::text IS NULL OR c.slug = $4)
-        ORDER BY c.section_position NULLS FIRST, c.section_id NULLS FIRST, c.position, c.id
+        ORDER BY lower(c.name), c.id
         "#,
         &filter.visibilities,
         &filter.restricted_space_ids,
@@ -1320,10 +1354,8 @@ async fn space_targets(
                 slug: row.slug,
                 name: row.name,
             },
-            section_id: row.section_id,
-            section_name: row.section_name,
             description: row.description,
-            position: row.position,
+            essential: row.essential,
             visibility: row.visibility,
             group_names: row.group_names,
             created_by: row.created_by,

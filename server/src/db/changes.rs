@@ -24,8 +24,9 @@ pub enum Change {
         thread_id: i64,
         previous_space_id: Option<i64>,
     },
-    /// A space's name, description, levels, section or position changed,
-    /// or it was created. Changes the index structure, so clears `site`.
+    /// A space's name, description, grants, place on the default front
+    /// page or essential flag changed, or it was created. Changes the
+    /// front page, so clears `site`.
     SpaceChanged { space_id: i64 },
     /// A user was renamed or changed their post-info column.
     UserChanged { user_id: i64 },
@@ -36,7 +37,7 @@ pub enum Change {
     UserDeleted { user_id: i64 },
     /// An invite was used or revoked.
     InviteChanged { invite_id: i64 },
-    /// Site settings or sections changed.
+    /// Site settings or the default layout changed.
     SiteChanged,
     /// A moderator's action was recorded in the moderation log.
     ModLogged,

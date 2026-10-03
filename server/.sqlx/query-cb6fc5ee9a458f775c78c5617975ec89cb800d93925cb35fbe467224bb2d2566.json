@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.id AS \"id!\", c.slug AS \"slug!\", c.name AS \"name!\", c.description AS \"description!\",\n               c.position AS \"position!\", c.section_id AS \"section_id?\", c.section_name AS \"section_name?\",\n               c.visibility AS \"visibility!\", c.created_by AS \"created_by?\", c.created_at AS \"created_at!\",\n               c.archived_at AS \"archived_at?\",\n               c.read_level AS \"read_level!\", c.read_group_ids AS \"read_group_ids!\", c.read_user_ids AS \"read_user_ids!\",\n               c.reply_level AS \"reply_level!\", c.reply_group_ids AS \"reply_group_ids!\", c.reply_user_ids AS \"reply_user_ids!\",\n               c.start_level AS \"start_level!\", c.start_group_ids AS \"start_group_ids!\", c.start_user_ids AS \"start_user_ids!\",\n               c.administer_level AS \"administer_level!\", c.administer_group_ids AS \"administer_group_ids!\",\n               c.administer_user_ids AS \"administer_user_ids!\",\n               c.read_group_names AS \"group_names!\"\n        FROM space_targets c\n        WHERE space_readable(c.visibility, c.id, $1, $2)\n          AND ($3::bigint IS NULL OR c.id = $3)\n          AND ($4::text IS NULL OR c.slug = $4)\n        ORDER BY c.section_position NULLS FIRST, c.section_id NULLS FIRST, c.position, c.id\n        ",
+  "query": "\n        SELECT c.id AS \"id!\", c.slug AS \"slug!\", c.name AS \"name!\", c.description AS \"description!\",\n               c.essential AS \"essential!\",\n               c.visibility AS \"visibility!\", c.created_by AS \"created_by?\", c.created_at AS \"created_at!\",\n               c.archived_at AS \"archived_at?\",\n               c.read_level AS \"read_level!\", c.read_group_ids AS \"read_group_ids!\", c.read_user_ids AS \"read_user_ids!\",\n               c.reply_level AS \"reply_level!\", c.reply_group_ids AS \"reply_group_ids!\", c.reply_user_ids AS \"reply_user_ids!\",\n               c.start_level AS \"start_level!\", c.start_group_ids AS \"start_group_ids!\", c.start_user_ids AS \"start_user_ids!\",\n               c.administer_level AS \"administer_level!\", c.administer_group_ids AS \"administer_group_ids!\",\n               c.administer_user_ids AS \"administer_user_ids!\",\n               c.read_group_names AS \"group_names!\"\n        FROM space_targets c\n        WHERE space_readable(c.visibility, c.id, $1, $2)\n          AND ($3::bigint IS NULL OR c.id = $3)\n          AND ($4::text IS NULL OR c.slug = $4)\n        ORDER BY lower(c.name), c.id\n        ",
   "describe": {
     "columns": [
       {
@@ -49,39 +49,17 @@
       },
       {
         "ordinal": 4,
-        "name": "position!",
-        "type_info": "Int4",
+        "name": "essential!",
+        "type_info": "Bool",
         "origin": {
           "Table": {
             "table": "space_targets",
-            "name": "position"
+            "name": "essential"
           }
         }
       },
       {
         "ordinal": 5,
-        "name": "section_id?",
-        "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "space_targets",
-            "name": "section_id"
-          }
-        }
-      },
-      {
-        "ordinal": 6,
-        "name": "section_name?",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "space_targets",
-            "name": "section_name"
-          }
-        }
-      },
-      {
-        "ordinal": 7,
         "name": "visibility!",
         "type_info": "Text",
         "origin": {
@@ -92,7 +70,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 6,
         "name": "created_by?",
         "type_info": "Int8",
         "origin": {
@@ -103,7 +81,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 7,
         "name": "created_at!",
         "type_info": "Timestamptz",
         "origin": {
@@ -114,7 +92,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 8,
         "name": "archived_at?",
         "type_info": "Timestamptz",
         "origin": {
@@ -125,7 +103,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 9,
         "name": "read_level!",
         "type_info": "Text",
         "origin": {
@@ -136,7 +114,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 10,
         "name": "read_group_ids!",
         "type_info": "Int8Array",
         "origin": {
@@ -147,7 +125,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 11,
         "name": "read_user_ids!",
         "type_info": "Int8Array",
         "origin": {
@@ -158,7 +136,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 12,
         "name": "reply_level!",
         "type_info": "Text",
         "origin": {
@@ -169,7 +147,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 13,
         "name": "reply_group_ids!",
         "type_info": "Int8Array",
         "origin": {
@@ -180,7 +158,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 14,
         "name": "reply_user_ids!",
         "type_info": "Int8Array",
         "origin": {
@@ -191,7 +169,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 15,
         "name": "start_level!",
         "type_info": "Text",
         "origin": {
@@ -202,7 +180,7 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 16,
         "name": "start_group_ids!",
         "type_info": "Int8Array",
         "origin": {
@@ -213,7 +191,7 @@
         }
       },
       {
-        "ordinal": 19,
+        "ordinal": 17,
         "name": "start_user_ids!",
         "type_info": "Int8Array",
         "origin": {
@@ -224,7 +202,7 @@
         }
       },
       {
-        "ordinal": 20,
+        "ordinal": 18,
         "name": "administer_level!",
         "type_info": "Text",
         "origin": {
@@ -235,7 +213,7 @@
         }
       },
       {
-        "ordinal": 21,
+        "ordinal": 19,
         "name": "administer_group_ids!",
         "type_info": "Int8Array",
         "origin": {
@@ -246,7 +224,7 @@
         }
       },
       {
-        "ordinal": 22,
+        "ordinal": 20,
         "name": "administer_user_ids!",
         "type_info": "Int8Array",
         "origin": {
@@ -257,7 +235,7 @@
         }
       },
       {
-        "ordinal": 23,
+        "ordinal": 21,
         "name": "group_names!",
         "type_info": "TextArray",
         "origin": {
@@ -298,10 +276,8 @@
       true,
       true,
       true,
-      true,
-      true,
       true
     ]
   },
-  "hash": "015f6becae5a71ca0a1d70f0cf94bdf2a26ae0cfd6bb87469f0616d9e7527839"
+  "hash": "cb6fc5ee9a458f775c78c5617975ec89cb800d93925cb35fbe467224bb2d2566"
 }

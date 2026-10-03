@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM layout_section_spaces x USING layout_sections s, layouts l\n         WHERE s.id = x.section_id AND l.id = s.layout_id AND l.user_id = $1 AND x.space_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6e0d0f65fc0468d763a7c744ae0f8ecae9efa400595833ebf6bd6260abce556b"
+}

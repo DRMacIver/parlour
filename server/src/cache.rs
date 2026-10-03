@@ -20,7 +20,7 @@ use axum::body::Bytes;
 /// What a cached page depends on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Tag {
-    /// Site-wide data: the site name, the list of spaces and sections,
+    /// Site-wide data: the site name, the spaces and the default layout,
     /// user names. Every page carries this tag.
     Site,
     Space(i64),

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE spaces SET slug = $2, name = $3, description = $4, version = version + 1\n           WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8e529cec0dfa2ef215757b6f8dd0a20f699dfb2913fceb0c6cbee7add673e61c"
+}

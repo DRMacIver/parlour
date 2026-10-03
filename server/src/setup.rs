@@ -1,7 +1,9 @@
 //! First-run setup (DESIGN.md §10). When the server starts and there is no
 //! admin account, it makes a one-time token and prints a link with it to
-//! the log. `/setup?token=…` then creates the admin account and names the
-//! site; the next steps (email settings with a test send, then the first
+//! the log. `/setup?token=…` then creates the admin account, names the
+//! site, makes the first two spaces (Announcements and General, both
+//! essential) and the default front page that holds them (DESIGN.md
+//! §3.5); the next steps (email settings with a test send, then the first
 //! invites) are ordinary admin pages.
 //!
 //! The token lives only in memory: restarting the server before setup is
@@ -22,10 +24,13 @@ use crate::changes::Change;
 use crate::client::ClientIp;
 use crate::error::AppError;
 use crate::invites::{self, CreatedInvite, NewInvite};
+use crate::layouts;
 use crate::mail;
+use crate::permissions::Grant;
 use crate::ratelimit::{Action, Scope};
 use crate::sessions;
 use crate::settings;
+use crate::store::{self, SpaceSettings};
 use crate::tokens;
 use crate::users::{self, FirstAdmin, NewAdmin};
 use crate::viewer::{UserCtx, Viewer};
@@ -245,6 +250,7 @@ pub async fn create_admin(
         }
     };
     settings::set(&mut tx, "site_name", &site_name).await?;
+    first_spaces(&mut tx, user_id).await?;
     tx.commit().await?;
     *state
         .setup_token()
@@ -259,6 +265,52 @@ pub async fn create_admin(
         &state,
         &token,
     ))
+}
+
+/// The first two spaces and the default front page (DESIGN.md §3.5):
+/// Announcements, in which only staff start threads, and General, both
+/// essential and open for anyone to read, in a section called "Forum",
+/// followed by an empty "Feeds" section. Site staff run them. A space
+/// whose address is taken already (the database was not quite empty) is
+/// used as it is.
+async fn first_spaces(tx: &mut crate::db::Tx, admin_id: i64) -> Result<(), AppError> {
+    let default = layouts::default_id(&mut *tx).await?;
+    let forum = layouts::add_section(&mut *tx, default, "Forum").await?;
+    for (slug, name, description, start) in [
+        (
+            "announcements",
+            "Announcements",
+            "News about the forum, from the people who run it.",
+            Grant::staff(),
+        ),
+        (
+            "general",
+            "General",
+            "Anything that doesn’t have a space of its own yet.",
+            Grant::members(),
+        ),
+    ] {
+        let settings = SpaceSettings {
+            slug: slug.to_owned(),
+            name: name.to_owned(),
+            description: description.to_owned(),
+            read: Grant::public(),
+            start,
+            administer: Grant::staff(),
+            ..SpaceSettings::default()
+        };
+        let space_id = match store::add_space(&mut *tx, &settings, Some(admin_id)).await? {
+            Ok(id) => id,
+            Err(_) => match store::space_id_by_slug(&mut *tx, slug).await? {
+                Some(id) => id,
+                None => continue,
+            },
+        };
+        layouts::set_essential(&mut *tx, space_id, true).await?;
+        layouts::follow(&mut *tx, default, forum, space_id).await?;
+    }
+    layouts::add_section(&mut *tx, default, layouts::FEEDS_SECTION).await?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

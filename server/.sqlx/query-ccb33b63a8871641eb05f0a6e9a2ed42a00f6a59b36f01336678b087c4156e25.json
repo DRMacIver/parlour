@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO layouts (user_id) VALUES (NULL)\n         ON CONFLICT ((user_id IS NULL)) WHERE user_id IS NULL DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "ccb33b63a8871641eb05f0a6e9a2ed42a00f6a59b36f01336678b087c4156e25"
+}

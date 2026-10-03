@@ -82,13 +82,12 @@ test("a new forum is set up, and its first members talk", async ({ page, browser
   await expect(page.locator(".site-name")).toHaveText("The Thursday Club");
   await expect(page.locator(".nav-user")).toHaveText("founder");
 
-  // A space to talk in, open to visitors.
-  await page.goto("/spaces/new");
-  await page.fill("#name", "General");
-  await page.fill("#slug", "general");
-  await page.locator("form[action='/spaces/new'] button[type=submit]").click();
-  await expect(page.locator(".notice-success")).toContainText("The space is ready");
-  await page.check("input[name=read_level][value=public]");
+  // Setup made Announcements and General, on the front page for everyone.
+  await expect(page.locator(".space-list a[href='/c/announcements']")).toBeVisible();
+  await expect(page.locator(".space-list a[href='/c/general']")).toBeVisible();
+  // General's settings are the admin's to change; a save keeps it as it is.
+  await page.goto("/c/general/settings");
+  await expect(page.locator("input[name=essential]")).toBeChecked();
   await page.locator("form[action='/c/general/settings'] button[type=submit]").click();
   await expect(page.locator(".notice-success")).toHaveText("Saved.");
 

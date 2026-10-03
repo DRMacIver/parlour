@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM space_mutes m USING layouts l\n         WHERE l.id = $1 AND m.user_id = l.user_id AND m.space_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d1a7cb904fd8843b95cba6bf83e8f65d08543ace133ec9a5f8292822d4f8d839"
+}

@@ -1347,7 +1347,7 @@ fn forks_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle, db: &
     use hegel::generators as gs;
     rt.block_on(async {
         sqlx::raw_sql(
-            "TRUNCATE settings, posts, threads, spaces, sections, users RESTART IDENTITY CASCADE",
+            "TRUNCATE settings, posts, threads, spaces, layouts, users RESTART IDENTITY CASCADE",
         )
         .execute(db)
         .await

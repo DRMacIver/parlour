@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO layout_section_spaces (section_id, space_id, position)\n         SELECT $1, $2, coalesce(max(position), -1) + 1 FROM layout_section_spaces WHERE section_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ed35f87f5978b24b8a9b769549a4f829558e95d084e33c263e4e001bf0748c56"
+}

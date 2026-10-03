@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT essential FROM spaces WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "essential",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "essential"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9699eeb9e77c95785cf0a5e190b55e814032b95f67a7461f30c6910136624867"
+}

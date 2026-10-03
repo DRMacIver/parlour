@@ -4,7 +4,9 @@
 //!
 //! Anyone who administers a space (its administer grant names them, or
 //! they are staff) may change it. Staff changing a space they don't
-//! administer in their own right is recorded in the moderation log.
+//! administer in their own right is recorded in the moderation log. Staff
+//! also place the space on the default front page from here, and admins
+//! mark it essential (DESIGN.md §3.1, §3.5).
 
 use std::collections::HashMap;
 
@@ -19,9 +21,10 @@ use serde_json::json;
 use crate::AppState;
 use crate::admin_pages::DoneQuery;
 use crate::changes::Change;
-use crate::content::{self, Deps, Section, SpaceListing, SpaceSort, SpaceTarget};
+use crate::content::{self, Deps, SpaceListing, SpaceSort, SpaceTarget};
 use crate::error::AppError;
 use crate::groups::{self, GroupSummary};
+use crate::layouts::{self, Section};
 use crate::mod_records::{self, NewAction};
 use crate::permissions::{Grant, Level};
 use crate::ratelimit::{Action, Scope};
@@ -268,8 +271,11 @@ pub struct SettingsForm {
     name: String,
     slug: String,
     description: String,
+    /// The default front page section to put it in (staff); empty for
+    /// none.
     section: String,
-    position: String,
+    /// Whether the essential box was ticked (admins).
+    essential: bool,
     read: GrantForm,
     reply: GrantForm,
     start: GrantForm,
@@ -295,7 +301,7 @@ impl SettingsForm {
                 "slug" => form.slug = value.clone(),
                 "description" => form.description = value.clone(),
                 "section" => form.section = value.clone(),
-                "position" => form.position = value.clone(),
+                "essential" => form.essential = true,
                 _ => {
                     if let Some((verb, part)) = key.rsplit_once('_')
                         && let Some(grant) = form.grant_mut(verb)
@@ -313,10 +319,11 @@ impl SettingsForm {
         form
     }
 
-    async fn from_settings(
-        state: &AppState,
-        settings: &SpaceSettings,
-    ) -> Result<SettingsForm, AppError> {
+    async fn from_space(state: &AppState, space: &SpaceTarget) -> Result<SettingsForm, AppError> {
+        let settings = space.settings();
+        let db = state.db();
+        let default = layouts::default_id(db).await?;
+        let section = layouts::section_of(db, default, space.space.id).await?;
         let ids: Vec<i64> = [
             &settings.read,
             &settings.reply,
@@ -335,11 +342,8 @@ impl SettingsForm {
             name: settings.name.clone(),
             slug: settings.slug.clone(),
             description: settings.description.clone(),
-            section: settings
-                .section_id
-                .map(|id| id.to_string())
-                .unwrap_or_default(),
-            position: settings.position.to_string(),
+            section: section.map(|id| id.to_string()).unwrap_or_default(),
+            essential: space.essential,
             read: GrantForm::from_grant(&settings.read, &usernames),
             reply: GrantForm::from_grant(&settings.reply, &usernames),
             start: GrantForm::from_grant(&settings.start, &usernames),
@@ -347,39 +351,25 @@ impl SettingsForm {
         })
     }
 
-    /// The settings this form describes, starting from the space's
-    /// current ones: the section and position change only for staff.
+    /// The default front page section the form asks for, given the
+    /// default layout's sections: `None` for none.
+    fn section(&self, sections: &[Section]) -> Result<Option<i64>, String> {
+        match self.section.trim() {
+            "" => Ok(None),
+            id => match id.parse::<i64>() {
+                Ok(id) if sections.iter().any(|s| s.id == id) => Ok(Some(id)),
+                _ => Err("Choose a section from the list.".to_owned()),
+            },
+        }
+    }
+
+    /// The settings this form describes.
     async fn settings(
         &self,
         state: &AppState,
-        current: &SpaceSettings,
-        staff: bool,
-        sections: &[Section],
         groups: &[GroupSummary],
     ) -> Result<Result<SpaceSettings, Vec<String>>, AppError> {
         let mut problems = Vec::new();
-        let (section_id, position) = if staff {
-            let section_id = match self.section.trim() {
-                "" => None,
-                id => match id.parse::<i64>() {
-                    Ok(id) if sections.iter().any(|s| s.id == id) => Some(id),
-                    _ => {
-                        problems.push("Choose a section from the list.".to_owned());
-                        None
-                    }
-                },
-            };
-            let position = match self.position.trim() {
-                "" => 0,
-                text => text.parse::<i32>().unwrap_or_else(|_| {
-                    problems.push("The position should be a whole number, such as 3.".to_owned());
-                    0
-                }),
-            };
-            (section_id, position)
-        } else {
-            (current.section_id, current.position)
-        };
         let mut grants = Vec::new();
         for (verb, form, what) in [
             ("read", &self.read, "read the space"),
@@ -423,11 +413,9 @@ impl SettingsForm {
                 .expect("every verb has a grant")
         };
         let settings = SpaceSettings {
-            section_id,
             slug: self.slug.clone(),
             name: self.name.clone(),
             description: self.description.clone(),
-            position,
             read: grant("read"),
             reply: grant("reply"),
             start: grant("start"),
@@ -453,10 +441,13 @@ struct SettingsTemplate {
     notice: Option<&'static str>,
     errors: Vec<String>,
     form: SettingsForm,
+    /// The default front page's sections, for staff to choose from.
     sections: Vec<Section>,
     groups: Vec<GroupSummary>,
-    /// Staff also place the space in a section.
+    /// Staff also place the space on the default front page.
     staff: bool,
+    /// Admins also mark it essential.
+    admin: bool,
     /// How many threads it has ever had: only one with none can be deleted.
     thread_count: i64,
 }
@@ -465,6 +456,16 @@ impl SettingsTemplate {
     fn section_chosen(&self, id: &i64) -> bool {
         self.form.section.trim() == id.to_string()
     }
+}
+
+/// The sections of the default front page, in order.
+async fn default_sections(state: &AppState) -> Result<Vec<Section>, AppError> {
+    let db = state.db();
+    let default = layouts::default_id(db).await?;
+    Ok(layouts::read(db, default)
+        .await?
+        .map(|layout| layout.sections)
+        .unwrap_or_default())
 }
 
 /// The space at `slug` if the viewer administers it, or the page for
@@ -501,9 +502,10 @@ async fn render_settings(
         &SettingsTemplate {
             layout: Layout::load(state, viewer, Nav::None).await?,
             thread_count: content::space_thread_count(db, viewer, space.space.id).await?,
-            sections: content::sections(db).await?,
+            sections: default_sections(state).await?,
             groups: groups::list(db).await?,
             staff: viewer.is_staff(),
+            admin: viewer.is_admin(),
             space,
             notice,
             errors,
@@ -529,7 +531,7 @@ pub async fn settings_page(
         "saved" => Some("Saved."),
         _ => None,
     };
-    let form = SettingsForm::from_settings(&state, &space.settings()).await?;
+    let form = SettingsForm::from_space(&state, &space).await?;
     render_settings(
         &state,
         &viewer,
@@ -588,16 +590,21 @@ pub async fn save_settings(
     };
     let db = state.db();
     let form = SettingsForm::from_fields(&fields);
-    let current = space.settings();
-    let settings = form
-        .settings(
-            &state,
-            &current,
-            viewer.is_staff(),
-            &content::sections(db).await?,
-            &groups::list(db).await?,
-        )
-        .await?;
+    let mut settings = form.settings(&state, &groups::list(db).await?).await?;
+    // Where it goes on the default front page is for staff to say.
+    let section = if viewer.is_staff() {
+        match form.section(&default_sections(&state).await?) {
+            Ok(section) => Some(section),
+            Err(why) => {
+                let mut problems = settings.err().unwrap_or_default();
+                problems.push(why);
+                settings = Err(problems);
+                None
+            }
+        }
+    } else {
+        None
+    };
     let settings = match settings {
         Ok(settings) => settings,
         Err(problems) => {
@@ -628,9 +635,22 @@ pub async fn save_settings(
         }
         Ok(false) => web::not_found(&state, &viewer).await,
         Ok(true) => {
+            if let Some(section) = section {
+                place_on_default(&state, space.space.id, section).await?;
+            }
+            if viewer.is_admin() && form.essential != space.essential {
+                layouts::set_essential(db, space.space.id, form.essential).await?;
+                let action = if form.essential {
+                    "mark_space_essential"
+                } else {
+                    "unmark_space_essential"
+                };
+                log_staff_action(&state, &viewer, &space, action).await?;
+            }
             log_staff_action(&state, &viewer, &space, "edit_space").await?;
             // A new read grant changes every page that could show the
-            // space's threads; this clears them all.
+            // space's threads, and so does a place on the default front
+            // page; this clears them all.
             state
                 .changed(Change::SpaceChanged {
                     space_id: space.space.id,
@@ -642,6 +662,29 @@ pub async fn save_settings(
             )))
         }
     }
+}
+
+/// Puts the space in a section of the default front page, or (`None`)
+/// takes it off, if that isn't where it is already.
+async fn place_on_default(
+    state: &AppState,
+    space_id: i64,
+    section: Option<i64>,
+) -> Result<(), AppError> {
+    let db = state.db();
+    let default = layouts::default_id(db).await?;
+    if layouts::section_of(db, default, space_id).await? == section {
+        return Ok(());
+    }
+    match section {
+        Some(section) => {
+            layouts::follow(db, default, section, space_id).await?;
+        }
+        None => {
+            layouts::unfollow(db, default, space_id).await?;
+        }
+    }
+    Ok(())
 }
 
 async fn set_archived(
@@ -707,7 +750,7 @@ pub async fn delete(
         }
         Ok(false) => web::not_found(&state, &viewer).await,
         Err(why) => {
-            let form = SettingsForm::from_settings(&state, &space.settings()).await?;
+            let form = SettingsForm::from_space(&state, &space).await?;
             render_settings(
                 &state,
                 &viewer,

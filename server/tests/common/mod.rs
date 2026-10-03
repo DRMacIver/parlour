@@ -11,6 +11,7 @@ use http_body_util::BodyExt;
 use parlour::cache::PageCache;
 use parlour::changes::Change;
 use parlour::islands::IslandAssets;
+use parlour::layouts;
 use parlour::mail::{Email, Mailer};
 use parlour::permissions::Grant;
 use parlour::store::{self, CreatedThread, NewPost, NewSpace, NewThread, NewUser};
@@ -288,14 +289,23 @@ impl Forum {
         .unwrap()
     }
 
+    /// A section of the default front page, at `position` among its
+    /// sections (lower first).
     pub async fn section(&self, name: &str, position: i32) -> i64 {
-        store::create_section(&self.db, name, position)
-            .await
-            .unwrap()
+        let default = layouts::default_id(&self.db).await.unwrap();
+        let id = layouts::add_section(&self.db, default, name).await.unwrap();
+        assert!(
+            layouts::move_section(&self.db, default, id, position)
+                .await
+                .unwrap()
+        );
+        id
     }
 
     /// A space any member may post in, read at `read_level` (`public`,
-    /// `members`, `staff`, or `listed` naming nobody yet).
+    /// `members`, `staff`, or `listed` naming nobody yet), on the default
+    /// front page in the section given, or in a catch-all section called
+    /// "Spaces" that comes first, at `position` within it (lower first).
     pub async fn space(
         &self,
         slug: &str,
@@ -303,20 +313,60 @@ impl Forum {
         section_id: Option<i64>,
         position: i32,
     ) -> i64 {
-        store::create_space(
+        let id = self.unlisted_space(slug, read_level).await;
+        let default = layouts::default_id(&self.db).await.unwrap();
+        let section_id = match section_id {
+            Some(section_id) => section_id,
+            None => {
+                let existing: Option<i64> = sqlx::query_scalar(
+                    "SELECT id FROM layout_sections WHERE layout_id = $1 AND name = 'Spaces'",
+                )
+                .bind(default)
+                .fetch_optional(&self.db)
+                .await
+                .unwrap();
+                match existing {
+                    Some(id) => id,
+                    None => self.section("Spaces", 0).await,
+                }
+            }
+        };
+        assert!(
+            layouts::follow(&self.db, default, section_id, id)
+                .await
+                .unwrap()
+        );
+        sqlx::query("UPDATE layout_section_spaces SET position = $3 WHERE section_id = $1 AND space_id = $2")
+            .bind(section_id)
+            .bind(id)
+            .bind(position)
+            .execute(&self.db)
+            .await
+            .unwrap();
+        // Setting the position by hand bypasses the store, so bring the
+        // members' copies up to date the way it would have.
+        layouts::default_changed(&self.db).await.unwrap();
+        self.changed(Change::SpaceChanged { space_id: id }).await;
+        id
+    }
+
+    /// A space like [`Forum::space`] makes, but on nobody's front page.
+    pub async fn unlisted_space(&self, slug: &str, read_level: &str) -> i64 {
+        let id = store::create_space(
             &self.db,
             &NewSpace::with_levels(
-                section_id,
                 slug,
                 &capitalise(&slug.replace('-', " ")),
                 &format!("All about {slug}."),
-                position,
                 read_level,
                 "members",
             ),
         )
         .await
-        .unwrap()
+        .unwrap();
+        // As the handler that makes a space does.
+        self.changed(Change::SpaceChanged { space_id: id }).await;
+        id
     }
 
     /// Replaces one of a space's grants, as its settings form would.

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO layout_sections (layout_id, name, position)\n         SELECT $1, $2, coalesce(max(position), -1) + 1 FROM layout_sections WHERE layout_id = $1\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "layout_sections",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "664a8278cadd882ca3f2b51f278bb266e46fde09641bb328d163ac3d089afa86"
+}

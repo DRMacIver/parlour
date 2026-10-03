@@ -2,7 +2,7 @@
 {%- import "_macros.html" as m -%}
 {% block title %}{{ thread.thread.title }} · {{ layout.site_name }}{% endblock %}
 {% block content %}
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a>{% if let Some(section) = thread.space.section_name %} › {{ section }}{% endif %} › <a href="/c/{{ thread.space.space.slug }}">{{ thread.space.space.name }}</a></nav>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/c/{{ thread.space.space.slug }}">{{ thread.space.space.name }}</a></nav>
 <h1 class="page-title">{{ thread.thread.title }}</h1>
 <p class="thread-meta">
   Started by {{ thread.author.display_name }} on {% call m::time(thread.created_at) %}{% endcall %}
