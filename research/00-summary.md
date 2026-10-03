@@ -7,6 +7,8 @@ This summary combines four research reports:
 - [03-architecture.md](03-architecture.md): rendering, caching, permissions, stack, deployment
 - [04-essentials.md](04-essentials.md): spam, moderation, accounts, DMs, email, UK Online Safety Act
 
+A second round, done after the prototype was built, looks at replacing the fixed category list with cheap member-created spaces, personal feeds, member-made groups and break-glass staff access. Start with [05-organisation-summary.md](05-organisation-summary.md).
+
 Decisions already made: Rust backend, React where it is useful, Postgres, open source, docker compose deployment on a single small VPS. Threads are flat and chronological, and any post can be quoted into a new thread. Categories can be public, members-only or restricted to groups. DMs are in scope. Discord login is optional.
 
 ## The gap
