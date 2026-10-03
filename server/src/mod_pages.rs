@@ -19,7 +19,7 @@ use axum::response::Response;
 use crate::AppState;
 use crate::client::ClientIp;
 use crate::content::moderation::{ENTRIES_PER_PAGE, LogEntry, Scope};
-use crate::content::{self, CategoryTarget, Deps, PostTarget, ThreadTarget, page_count};
+use crate::content::{self, Deps, PostTarget, SpaceTarget, ThreadTarget, page_count};
 use crate::error::AppError;
 use crate::mod_records::{
     self, HeldPost, IpRecord, MemberRecord, MemberRow, Note, REASONS, Restriction,
@@ -937,15 +937,13 @@ struct ModThreadTemplate {
     layout: Layout,
     thread: ThreadTarget,
     pinned: bool,
-    categories: Vec<CategoryTarget>,
+    spaces: Vec<SpaceTarget>,
     notice: Option<&'static str>,
 }
 
 impl ModThreadTemplate {
-    fn current_category(&self, slug: &str) -> bool {
-        self.thread
-            .category()
-            .is_some_and(|c| c.category.slug == slug)
+    fn current_space(&self, slug: &str) -> bool {
+        self.thread.space().is_some_and(|c| c.space.slug == slug)
     }
 }
 
@@ -976,7 +974,7 @@ pub async fn thread_page(
         .then_some("Done.");
     let Some(thread) = content::thread_target(state.db(), &viewer, thread_id)
         .await?
-        .filter(|t| t.category().is_some())
+        .filter(|t| t.space().is_some())
     else {
         // A deleted thread can be restored from here.
         return match content::moderation::deleted_thread(state.db(), &viewer, thread_id).await? {
@@ -999,7 +997,7 @@ pub async fn thread_page(
         StatusCode::OK,
         &ModThreadTemplate {
             layout: Layout::load(&state, &viewer, Nav::Moderation).await?,
-            categories: content::readable_categories(state.db(), &viewer).await?,
+            spaces: content::readable_spaces(state.db(), &viewer).await?,
             pinned,
             thread,
             notice,
@@ -1023,7 +1021,7 @@ pub async fn moderate_thread(
         "pin" => ThreadAction::Pin,
         "unpin" => ThreadAction::Unpin,
         "rename" => ThreadAction::Rename(field(&fields, "title").to_owned()),
-        "move" => ThreadAction::Move(field(&fields, "category").to_owned()),
+        "move" => ThreadAction::Move(field(&fields, "space").to_owned()),
         "delete" => ThreadAction::Delete,
         "restore" => ThreadAction::Restore,
         _ => {
@@ -1058,7 +1056,7 @@ pub async fn move_posts(
     let destination = match field(&fields, "to") {
         "existing" => Destination::Existing(field(&fields, "thread").to_owned()),
         "new" => Destination::New {
-            category: field(&fields, "category").to_owned(),
+            space: field(&fields, "space").to_owned(),
             title: field(&fields, "title").to_owned(),
         },
         _ => {

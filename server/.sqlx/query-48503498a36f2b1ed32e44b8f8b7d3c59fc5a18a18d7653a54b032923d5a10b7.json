@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT coalesce(sum(pc.posts), 0)::bigint AS \"n!\"\n           FROM user_space_post_counts pc JOIN spaces c ON c.id = pc.space_id\n           WHERE pc.user_id = $1 AND space_readable(c.read_level, c.id, $2, $3)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "48503498a36f2b1ed32e44b8f8b7d3c59fc5a18a18d7653a54b032923d5a10b7"
+}

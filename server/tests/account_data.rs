@@ -24,7 +24,7 @@ struct Setup {
 async fn setup(pool: PgPool) -> Setup {
     let f = Forum::new(pool).without_rate_limits();
     f.no_new_members().await;
-    let public = f.category("games", "public", None, 0).await;
+    let public = f.space("games", "public", None, 0).await;
     let ruth = f.member("ruth", "user", Some(PASSWORD)).await;
     let jonah = f.member("jonah", "user", None).await;
     Setup {
@@ -83,7 +83,7 @@ async fn members_download_their_data(pool: PgPool) {
     ))
     .await;
     // A thread she wrote in that she can no longer read.
-    let hidden = s.f.category("secret", "members", None, 2).await;
+    let hidden = s.f.space("secret", "members", None, 2).await;
     let group = s.f.group("org", "Organisers").await;
     let secret =
         s.f.thread(hidden, s.ruth, "Secret plans title", "Ruth's plan.")
@@ -514,7 +514,7 @@ async fn the_export_includes_held_posts_and_notifications(pool: PgPool) {
         &s.f.db,
         s.ruth,
         &parlour::mod_records::HeldPlace::Thread {
-            category_id: s.public,
+            space_id: s.public,
             title: "Ruth's held title".into(),
             forked_from_post_id: None,
         },

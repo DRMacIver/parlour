@@ -31,7 +31,7 @@ pub async fn load(db: &Db, viewer: &Viewer) -> sqlx::Result<Header> {
                   CASE WHEN $6 THEN current_restriction_action($1) END AS restriction_action"#,
         viewer.user_id(),
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
         filter.dm_viewer,
         viewer.is_staff(),
         restricted,

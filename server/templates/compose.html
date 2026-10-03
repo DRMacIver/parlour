@@ -20,7 +20,7 @@
     </div>
   </div>
 </figure>
-<p class="form-note composer-note">The quoted post stays where it is and appears at the top of the new thread. You can only quote it into categories at least as private as its own, so that nobody can read it through your thread who couldn’t read it where it is.</p>
+<p class="form-note composer-note">The quoted post stays where it is and appears at the top of the new thread. You can only quote it into spaces at least as private as its own, so that nobody can read it through your thread who couldn’t read it where it is.</p>
 {% endif %}
 {% if let Some(html) = preview %}
 <section class="panel preview" aria-labelledby="preview-heading">
@@ -37,11 +37,11 @@
       <input type="text" id="title" name="title" value="{{ title }}" maxlength="150" required>
     </div>
     {% endif %}
-    {% if !categories.is_empty() %}
+    {% if !spaces.is_empty() %}
     <div class="field">
-      <label for="category">Category</label>
-      <select id="category" name="category">
-      {% for c in categories %}
+      <label for="space">Space</label>
+      <select id="space" name="space">
+      {% for c in spaces %}
         <option value="{{ c.slug }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>
       {% endfor %}
       </select>

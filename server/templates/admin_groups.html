@@ -5,7 +5,7 @@
 {% block content %}
 <h1 class="page-title">Groups</h1>
 {% call an::admin_nav("groups") %}{% endcall %}
-<p class="lede">Groups decide who can read and post in group-restricted categories. Staff invite links can add the people who join to groups.</p>
+<p class="lede">Groups decide who can read and post in group-restricted spaces. Staff invite links can add the people who join to groups.</p>
 {% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
 {% call f::errors(errors) %}{% endcall %}
 <section class="panel" aria-labelledby="groups-heading">
@@ -16,7 +16,7 @@
   <ul class="member-list">
   {% for group in groups %}
     <li>
-      <span class="admin-category-name">
+      <span class="admin-space-name">
         <a href="/admin/groups/{{ group.id }}">{{ group.name }}</a>
         {% if !group.description.is_empty() %}<span class="row-meta">{{ group.description }}</span>{% endif %}
       </span>

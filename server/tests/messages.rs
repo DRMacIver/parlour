@@ -9,7 +9,7 @@ use common::{Forum, Response};
 use parlour::settings::{self, MessageSettings};
 use sqlx::PgPool;
 
-/// A forum with a public category `games`, members ruth, jonah and maya
+/// A forum with a public space `games`, members ruth, jonah and maya
 /// (with sessions), and an admin, sam. New-member limits are off unless a
 /// test turns them on.
 struct Setup {
@@ -27,7 +27,7 @@ struct Setup {
 
 async fn setup(pool: PgPool) -> Setup {
     let f = Forum::new(pool);
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let ruth = f.member("ruth", "user", None).await;
     let jonah = f.member("jonah", "user", None).await;
     let maya = f.member("maya", "user", None).await;
@@ -253,7 +253,7 @@ async fn nobody_else_can_see_a_conversation(pool: PgPool) {
             response.status
         );
     }
-    // DMs never show up in category lists or post counts, even for the
+    // DMs never show up in space lists or post counts, even for the
     // people in them.
     for cookie in [None, Some(s.ruth_cookie.as_str()), Some(&s.sam_cookie)] {
         for path in ["/", "/latest", "/c/games", "/u/ruth", "/users/tree"] {
@@ -344,7 +344,7 @@ async fn messages_cannot_be_quoted_into_threads(pool: PgPool) {
     let response =
         s.f.submit(
             &format!("/p/{post}/fork"),
-            &[("category", "games"), ("title", "Leak"), ("body", "Look")],
+            &[("space", "games"), ("title", "Leak"), ("body", "Look")],
             Some(&s.ruth_cookie),
         )
         .await;

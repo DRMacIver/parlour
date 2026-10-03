@@ -1,0 +1,85 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT p.id, p.seq, p.created_at, p.edited_at, p.thread_id,\n               (p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL\n                AND thread_readable(t.visibility, t.space_id, $2, $3)) AS \"available!\"\n        FROM posts p\n        JOIN threads t ON t.id = p.thread_id\n        WHERE p.id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "seq",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "edited_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "edited_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "thread_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "available!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      null
+    ]
+  },
+  "hash": "3e04259836d2eb12600552513919c08ec05c6cb5aab7dbeee669a059ebdbf0ea"
+}

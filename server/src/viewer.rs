@@ -1,15 +1,15 @@
 //! Who is looking at a page (DESIGN.md §6). Every content query takes a
 //! `&Viewer` and filters with the shared SQL functions `thread_readable`
-//! and `category_readable`, which take the parameters [`Viewer::filter`]
+//! and `space_readable`, which take the parameters [`Viewer::filter`]
 //! produces.
 //!
 //! The session middleware ([`crate::sessions::middleware`]) works out the
 //! viewer from the session cookie and leaves it in the request's
 //! extensions, where the [`Viewer`] extractor finds it.
 //!
-//! Logged-in members can read public and members-only categories; staff can
-//! read every category (DESIGN.md §3.1). Group membership adds the
-//! group-restricted categories a member's groups may read to [`ReadFilter`].
+//! Logged-in members can read public and members-only spaces; staff can
+//! read every space (DESIGN.md §3.1). Group membership adds the
+//! group-restricted spaces a member's groups may read to [`ReadFilter`].
 
 use std::convert::Infallible;
 
@@ -43,9 +43,9 @@ pub struct UserCtx {
     pub created_at: DateTime<Utc>,
     /// The groups this member belongs to.
     pub group_ids: Vec<i64>,
-    /// The categories those groups may read. They matter only while a
-    /// category's read level is `groups`.
-    pub group_category_ids: Vec<i64>,
+    /// The spaces those groups may read. They matter only while a
+    /// space's read level is `groups`.
+    pub group_space_ids: Vec<i64>,
     /// Until when a moderator has silenced this member: they can read but
     /// not write (DESIGN.md §8).
     pub silenced_until: Option<DateTime<Utc>>,
@@ -91,8 +91,8 @@ impl UserCtx {
 pub struct ReadFilter {
     /// Visibility levels readable everywhere (`$vis` in `thread_readable`).
     pub visibilities: Vec<String>,
-    /// Group-restricted categories this viewer may read.
-    pub group_category_ids: Vec<i64>,
+    /// Group-restricted spaces this viewer may read.
+    pub group_space_ids: Vec<i64>,
     /// Who the viewer is, for `dm_readable`: `None` for visitors and for
     /// suspended members, who read no conversations.
     pub dm_viewer: Option<i64>,
@@ -110,8 +110,8 @@ impl Viewer {
         };
         ReadFilter {
             visibilities: levels.iter().map(|level| (*level).to_owned()).collect(),
-            group_category_ids: user
-                .map(|user| user.group_category_ids.clone())
+            group_space_ids: user
+                .map(|user| user.group_space_ids.clone())
                 .unwrap_or_default(),
             dm_viewer: user.map(|user| user.id),
         }
@@ -192,7 +192,7 @@ mod tests {
             role,
             created_at: Utc::now(),
             group_ids: Vec::new(),
-            group_category_ids: Vec::new(),
+            group_space_ids: Vec::new(),
             silenced_until: None,
             suspended_until: None,
             blocked_user_ids: Vec::new(),
@@ -224,7 +224,7 @@ mod tests {
             Viewer::Anonymous.filter(),
             ReadFilter {
                 visibilities: vec!["public".into()],
-                group_category_ids: vec![],
+                group_space_ids: vec![],
                 dm_viewer: None,
             }
         );
@@ -247,12 +247,12 @@ mod tests {
             unreachable!()
         };
         ctx.group_ids = vec![4];
-        ctx.group_category_ids = vec![7, 9];
+        ctx.group_space_ids = vec![7, 9];
         assert_eq!(
             Viewer::User(ctx).filter(),
             ReadFilter {
                 visibilities: vec!["public".into(), "members".into()],
-                group_category_ids: vec![7, 9],
+                group_space_ids: vec![7, 9],
                 dm_viewer: Some(1),
             }
         );
@@ -267,7 +267,7 @@ mod tests {
             let Viewer::User(mut ctx) = user(role) else {
                 unreachable!()
             };
-            ctx.group_category_ids = vec![7];
+            ctx.group_space_ids = vec![7];
             ctx.suspended_until = Some(Utc::now() + chrono::Duration::days(1));
             let viewer = Viewer::User(ctx.clone());
             assert_eq!(viewer.filter(), Viewer::Anonymous.filter());

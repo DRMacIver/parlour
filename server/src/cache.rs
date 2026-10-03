@@ -1,7 +1,7 @@
 //! The anonymous page cache (DESIGN.md §5).
 //!
 //! Anonymous `GET` requests are answered from memory. Each entry is tagged
-//! with what it was rendered from (`thread:N`, `category:N`, `user:N` and
+//! with what it was rendered from (`thread:N`, `space:N`, `user:N` and
 //! `site`), and after each write commits the app clears the matching tags.
 //!
 //! Rendering happens outside the lock, so a write can commit and clear a tag
@@ -20,10 +20,10 @@ use axum::body::Bytes;
 /// What a cached page depends on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Tag {
-    /// Site-wide data: the site name, the list of categories and sections,
+    /// Site-wide data: the site name, the list of spaces and sections,
     /// user names. Every page carries this tag.
     Site,
-    Category(i64),
+    Space(i64),
     Thread(i64),
     /// Per-user data shown next to posts, such as post counts.
     User(i64),
@@ -39,7 +39,7 @@ impl fmt::Display for Tag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Tag::Site => write!(f, "site"),
-            Tag::Category(id) => write!(f, "category:{id}"),
+            Tag::Space(id) => write!(f, "space:{id}"),
             Tag::Thread(id) => write!(f, "thread:{id}"),
             Tag::User(id) => write!(f, "user:{id}"),
             Tag::Members => write!(f, "members"),
@@ -296,8 +296,8 @@ mod tests {
     fn tags() -> impl PrintableGenerator<Vec<Tag>> {
         gs::vecs(gs::sampled_from(vec![
             Tag::Site,
-            Tag::Category(1),
-            Tag::Category(2),
+            Tag::Space(1),
+            Tag::Space(2),
             Tag::Thread(1),
             Tag::Thread(2),
             Tag::Thread(3),

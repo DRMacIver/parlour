@@ -47,7 +47,7 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
                   p.deleted_at IS NOT NULL AS "deleted!", p.hidden_at IS NOT NULL AS "hidden!",
                   t.visibility = 'private' AS "conversation!",
                   CASE WHEN t.deleted_at IS NULL
-                        AND (thread_readable(t.visibility, t.category_id, $2, $3)
+                        AND (thread_readable(t.visibility, t.space_id, $2, $3)
                              OR dm_readable(t.id, t.visibility, $4))
                        THEN t.title END AS thread_title
            FROM posts p JOIN threads t ON t.id = p.thread_id
@@ -55,7 +55,7 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
            ORDER BY p.created_at, p.id"#,
         user_id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
         filter.dm_viewer,
     )
     .fetch_all(pool)
@@ -88,7 +88,7 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
     let held = sqlx::query!(
         r#"SELECT h.created_at, h.title, h.body_md, h.status, h.decided_at, h.post_id, h.thread_id,
                   CASE WHEN t.deleted_at IS NULL
-                        AND (thread_readable(t.visibility, t.category_id, $2, $3)
+                        AND (thread_readable(t.visibility, t.space_id, $2, $3)
                              OR dm_readable(t.id, t.visibility, $4))
                        THEN t.title END AS thread_title
            FROM held_posts h LEFT JOIN threads t ON t.id = h.thread_id
@@ -96,7 +96,7 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
            ORDER BY h.created_at, h.id"#,
         user_id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
         filter.dm_viewer,
     )
     .fetch_all(pool)
@@ -143,8 +143,8 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
     .fetch_all(pool)
     .await?;
     let watches = sqlx::query!(
-        r#"SELECT w.thread_id, w.category_id, w.level, c.slug AS "category_slug?"
-           FROM watches w LEFT JOIN categories c ON c.id = w.category_id
+        r#"SELECT w.thread_id, w.space_id, w.level, c.slug AS "space_slug?"
+           FROM watches w LEFT JOIN spaces c ON c.id = w.space_id
            WHERE w.user_id = $1 ORDER BY w.updated_at"#,
         user_id
     )
@@ -262,7 +262,7 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
         "blocked_members": blocks,
         "watches": watches.iter().map(|w| json!({
             "thread_id": w.thread_id,
-            "category": w.category_slug,
+            "space": w.space_slug,
             "level": w.level,
         })).collect::<Vec<_>>(),
         "uploads": uploads.iter().map(|u| json!({

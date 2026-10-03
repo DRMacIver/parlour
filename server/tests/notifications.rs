@@ -16,8 +16,8 @@ use parlour::settings::{self, MessageSettings, NotificationSettings};
 use sqlx::PgPool;
 use tower::ServiceExt;
 
-/// A forum with a public category `games`, a members-only `lounge` and a
-/// group category `council` only the Council group (ruth) reads, members
+/// A forum with a public space `games`, a members-only `lounge` and a
+/// group space `council` only the Council group (ruth) reads, members
 /// ruth, jonah and maya with sessions, and notification email sent as soon
 /// as it is due.
 struct Setup {
@@ -35,9 +35,9 @@ struct Setup {
 
 async fn setup(pool: PgPool) -> Setup {
     let f = Forum::new(pool);
-    let games = f.category("games", "public", None, 0).await;
-    let lounge = f.category("lounge", "members", None, 1).await;
-    let council = f.category("council", "public", None, 2).await;
+    let games = f.space("games", "public", None, 0).await;
+    let lounge = f.space("lounge", "members", None, 1).await;
+    let council = f.space("council", "public", None, 2).await;
     let ruth = f.member("ruth", "user", None).await;
     let jonah = f.member("jonah", "user", None).await;
     let maya = f.member("maya", "user", None).await;
@@ -99,16 +99,10 @@ fn anchored_post(location: &str) -> i64 {
 
 /// Starts a thread over HTTP, as a member would, returning its id and
 /// first post.
-async fn new_thread(
-    f: &Forum,
-    cookie: &str,
-    category: &str,
-    title: &str,
-    body: &str,
-) -> (i64, i64) {
+async fn new_thread(f: &Forum, cookie: &str, space: &str, title: &str, body: &str) -> (i64, i64) {
     let response = f
         .submit(
-            &format!("/c/{category}/new"),
+            &format!("/c/{space}/new"),
             &[("title", title), ("body", body)],
             Some(cookie),
         )
@@ -184,7 +178,7 @@ async fn replies_and_mentions_notify(pool: PgPool) {
 #[sqlx::test]
 async fn nobody_is_told_about_posts_they_cannot_read(pool: PgPool) {
     let s = setup(pool).await;
-    // Only ruth reads the council category.
+    // Only ruth reads the council space.
     let (thread, _) = new_thread(&s.f, &s.ruth_cookie, "council", "Agenda", "Hello @maya").await;
     assert!(kinds(&s.f, s.maya).await.is_empty());
     let _ = thread;
@@ -255,7 +249,7 @@ async fn watching_and_muting_threads(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn watching_and_muting_categories(pool: PgPool) {
+async fn watching_and_muting_spaces(pool: PgPool) {
     let s = setup(pool).await;
     let page = s.f.page_as("/c/games", &s.maya_cookie).await;
     assert!(page.contains("action=\"/c/games/watch\""), "{page}");
@@ -263,12 +257,12 @@ async fn watching_and_muting_categories(pool: PgPool) {
     let (thread, first) = new_thread(&s.f, &s.jonah_cookie, "games", "Heat", "Racing").await;
     assert_eq!(
         kinds(&s.f, s.maya).await,
-        vec![format!("watched_category:{first}")]
+        vec![format!("watched_space:{first}")]
     );
-    // Watching a category means new threads, not every reply.
+    // Watching a space means new threads, not every reply.
     reply(&s.f, &s.ruth_cookie, thread, "Vroom", None).await;
     assert_eq!(kinds(&s.f, s.maya).await.len(), 1);
-    // Muting a category silences its threads, mentions included...
+    // Muting a space silences its threads, mentions included...
     watch(&s.f, &s.ruth_cookie, "/c/lounge/watch", "muted").await;
     let (lounge_thread, _) = new_thread(&s.f, &s.jonah_cookie, "lounge", "Chat", "Hi @ruth").await;
     assert!(kinds(&s.f, s.ruth).await.is_empty());
@@ -596,7 +590,7 @@ async fn blocks_and_mutes_made_before_the_email_stop_it(pool: PgPool) {
     s.f.exec(due).await;
     s.f.exec("UPDATE jobs SET run_at = now()").await;
     assert!(s.f.emails().await.is_empty(), "emailed a muted thread");
-    // Muting the category does the same for a thread with no setting of
+    // Muting the space does the same for a thread with no setting of
     // its own.
     let (other, other_first) = new_thread(&s.f, &s.ruth_cookie, "games", "Other", "Hi").await;
     watch(&s.f, &s.ruth_cookie, &format!("/t/{other}/watch"), "normal").await;
@@ -604,7 +598,7 @@ async fn blocks_and_mutes_made_before_the_email_stop_it(pool: PgPool) {
         &s.f,
         &s.maya_cookie,
         other,
-        "Category words",
+        "Space words",
         Some(other_first),
     )
     .await;
@@ -613,7 +607,7 @@ async fn blocks_and_mutes_made_before_the_email_stop_it(pool: PgPool) {
     s.f.exec(away).await;
     s.f.exec(due).await;
     s.f.exec("UPDATE jobs SET run_at = now()").await;
-    assert!(s.f.emails().await.is_empty(), "emailed a muted category");
+    assert!(s.f.emails().await.is_empty(), "emailed a muted space");
     // Unmuted, a new reply is emailed as usual (and only that one).
     watch(&s.f, &s.ruth_cookie, "/c/games/watch", "normal").await;
     reply(&s.f, &s.maya_cookie, other, "Loud words", Some(other_first)).await;
@@ -624,7 +618,7 @@ async fn blocks_and_mutes_made_before_the_email_stop_it(pool: PgPool) {
     let emails = s.f.emails().await;
     assert_eq!(emails.len(), 1, "{emails:?}");
     assert!(emails[0].body.contains("Loud words"));
-    for quiet in ["Blocked words", "Muted words", "Category words"] {
+    for quiet in ["Blocked words", "Muted words", "Space words"] {
         assert!(!emails[0].body.contains(quiet), "{}", emails[0].body);
     }
 }
@@ -1112,7 +1106,7 @@ async fn the_badge_count_follows_group_changes(pool: PgPool) {
         stream.next().await.unwrap(),
         r#"{"notifications":1,"messages":0}"#
     );
-    // Ruth leaves the Council; the notification about its category goes
+    // Ruth leaves the Council; the notification about its space goes
     // with it, on the next count she is sent.
     s.f.exec(&format!(
         "DELETE FROM group_members WHERE group_id = {council_group} AND user_id = {}",

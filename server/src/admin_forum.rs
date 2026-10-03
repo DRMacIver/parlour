@@ -1,12 +1,12 @@
 //! Admin pages for the shape of the forum (DESIGN.md §3.1), for admins only:
 //!
-//! - `/admin/categories`: the sections on the index and the categories in
+//! - `/admin/spaces`: the sections on the index and the spaces in
 //!   them, with who can read and post in each;
-//! - `/admin/categories/new` and `/admin/categories/{id}`: a category's
+//! - `/admin/spaces/new` and `/admin/spaces/{id}`: a space's
 //!   name, address, section, position, read and write levels and groups;
 //! - `/admin/groups` and `/admin/groups/{id}`: groups and their members.
 //!
-//! Changing who can read a category clears every cached page that could
+//! Changing who can read a space clears every cached page that could
 //! show its threads; group changes matter only to logged-in members, whose
 //! pages are never cached.
 
@@ -20,12 +20,12 @@ use serde::Deserialize;
 use crate::AppState;
 use crate::admin_pages::{DoneQuery, admin, not_admin};
 use crate::changes::Change;
-use crate::content::{self, CategoryTarget, Section};
+use crate::content::{self, Section, SpaceTarget};
 use crate::error::AppError;
 use crate::format;
 use crate::groups::{self, GroupDetail, GroupFields, GroupSummary};
 use crate::pages::parse_id;
-use crate::store::{self, CategorySettings};
+use crate::store::{self, SpaceSettings};
 use crate::users;
 use crate::viewer::Viewer;
 use crate::web::{self, Layout, Nav, render, see_other};
@@ -44,7 +44,7 @@ fn notice_for(done: &str) -> Option<&'static str> {
         "saved" => Some("Saved."),
         "deleted" => Some("Deleted."),
         "section" => Some("Section saved."),
-        "section-deleted" => Some("Section deleted. Its categories are now outside any section."),
+        "section-deleted" => Some("Section deleted. Its spaces are now outside any section."),
         "added" => Some("Added to the group."),
         "removed" => Some("Taken out of the group."),
         _ => None,
@@ -52,42 +52,42 @@ fn notice_for(done: &str) -> Option<&'static str> {
 }
 
 // ---------------------------------------------------------------------------
-// The list of sections and categories
+// The list of sections and spaces
 
-/// A section with its categories, for the list.
+/// A section with its spaces, for the list.
 pub struct SectionRow {
     pub section: Option<Section>,
-    pub categories: Vec<CategoryTarget>,
+    pub spaces: Vec<SpaceTarget>,
 }
 
 #[derive(Template)]
-#[template(path = "admin_categories.html")]
-struct CategoriesTemplate {
+#[template(path = "admin_spaces.html")]
+struct SpacesTemplate {
     layout: Layout,
     notice: Option<&'static str>,
     errors: Vec<String>,
     rows: Vec<SectionRow>,
-    any_categories: bool,
+    any_spaces: bool,
 }
 
-impl CategoriesTemplate {
-    fn access(&self, category: &CategoryTarget) -> String {
-        format::access_label(&category.read_level, &category.group_names)
+impl SpacesTemplate {
+    fn access(&self, space: &SpaceTarget) -> String {
+        format::access_label(&space.read_level, &space.group_names)
             .unwrap_or_else(|| "Everyone".to_owned())
     }
 
-    fn posting(&self, category: &CategoryTarget) -> String {
-        match category.write_level.as_str() {
+    fn posting(&self, space: &SpaceTarget) -> String {
+        match space.write_level.as_str() {
             "members" => "Anyone who can read".to_owned(),
             "groups" => {
-                format::access_label("groups", &category.write_group_names).unwrap_or_default()
+                format::access_label("groups", &space.write_group_names).unwrap_or_default()
             }
             _ => "Staff only".to_owned(),
         }
     }
 }
 
-async fn render_categories(
+async fn render_spaces(
     state: &AppState,
     viewer: &Viewer,
     status: StatusCode,
@@ -95,47 +95,47 @@ async fn render_categories(
     errors: Vec<String>,
 ) -> Result<Response, AppError> {
     let db = state.db();
-    let categories = content::readable_categories(db, viewer).await?;
-    let any_categories = !categories.is_empty();
+    let spaces = content::readable_spaces(db, viewer).await?;
+    let any_spaces = !spaces.is_empty();
     let mut rows = vec![SectionRow {
         section: None,
-        categories: Vec::new(),
+        spaces: Vec::new(),
     }];
     for section in content::sections(db).await? {
         rows.push(SectionRow {
             section: Some(section),
-            categories: Vec::new(),
+            spaces: Vec::new(),
         });
     }
-    for category in categories {
+    for space in spaces {
         let row = rows
             .iter_mut()
-            .find(|row| row.section.as_ref().map(|s| s.id) == category.section_id)
-            .expect("every category's section is listed");
-        row.categories.push(category);
+            .find(|row| row.section.as_ref().map(|s| s.id) == space.section_id)
+            .expect("every space's section is listed");
+        row.spaces.push(space);
     }
-    if rows[0].categories.is_empty() {
+    if rows[0].spaces.is_empty() {
         rows.remove(0);
     }
     render(
         status,
-        &CategoriesTemplate {
+        &SpacesTemplate {
             layout: Layout::load(state, viewer, Nav::Admin).await?,
             notice,
             errors,
             rows,
-            any_categories,
+            any_spaces,
         },
     )
 }
 
-pub async fn categories_page(
+pub async fn spaces_page(
     State(state): State<AppState>,
     viewer: Viewer,
     Query(query): Query<DoneQuery>,
 ) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/categories");
-    render_categories(
+    admins_only!(state, viewer, "/admin/spaces");
+    render_spaces(
         &state,
         &viewer,
         StatusCode::OK,
@@ -178,15 +178,15 @@ pub async fn create_section(
     viewer: Viewer,
     Form(form): Form<SectionForm>,
 ) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/categories");
+    admins_only!(state, viewer, "/admin/spaces");
     match form.parse() {
         Err(problems) => {
-            render_categories(&state, &viewer, StatusCode::BAD_REQUEST, None, problems).await
+            render_spaces(&state, &viewer, StatusCode::BAD_REQUEST, None, problems).await
         }
         Ok((name, position)) => {
             store::create_section(state.db(), &name, position).await?;
             state.changed(Change::SiteChanged).await?;
-            Ok(see_other("/admin/categories?done=section"))
+            Ok(see_other("/admin/spaces?done=section"))
         }
     }
 }
@@ -197,20 +197,20 @@ pub async fn update_section(
     Path(id): Path<String>,
     Form(form): Form<SectionForm>,
 ) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/categories");
+    admins_only!(state, viewer, "/admin/spaces");
     let Some(id) = parse_id(&id) else {
         return web::not_found(&state, &viewer).await;
     };
     match form.parse() {
         Err(problems) => {
-            render_categories(&state, &viewer, StatusCode::BAD_REQUEST, None, problems).await
+            render_spaces(&state, &viewer, StatusCode::BAD_REQUEST, None, problems).await
         }
         Ok((name, position)) => {
             if !store::update_section(state.db(), id, &name, position).await? {
                 return web::not_found(&state, &viewer).await;
             }
             state.changed(Change::SiteChanged).await?;
-            Ok(see_other("/admin/categories?done=section"))
+            Ok(see_other("/admin/spaces?done=section"))
         }
     }
 }
@@ -220,17 +220,17 @@ pub async fn update_section(
 struct DeleteSectionTemplate {
     layout: Layout,
     section: Section,
-    categories: Vec<CategoryTarget>,
+    spaces: Vec<SpaceTarget>,
 }
 
-/// Asks before deleting a section, naming the categories that will be
+/// Asks before deleting a section, naming the spaces that will be
 /// left outside any section.
 pub async fn delete_section_page(
     State(state): State<AppState>,
     viewer: Viewer,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/categories");
+    admins_only!(state, viewer, "/admin/spaces");
     let db = state.db();
     let section = match parse_id(&id) {
         Some(id) => content::sections(db)
@@ -242,17 +242,17 @@ pub async fn delete_section_page(
     let Some(section) = section else {
         return web::not_found(&state, &viewer).await;
     };
-    let categories = content::readable_categories(db, &viewer)
+    let spaces = content::readable_spaces(db, &viewer)
         .await?
         .into_iter()
-        .filter(|category| category.section_id == Some(section.id))
+        .filter(|space| space.section_id == Some(section.id))
         .collect();
     render(
         StatusCode::OK,
         &DeleteSectionTemplate {
             layout: Layout::load(&state, &viewer, Nav::Admin).await?,
             section,
-            categories,
+            spaces,
         },
     )
 }
@@ -262,7 +262,7 @@ pub async fn delete_section(
     viewer: Viewer,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/categories");
+    admins_only!(state, viewer, "/admin/spaces");
     let Some(id) = parse_id(&id) else {
         return web::not_found(&state, &viewer).await;
     };
@@ -270,15 +270,15 @@ pub async fn delete_section(
         return web::not_found(&state, &viewer).await;
     }
     state.changed(Change::SiteChanged).await?;
-    Ok(see_other("/admin/categories?done=section-deleted"))
+    Ok(see_other("/admin/spaces?done=section-deleted"))
 }
 
 // ---------------------------------------------------------------------------
-// One category
+// One space
 
-/// The category form, as typed.
+/// The space form, as typed.
 #[derive(Clone, Debug, Default)]
-pub struct CategoryForm {
+pub struct SpaceForm {
     name: String,
     slug: String,
     description: String,
@@ -290,9 +290,9 @@ pub struct CategoryForm {
     write_groups: Vec<String>,
 }
 
-impl CategoryForm {
-    fn from_fields(fields: &[(String, String)]) -> CategoryForm {
-        let mut form = CategoryForm::default();
+impl SpaceForm {
+    fn from_fields(fields: &[(String, String)]) -> SpaceForm {
+        let mut form = SpaceForm::default();
         for (key, value) in fields {
             match key.as_str() {
                 "name" => form.name = value.clone(),
@@ -310,9 +310,9 @@ impl CategoryForm {
         form
     }
 
-    fn from_settings(settings: &CategorySettings) -> CategoryForm {
+    fn from_settings(settings: &SpaceSettings) -> SpaceForm {
         let ids = |ids: &[i64]| ids.iter().map(i64::to_string).collect();
-        CategoryForm {
+        SpaceForm {
             name: settings.name.clone(),
             slug: settings.slug.clone(),
             description: settings.description.clone(),
@@ -334,7 +334,7 @@ impl CategoryForm {
         &self,
         sections: &[Section],
         groups: &[GroupSummary],
-    ) -> Result<CategorySettings, Vec<String>> {
+    ) -> Result<SpaceSettings, Vec<String>> {
         let mut problems = Vec::new();
         let section_id = match self.section.trim() {
             "" => None,
@@ -364,7 +364,7 @@ impl CategoryForm {
         let read_groups = group_ids(&self.read_groups);
         let write_groups = group_ids(&self.write_groups);
         problems.dedup();
-        let settings = CategorySettings {
+        let settings = SpaceSettings {
             section_id,
             slug: self.slug.clone(),
             name: self.name.clone(),
@@ -388,23 +388,23 @@ impl CategoryForm {
 }
 
 #[derive(Template)]
-#[template(path = "admin_category.html")]
-struct CategoryTemplate {
+#[template(path = "admin_space.html")]
+struct SpaceTemplate {
     layout: Layout,
-    /// `None` for a new category.
+    /// `None` for a new space.
     id: Option<i64>,
     errors: Vec<String>,
-    form: CategoryForm,
+    form: SpaceForm,
     sections: Vec<Section>,
     groups: Vec<GroupSummary>,
     thread_count: Option<i64>,
 }
 
-impl CategoryTemplate {
+impl SpaceTemplate {
     fn action(&self) -> String {
         match self.id {
-            Some(id) => format!("/admin/categories/{id}"),
-            None => "/admin/categories/new".to_owned(),
+            Some(id) => format!("/admin/spaces/{id}"),
+            None => "/admin/spaces/new".to_owned(),
         }
     }
 
@@ -421,22 +421,22 @@ impl CategoryTemplate {
     }
 }
 
-async fn render_category(
+async fn render_space(
     state: &AppState,
     viewer: &Viewer,
     status: StatusCode,
     id: Option<i64>,
-    form: CategoryForm,
+    form: SpaceForm,
     errors: Vec<String>,
 ) -> Result<Response, AppError> {
     let db = state.db();
     let thread_count = match id {
-        Some(id) => Some(content::category_thread_count(db, viewer, id).await?),
+        Some(id) => Some(content::space_thread_count(db, viewer, id).await?),
         None => None,
     };
     render(
         status,
-        &CategoryTemplate {
+        &SpaceTemplate {
             layout: Layout::load(state, viewer, Nav::Admin).await?,
             id,
             errors,
@@ -448,30 +448,30 @@ async fn render_category(
     )
 }
 
-pub async fn new_category_page(
+pub async fn new_space_page(
     State(state): State<AppState>,
     viewer: Viewer,
 ) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/categories/new");
-    let form = CategoryForm {
+    admins_only!(state, viewer, "/admin/spaces/new");
+    let form = SpaceForm {
         read_level: "public".to_owned(),
         write_level: "members".to_owned(),
         position: "0".to_owned(),
-        ..CategoryForm::default()
+        ..SpaceForm::default()
     };
-    render_category(&state, &viewer, StatusCode::OK, None, form, Vec::new()).await
+    render_space(&state, &viewer, StatusCode::OK, None, form, Vec::new()).await
 }
 
-pub async fn create_category(
+pub async fn create_space(
     State(state): State<AppState>,
     viewer: Viewer,
     Form(fields): Form<Vec<(String, String)>>,
 ) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/categories/new");
-    let form = CategoryForm::from_fields(&fields);
+    admins_only!(state, viewer, "/admin/spaces/new");
+    let form = SpaceForm::from_fields(&fields);
     let db = state.db();
     let refuse = |problems| {
-        render_category(
+        render_space(
             &state,
             &viewer,
             StatusCode::BAD_REQUEST,
@@ -484,50 +484,48 @@ pub async fn create_category(
         Ok(settings) => settings,
         Err(problems) => return refuse(problems).await,
     };
-    match store::add_category(db, &settings).await? {
+    match store::add_space(db, &settings).await? {
         Err(why) => refuse(vec![why]).await,
-        Ok(category_id) => {
-            state
-                .changed(Change::CategoryChanged { category_id })
-                .await?;
-            Ok(see_other("/admin/categories?done=saved"))
+        Ok(space_id) => {
+            state.changed(Change::SpaceChanged { space_id }).await?;
+            Ok(see_other("/admin/spaces?done=saved"))
         }
     }
 }
 
-pub async fn category_page(
+pub async fn space_page(
     State(state): State<AppState>,
     viewer: Viewer,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/categories");
+    admins_only!(state, viewer, "/admin/spaces");
     let Some(id) = parse_id(&id) else {
         return web::not_found(&state, &viewer).await;
     };
-    let Some(category) = content::category_by_id(state.db(), &viewer, id).await? else {
+    let Some(space) = content::space_by_id(state.db(), &viewer, id).await? else {
         return web::not_found(&state, &viewer).await;
     };
-    let form = CategoryForm::from_settings(&category.settings());
-    render_category(&state, &viewer, StatusCode::OK, Some(id), form, Vec::new()).await
+    let form = SpaceForm::from_settings(&space.settings());
+    render_space(&state, &viewer, StatusCode::OK, Some(id), form, Vec::new()).await
 }
 
-pub async fn update_category(
+pub async fn update_space(
     State(state): State<AppState>,
     viewer: Viewer,
     Path(id): Path<String>,
     Form(fields): Form<Vec<(String, String)>>,
 ) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/categories");
+    admins_only!(state, viewer, "/admin/spaces");
     let Some(id) = parse_id(&id) else {
         return web::not_found(&state, &viewer).await;
     };
     let db = state.db();
-    if content::category_by_id(db, &viewer, id).await?.is_none() {
+    if content::space_by_id(db, &viewer, id).await?.is_none() {
         return web::not_found(&state, &viewer).await;
     }
-    let form = CategoryForm::from_fields(&fields);
+    let form = SpaceForm::from_fields(&fields);
     let refuse = |problems| {
-        render_category(
+        render_space(
             &state,
             &viewer,
             StatusCode::BAD_REQUEST,
@@ -540,47 +538,43 @@ pub async fn update_category(
         Ok(settings) => settings,
         Err(problems) => return refuse(problems).await,
     };
-    match store::update_category(db, id, &settings).await? {
+    match store::update_space(db, id, &settings).await? {
         Err(why) => refuse(vec![why]).await,
         Ok(false) => web::not_found(&state, &viewer).await,
         Ok(true) => {
             // A new read level changes every page that could show the
-            // category's threads; this clears them all.
-            state
-                .changed(Change::CategoryChanged { category_id: id })
-                .await?;
-            Ok(see_other("/admin/categories?done=saved"))
+            // space's threads; this clears them all.
+            state.changed(Change::SpaceChanged { space_id: id }).await?;
+            Ok(see_other("/admin/spaces?done=saved"))
         }
     }
 }
 
-pub async fn delete_category(
+pub async fn delete_space(
     State(state): State<AppState>,
     viewer: Viewer,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/categories");
+    admins_only!(state, viewer, "/admin/spaces");
     let Some(id) = parse_id(&id) else {
         return web::not_found(&state, &viewer).await;
     };
-    match store::delete_category(state.db(), id).await? {
+    match store::delete_space(state.db(), id).await? {
         Ok(true) => {
-            state
-                .changed(Change::CategoryChanged { category_id: id })
-                .await?;
-            Ok(see_other("/admin/categories?done=deleted"))
+            state.changed(Change::SpaceChanged { space_id: id }).await?;
+            Ok(see_other("/admin/spaces?done=deleted"))
         }
         Ok(false) => web::not_found(&state, &viewer).await,
         Err(why) => {
-            let Some(category) = content::category_by_id(state.db(), &viewer, id).await? else {
+            let Some(space) = content::space_by_id(state.db(), &viewer, id).await? else {
                 return web::not_found(&state, &viewer).await;
             };
-            render_category(
+            render_space(
                 &state,
                 &viewer,
                 StatusCode::BAD_REQUEST,
                 Some(id),
-                CategoryForm::from_settings(&category.settings()),
+                SpaceForm::from_settings(&space.settings()),
                 vec![why],
             )
             .await

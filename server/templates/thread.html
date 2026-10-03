@@ -2,7 +2,7 @@
 {%- import "_macros.html" as m -%}
 {% block title %}{{ thread.thread.title }} · {{ layout.site_name }}{% endblock %}
 {% block content %}
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a>{% if let Some(section) = thread.category.section_name %} › {{ section }}{% endif %} › <a href="/c/{{ thread.category.category.slug }}">{{ thread.category.category.name }}</a></nav>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a>{% if let Some(section) = thread.space.section_name %} › {{ section }}{% endif %} › <a href="/c/{{ thread.space.space.slug }}">{{ thread.space.space.name }}</a></nav>
 <h1 class="page-title">{{ thread.thread.title }}</h1>
 <p class="thread-meta">
   Started by {{ thread.author.display_name }} on {% call m::time(thread.created_at) %}{% endcall %}
@@ -28,7 +28,7 @@
 <figure class="embed">
   <figcaption class="embed-caption">
     <span class="embed-label">Quoted post</span>
-    <span>From <a href="{{ crate::format::thread_href(source.thread.id, source.thread.slug) }}">{{ source.thread.title }}</a> in <a href="/c/{{ source.category.slug }}">{{ source.category.name }}</a></span>
+    <span>From <a href="{{ crate::format::thread_href(source.thread.id, source.thread.slug) }}">{{ source.thread.title }}</a> in <a href="/c/{{ source.space.slug }}">{{ source.space.name }}</a></span>
     <span class="spacer"></span>
     <a href="/p/{{ source.post_id }}">View in original thread →</a>
   </figcaption>

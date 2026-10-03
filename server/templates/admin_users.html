@@ -6,7 +6,7 @@
 {% block content %}
 <h1 class="page-title">Members and roles</h1>
 {% call an::admin_nav("users") %}{% endcall %}
-<p class="lede">Moderators can read every category, revoke anyone’s invites and make invite links for several people. Admins can also change the site’s settings and give people roles.</p>
+<p class="lede">Moderators can read every space, revoke anyone’s invites and make invite links for several people. Admins can also change the site’s settings and give people roles.</p>
 {% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
 {% call f::errors(errors) %}{% endcall %}
 <section class="panel" aria-labelledby="members-heading">

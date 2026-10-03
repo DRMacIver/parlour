@@ -14,23 +14,23 @@ async fn visibility(f: &Forum, thread_id: i64) -> String {
 }
 
 #[sqlx::test]
-async fn thread_visibility_follows_its_category(pool: PgPool) {
+async fn thread_visibility_follows_its_space(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let public = f.category("games", "public", None, 0).await;
-    let lounge = f.category("lounge", "members", None, 1).await;
+    let public = f.space("games", "public", None, 0).await;
+    let lounge = f.space("lounge", "members", None, 1).await;
     let t = f.thread(public, ruth, "Thread", "x").await;
     assert_eq!(visibility(&f, t.thread_id).await, "public");
 
     f.exec(&format!(
-        "UPDATE threads SET category_id = {lounge} WHERE id = {}",
+        "UPDATE threads SET space_id = {lounge} WHERE id = {}",
         t.thread_id
     ))
     .await;
     assert_eq!(visibility(&f, t.thread_id).await, "members");
 
     f.exec(&format!(
-        "UPDATE categories SET read_level = 'groups' WHERE id = {lounge}"
+        "UPDATE spaces SET read_level = 'groups' WHERE id = {lounge}"
     ))
     .await;
     assert_eq!(visibility(&f, t.thread_id).await, "groups");
@@ -48,7 +48,7 @@ async fn thread_visibility_follows_its_category(pool: PgPool) {
 async fn replies_must_be_in_the_same_thread(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let a = f.thread(games, ruth, "A", "x").await;
     let b = f.thread(games, ruth, "B", "x").await;
     let result = parlour::store::create_post(
@@ -76,7 +76,7 @@ async fn replies_must_be_in_the_same_thread(pool: PgPool) {
 async fn posts_are_numbered_in_order(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t = f.thread(games, ruth, "A", "x").await;
     let mut handles = Vec::new();
     for _ in 0..20 {
@@ -126,20 +126,17 @@ async fn usernames_are_case_insensitively_unique(pool: PgPool) {
     assert!(result.is_err());
 }
 
-async fn read_level(f: &Forum, category_id: i64) -> String {
-    sqlx::query_scalar!(
-        "SELECT read_level FROM categories WHERE id = $1",
-        category_id
-    )
-    .fetch_one(&f.db)
-    .await
-    .unwrap()
+async fn read_level(f: &Forum, space_id: i64) -> String {
+    sqlx::query_scalar!("SELECT read_level FROM spaces WHERE id = $1", space_id)
+        .fetch_one(&f.db)
+        .await
+        .unwrap()
 }
 
 /// Runs `first` in an open transaction, then starts `second` on another
 /// connection while that transaction is still open, then commits `first` and
 /// waits for `second`. Whatever order the database serialises them in, the
-/// thread's visibility must end up matching its category's read level.
+/// thread's visibility must end up matching its space's read level.
 async fn race(f: &Forum, first: String, second: String) {
     let mut a = f.db.begin().await.unwrap();
     sqlx::raw_sql(sqlx::AssertSqlSafe(first))
@@ -163,16 +160,16 @@ async fn race(f: &Forum, first: String, second: String) {
 async fn moving_a_thread_while_its_destination_is_tightened_keeps_visibility_in_sync(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
-    let dest = f.category("race-test", "public", None, 1).await;
+    let games = f.space("games", "public", None, 0).await;
+    let dest = f.space("race-test", "public", None, 1).await;
     let t = f.thread(games, ruth, "Thread", "x").await;
     race(
         &f,
         format!(
-            "UPDATE threads SET category_id = {dest} WHERE id = {}",
+            "UPDATE threads SET space_id = {dest} WHERE id = {}",
             t.thread_id
         ),
-        format!("UPDATE categories SET read_level = 'members' WHERE id = {dest}"),
+        format!("UPDATE spaces SET read_level = 'members' WHERE id = {dest}"),
     )
     .await;
     assert_eq!(read_level(&f, dest).await, "members");
@@ -180,17 +177,17 @@ async fn moving_a_thread_while_its_destination_is_tightened_keeps_visibility_in_
 }
 
 #[sqlx::test]
-async fn tightening_a_category_while_a_thread_moves_into_it_keeps_visibility_in_sync(pool: PgPool) {
+async fn tightening_a_space_while_a_thread_moves_into_it_keeps_visibility_in_sync(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
-    let dest = f.category("race-test", "public", None, 1).await;
+    let games = f.space("games", "public", None, 0).await;
+    let dest = f.space("race-test", "public", None, 1).await;
     let t = f.thread(games, ruth, "Thread", "x").await;
     race(
         &f,
-        format!("UPDATE categories SET read_level = 'members' WHERE id = {dest}"),
+        format!("UPDATE spaces SET read_level = 'members' WHERE id = {dest}"),
         format!(
-            "UPDATE threads SET category_id = {dest} WHERE id = {}",
+            "UPDATE threads SET space_id = {dest} WHERE id = {}",
             t.thread_id
         ),
     )
@@ -199,17 +196,17 @@ async fn tightening_a_category_while_a_thread_moves_into_it_keeps_visibility_in_
 }
 
 #[sqlx::test]
-async fn creating_a_thread_while_its_category_is_tightened_keeps_visibility_in_sync(pool: PgPool) {
+async fn creating_a_thread_while_its_space_is_tightened_keeps_visibility_in_sync(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let dest = f.category("race-test", "public", None, 1).await;
+    let dest = f.space("race-test", "public", None, 1).await;
     race(
         &f,
         format!(
-            "INSERT INTO threads (category_id, visibility, title, slug, author_id)
+            "INSERT INTO threads (space_id, visibility, title, slug, author_id)
              VALUES ({dest}, 'public', 'Racing', 'racing', {ruth})"
         ),
-        format!("UPDATE categories SET read_level = 'members' WHERE id = {dest}"),
+        format!("UPDATE spaces SET read_level = 'members' WHERE id = {dest}"),
     )
     .await;
     let visibility: String =
@@ -224,7 +221,7 @@ async fn creating_a_thread_while_its_category_is_tightened_keeps_visibility_in_s
 async fn a_post_with_replies_cant_move_away_from_them(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let a = f.thread(games, ruth, "A", "x").await;
     let b = f.thread(games, ruth, "B", "x").await;
     let target = f.post(a.thread_id, ruth, "target").await;
@@ -283,7 +280,7 @@ async fn a_post_with_replies_cant_move_away_from_them(pool: PgPool) {
 async fn thread_slugs_are_url_safe(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t = f.thread(games, ruth, "Spirit Island", "x").await;
     for bad in [
         "",

@@ -9,7 +9,7 @@ use common::{Forum, Response, post_html};
 use parlour::store::NewThread;
 use sqlx::PgPool;
 
-/// A forum with a public category `games`, member ruth (with a session)
+/// A forum with a public space `games`, member ruth (with a session)
 /// and member jonah, neither of whom counts as new (the limits on new
 /// members are tested in `moderation.rs`).
 struct Setup {
@@ -24,7 +24,7 @@ struct Setup {
 async fn setup(pool: PgPool) -> Setup {
     let f = Forum::new(pool);
     f.no_new_members().await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let ruth = f.member("ruth", "user", None).await;
     let jonah = f.member("jonah", "user", None).await;
     let ruth_cookie = f.session(ruth).await;
@@ -112,7 +112,7 @@ async fn visitors_are_asked_to_log_in_to_write(pool: PgPool) {
 #[sqlx::test]
 async fn members_start_threads(pool: PgPool) {
     let s = setup(pool).await;
-    // An anonymous visitor's cached copy of the category, to be cleared.
+    // An anonymous visitor's cached copy of the space, to be cleared.
     assert!(!s.f.page("/c/games").await.contains("Heat with five"));
 
     let form = s.f.page_as("/c/games/new", &s.ruth_cookie).await;
@@ -232,7 +232,7 @@ async fn write_levels_are_enforced(pool: PgPool) {
     let s = setup(pool).await;
     let mod_id = s.f.member("sam", "moderator", None).await;
     let mod_cookie = s.f.session(mod_id).await;
-    s.f.exec("UPDATE categories SET write_level = 'staff' WHERE slug = 'games'")
+    s.f.exec("UPDATE spaces SET write_level = 'staff' WHERE slug = 'games'")
         .await;
     let response = s.f.get_as("/c/games/new", Some(&s.ruth_cookie)).await;
     assert_status(&response, StatusCode::FORBIDDEN);
@@ -253,7 +253,7 @@ async fn write_levels_are_enforced(pool: PgPool) {
         .await;
     assert_status(&response, StatusCode::SEE_OTHER);
 
-    // Replies follow the category's write level too.
+    // Replies follow the space's write level too.
     let t = s.f.thread(s.games, mod_id, "Rules", "Read these").await;
     let response =
         s.f.submit(
@@ -265,14 +265,14 @@ async fn write_levels_are_enforced(pool: PgPool) {
     assert_status(&response, StatusCode::FORBIDDEN);
 
     // Group-restricted writing: no member is in a group yet.
-    s.f.exec("UPDATE categories SET write_level = 'groups' WHERE slug = 'games'")
+    s.f.exec("UPDATE spaces SET write_level = 'groups' WHERE slug = 'games'")
         .await;
     let response = s.f.get_as("/c/games/new", Some(&s.ruth_cookie)).await;
     assert_status(&response, StatusCode::FORBIDDEN);
     let response = s.f.get_as("/c/games/new", Some(&mod_cookie)).await;
     assert_status(&response, StatusCode::OK);
 
-    // The category page offers a new thread only to those who may post.
+    // The space page offers a new thread only to those who may post.
     let page = s.f.page_as("/c/games", &s.ruth_cookie).await;
     assert!(!page.contains("href=\"/c/games/new\""));
     let page = s.f.page_as("/c/games", &mod_cookie).await;
@@ -280,10 +280,10 @@ async fn write_levels_are_enforced(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn categories_members_cant_read_are_not_found(pool: PgPool) {
+async fn spaces_members_cant_read_are_not_found(pool: PgPool) {
     let s = setup(pool).await;
-    s.f.category("organisers", "groups", None, 1).await;
-    s.f.exec("UPDATE categories SET write_level = 'members' WHERE slug = 'organisers'")
+    s.f.space("organisers", "groups", None, 1).await;
+    s.f.exec("UPDATE spaces SET write_level = 'members' WHERE slug = 'organisers'")
         .await;
     let response = s.f.get_as("/c/organisers/new", Some(&s.ruth_cookie)).await;
     assert_status(&response, StatusCode::NOT_FOUND);
@@ -373,7 +373,7 @@ async fn locked_threads_refuse_replies_except_from_staff(pool: PgPool) {
     let sam_cookie = s.f.session(sam).await;
     let t =
         s.f.new_thread(NewThread {
-            category_id: s.games,
+            space_id: s.games,
             title: "Closed".into(),
             author_id: s.ruth,
             body_md: "No more".into(),
@@ -729,7 +729,7 @@ async fn editing_a_quoted_post_updates_the_threads_that_embed_it(pool: PgPool) {
     age_post(&s.f, t.first_post_id).await;
     let fork =
         s.f.new_thread(NewThread {
-            category_id: s.games,
+            space_id: s.games,
             title: "Is solo a hobby".into(),
             author_id: s.jonah,
             body_md: "Discuss".into(),
@@ -1072,7 +1072,7 @@ async fn your_own_new_thread_isnt_new_to_you(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn whole_categories_can_be_marked_read(pool: PgPool) {
+async fn whole_spaces_can_be_marked_read(pool: PgPool) {
     let s = setup(pool).await;
     let a = s.f.thread(s.games, s.ruth, "A", "x").await;
     s.f.post(a.thread_id, s.ruth, "y").await;
@@ -1099,8 +1099,8 @@ async fn whole_categories_can_be_marked_read(pool: PgPool) {
 #[sqlx::test]
 async fn quote_forks_start_a_thread_that_embeds_the_post(pool: PgPool) {
     let s = setup(pool).await;
-    let books = s.f.category("books", "public", None, 1).await;
-    let lounge = s.f.category("lounge", "members", None, 2).await;
+    let books = s.f.space("books", "public", None, 1).await;
+    let lounge = s.f.space("lounge", "members", None, 2).await;
     let t =
         s.f.thread(s.games, s.ruth, "Weekly", "Solo play is its own hobby")
             .await;
@@ -1128,7 +1128,7 @@ async fn quote_forks_start_a_thread_that_embeds_the_post(pool: PgPool) {
             &format!("/p/{}/fork", t.first_post_id),
             &[
                 ("title", "Is solo a hobby?"),
-                ("category", "books"),
+                ("space", "books"),
                 ("body", "Strong disagree."),
             ],
             Some(&s.jonah_cookie),
@@ -1149,9 +1149,9 @@ async fn quote_forks_start_a_thread_that_embeds_the_post(pool: PgPool) {
 #[sqlx::test]
 async fn quote_forks_never_make_a_post_more_visible(pool: PgPool) {
     let s = setup(pool).await;
-    s.f.category("books", "public", None, 1).await;
-    let lounge = s.f.category("lounge", "members", None, 2).await;
-    s.f.category("lounge-two", "members", None, 3).await;
+    s.f.space("books", "public", None, 1).await;
+    let lounge = s.f.space("lounge", "members", None, 2).await;
+    s.f.space("lounge-two", "members", None, 3).await;
     let t =
         s.f.thread(lounge, s.ruth, "Members chat", "Members-only words")
             .await;
@@ -1166,7 +1166,7 @@ async fn quote_forks_never_make_a_post_more_visible(pool: PgPool) {
         let response =
             s.f.submit(
                 &path,
-                &[("title", "Leak"), ("category", slug), ("body", "x")],
+                &[("title", "Leak"), ("space", slug), ("body", "x")],
                 Some(&s.jonah_cookie),
             )
             .await;
@@ -1176,7 +1176,7 @@ async fn quote_forks_never_make_a_post_more_visible(pool: PgPool) {
     let response =
         s.f.submit(
             &path,
-            &[("title", "Fine"), ("category", "lounge-two"), ("body", "x")],
+            &[("title", "Fine"), ("space", "lounge-two"), ("body", "x")],
             Some(&s.jonah_cookie),
         )
         .await;
@@ -1197,7 +1197,7 @@ async fn deleted_hidden_and_invisible_posts_cant_be_quoted(pool: PgPool) {
         "UPDATE posts SET deleted_at = now() WHERE id = {deleted}"
     ))
     .await;
-    let organisers = s.f.category("organisers", "groups", None, 1).await;
+    let organisers = s.f.space("organisers", "groups", None, 1).await;
     let secret = s.f.thread(organisers, s.ruth, "Secret", "secret").await;
     for post in [hidden, deleted] {
         assert_status(
@@ -1225,7 +1225,7 @@ async fn deleted_hidden_and_invisible_posts_cant_be_quoted(pool: PgPool) {
     assert_status(
         &s.f.submit(
             &format!("/p/{}/fork", secret.first_post_id),
-            &[("title", "Leak"), ("category", "games"), ("body", "x")],
+            &[("title", "Leak"), ("space", "games"), ("body", "x")],
             Some(&s.jonah_cookie),
         )
         .await,
@@ -1322,7 +1322,7 @@ async fn posting_is_rate_limited(pool: PgPool) {
 // The "at most as visible" rule, over random forums
 
 /// Who can see something at a level, for the reference rule below. No
-/// member is in a group yet (M5), so only staff see group categories.
+/// member is in a group yet (M5), so only staff see group spaces.
 fn sees(who: &str, level: &str) -> bool {
     match level {
         "public" => true,
@@ -1343,7 +1343,7 @@ fn forks_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle, db: &
     use hegel::generators as gs;
     rt.block_on(async {
         sqlx::raw_sql(
-            "TRUNCATE settings, posts, threads, categories, sections, users RESTART IDENTITY CASCADE",
+            "TRUNCATE settings, posts, threads, spaces, sections, users RESTART IDENTITY CASCADE",
         )
         .execute(db)
         .await
@@ -1354,30 +1354,30 @@ fn forks_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle, db: &
     let levels = vec!["public", "members", "groups"];
     let writes = vec!["members", "groups", "staff"];
     let count = tc.draw(gs::integers::<usize>().min_value(1).max_value(5));
-    let mut categories = Vec::new();
+    let mut spaces = Vec::new();
     for i in 0..count {
         let read = tc.draw(gs::sampled_from(levels.clone()));
         let write = tc.draw(gs::sampled_from(writes.clone()));
         let slug = format!("c{i}");
         rt.block_on(async {
-            f.category(&slug, read, None, i as i32).await;
+            f.space(&slug, read, None, i as i32).await;
             f.exec(&format!(
-                "UPDATE categories SET write_level = '{write}' WHERE slug = '{slug}'"
+                "UPDATE spaces SET write_level = '{write}' WHERE slug = '{slug}'"
             ))
             .await;
         });
-        categories.push((slug, read, write));
+        spaces.push((slug, read, write));
     }
     let role = tc.draw(gs::sampled_from(vec!["user", "moderator"]));
     let who = if role == "user" { "member" } else { "staff" };
-    let source_category = tc.draw(gs::integers::<usize>().max_value(count - 1));
+    let source_space = tc.draw(gs::integers::<usize>().max_value(count - 1));
     let removal = tc.draw(gs::sampled_from(vec!["", "deleted", "hidden"]));
     let (cookie, post_id) = rt.block_on(async {
         let author = f.user("author").await;
         let me = f.member("forker", role, None).await;
         let t = f
             .thread(
-                (source_category + 1) as i64,
+                (source_space + 1) as i64,
                 author,
                 "Source",
                 "Secret source text",
@@ -1392,12 +1392,12 @@ fn forks_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle, db: &
         }
         (f.session(me).await, t.first_post_id)
     });
-    let source_level = categories[source_category].1;
+    let source_level = spaces[source_space].1;
     let source_visible = removal.is_empty() && sees(who, source_level);
-    for (slug, read, write) in &categories {
+    for (slug, read, write) in &spaces {
         let response = rt.block_on(f.submit(
             &format!("/p/{post_id}/fork"),
-            &[("title", "Fork"), ("category", slug), ("body", "Opening")],
+            &[("title", "Fork"), ("space", slug), ("body", "Opening")],
             Some(&cookie),
         ));
         let may_write = sees(who, read) && (*write == "members" || who == "staff");
@@ -1615,10 +1615,10 @@ async fn text_is_kept_when_a_thread_is_locked_while_writing(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn text_is_kept_when_a_category_is_closed_while_writing(pool: PgPool) {
+async fn text_is_kept_when_a_space_is_closed_while_writing(pool: PgPool) {
     let s = setup(pool).await;
     s.f.exec(&format!(
-        "UPDATE categories SET write_level = 'staff' WHERE id = {}",
+        "UPDATE spaces SET write_level = 'staff' WHERE id = {}",
         s.games
     ))
     .await;

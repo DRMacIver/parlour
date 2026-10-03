@@ -973,8 +973,8 @@ async fn profile_urls_are_canonical(db: PgPool) {
 async fn profile_post_counts_depend_on_who_is_looking(db: PgPool) {
     let forum = Forum::new(db);
     let ruth = forum.member("ruth", "user", None).await;
-    let public = forum.category("lobby", "public", None, 0).await;
-    let members = forum.category("back-room", "members", None, 1).await;
+    let public = forum.space("lobby", "public", None, 0).await;
+    let members = forum.space("back-room", "members", None, 1).await;
     forum.thread(public, ruth, "Hello", "Public post").await;
     forum.thread(members, ruth, "Psst", "Members post").await;
     let cookie = forum.session(ruth).await;

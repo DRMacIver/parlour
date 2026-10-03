@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT w.thread_id, w.space_id, w.level, c.slug AS \"space_slug?\"\n           FROM watches w LEFT JOIN spaces c ON c.id = w.space_id\n           WHERE w.user_id = $1 ORDER BY w.updated_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "thread_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "watches",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "space_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "watches",
+            "name": "space_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "level",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "watches",
+            "name": "level"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "space_slug?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "slug"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "f5561bac681720e911db24c823d765dc25a441cc9f3811a6a3f5e20b54dd213c"
+}

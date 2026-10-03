@@ -90,10 +90,10 @@ struct Row {
     to_slug: Option<String>,
     to_live: Option<bool>,
     to_readable: Option<bool>,
-    from_category: Option<String>,
-    from_category_slug: Option<String>,
-    to_category: Option<String>,
-    to_category_slug: Option<String>,
+    from_space: Option<String>,
+    from_space_slug: Option<String>,
+    to_space: Option<String>,
+    to_space_slug: Option<String>,
 }
 
 async fn rows(
@@ -129,23 +129,23 @@ async fn rows(
                actor.display_name AS "actor_name!",
                u.id AS "user_id?", u.username AS "username?: String", u.display_name AS "user_name?",
                t.id AS "thread_id?", t.title AS "thread_title?", t.slug AS "thread_slug?",
-               t.category_id IS NULL AS "thread_private?", t.deleted_at IS NULL AS "thread_live?",
-               (thread_readable(t.visibility, t.category_id, $4, $5)
+               t.space_id IS NULL AS "thread_private?", t.deleted_at IS NULL AS "thread_live?",
+               (thread_readable(t.visibility, t.space_id, $4, $5)
                 OR dm_readable(t.id, t.visibility, $6)) AS "thread_readable?",
                t2.id AS "to_thread_id?", t2.title AS "to_title?", t2.slug AS "to_slug?",
                t2.deleted_at IS NULL AS "to_live?",
-               thread_readable(t2.visibility, t2.category_id, $4, $5) AS "to_readable?",
-               CASE WHEN category_readable(c1.read_level, c1.id, $4, $5) THEN c1.name END AS "from_category?",
-               CASE WHEN category_readable(c1.read_level, c1.id, $4, $5) THEN c1.slug END AS "from_category_slug?",
-               CASE WHEN category_readable(c2.read_level, c2.id, $4, $5) THEN c2.name END AS "to_category?",
-               CASE WHEN category_readable(c2.read_level, c2.id, $4, $5) THEN c2.slug END AS "to_category_slug?"
+               thread_readable(t2.visibility, t2.space_id, $4, $5) AS "to_readable?",
+               CASE WHEN space_readable(c1.read_level, c1.id, $4, $5) THEN c1.name END AS "from_space?",
+               CASE WHEN space_readable(c1.read_level, c1.id, $4, $5) THEN c1.slug END AS "from_space_slug?",
+               CASE WHEN space_readable(c2.read_level, c2.id, $4, $5) THEN c2.name END AS "to_space?",
+               CASE WHEN space_readable(c2.read_level, c2.id, $4, $5) THEN c2.slug END AS "to_space_slug?"
         FROM mod_actions a
         JOIN users actor ON actor.id = a.actor_id
         LEFT JOIN users u ON u.id = a.user_id
         LEFT JOIN threads t ON t.id = a.thread_id
         LEFT JOIN threads t2 ON t2.id = (a.details->>'to_thread_id')::bigint
-        LEFT JOIN categories c1 ON c1.id = (a.details->>'from_category_id')::bigint
-        LEFT JOIN categories c2 ON c2.id = (a.details->>'to_category_id')::bigint
+        LEFT JOIN spaces c1 ON c1.id = (a.details->>'from_space_id')::bigint
+        LEFT JOIN spaces c2 ON c2.id = (a.details->>'to_space_id')::bigint
         WHERE ($1 OR a.public) AND ($2::bigint IS NULL OR a.user_id = $2)
           AND ($3::bigint IS NULL OR a.id = $3)
         ORDER BY a.created_at DESC, a.id DESC
@@ -155,7 +155,7 @@ async fn rows(
         member,
         only,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
         filter.dm_viewer,
         limit,
         offset,
@@ -233,13 +233,13 @@ pub async fn entry_for_member(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result
                actor.display_name AS "actor_name!",
                u.id AS "user_id?", u.username AS "username?: String", u.display_name AS "user_name?",
                t.id AS "thread_id?", t.title AS "thread_title?", t.slug AS "thread_slug?",
-               t.category_id IS NULL AS "thread_private?", t.deleted_at IS NULL AS "thread_live?",
-               (thread_readable(t.visibility, t.category_id, $2, $3)
+               t.space_id IS NULL AS "thread_private?", t.deleted_at IS NULL AS "thread_live?",
+               (thread_readable(t.visibility, t.space_id, $2, $3)
                 OR dm_readable(t.id, t.visibility, $4)) AS "thread_readable?",
                NULL::bigint AS "to_thread_id?", NULL::text AS "to_title?", NULL::text AS "to_slug?",
                NULL::boolean AS "to_live?", NULL::boolean AS "to_readable?",
-               NULL::text AS "from_category?", NULL::text AS "from_category_slug?",
-               NULL::text AS "to_category?", NULL::text AS "to_category_slug?"
+               NULL::text AS "from_space?", NULL::text AS "from_space_slug?",
+               NULL::text AS "to_space?", NULL::text AS "to_space_slug?"
         FROM mod_actions a
         JOIN users actor ON actor.id = a.actor_id
         LEFT JOIN users u ON u.id = a.user_id
@@ -248,7 +248,7 @@ pub async fn entry_for_member(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result
         "#,
         id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
         filter.dm_viewer,
     )
     .fetch_all(db.pool())
@@ -294,13 +294,13 @@ fn thread_bit(
     }
 }
 
-fn category_bit(name: Option<String>, slug: Option<String>) -> Bit {
+fn space_bit(name: Option<String>, slug: Option<String>) -> Bit {
     match (name, slug) {
         (Some(name), Some(slug)) => Bit::Link {
             href: format!("/c/{slug}"),
             text: name,
         },
-        _ => text("a category you can’t see"),
+        _ => text("a space you can’t see"),
     }
 }
 
@@ -396,9 +396,9 @@ fn describe(row: Row, staff: bool) -> LogEntry {
             text("moved "),
             thread,
             text(" from "),
-            category_bit(row.from_category, row.from_category_slug),
+            space_bit(row.from_space, row.from_space_slug),
             text(" to "),
-            category_bit(row.to_category, row.to_category_slug),
+            space_bit(row.to_space, row.to_space_slug),
         ],
         "move_posts" => {
             let count = row.details["count"].as_i64().unwrap_or_default();
@@ -508,14 +508,14 @@ pub async fn thread_author(db: &Db, thread_id: i64) -> sqlx::Result<Option<i64>>
 pub struct DeletedThread {
     pub id: i64,
     pub title: String,
-    /// The category it was in, if the viewer can read it.
-    pub category: Option<(String, String)>,
+    /// The space it was in, if the viewer can read it.
+    pub space: Option<(String, String)>,
     /// If all its posts were moved, the thread they went to: its id and
     /// title.
     pub merged_into: Option<(i64, String)>,
 }
 
-/// A deleted thread in a category, for staff only.
+/// A deleted thread in a space, for staff only.
 pub async fn deleted_thread(
     db: &Db,
     viewer: &Viewer,
@@ -526,23 +526,23 @@ pub async fn deleted_thread(
     }
     let filter = viewer.filter();
     let row = sqlx::query!(
-        r#"SELECT t.id, t.title, c.name AS "category_name?", c.slug AS "category_slug?",
+        r#"SELECT t.id, t.title, c.name AS "space_name?", c.slug AS "space_slug?",
                   d.id AS "merged_id?", d.title AS "merged_title?"
            FROM threads t
-           JOIN categories c ON c.id = t.category_id
+           JOIN spaces c ON c.id = t.space_id
            LEFT JOIN threads d ON d.id = t.merged_into_thread_id
            WHERE t.id = $1 AND t.deleted_at IS NOT NULL
-             AND thread_readable(t.visibility, t.category_id, $2, $3)"#,
+             AND thread_readable(t.visibility, t.space_id, $2, $3)"#,
         thread_id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
     )
     .fetch_optional(db.pool())
     .await?;
     Ok(row.map(|row| DeletedThread {
         id: row.id,
         title: row.title,
-        category: row.category_name.zip(row.category_slug),
+        space: row.space_name.zip(row.space_slug),
         merged_into: row.merged_id.zip(row.merged_title),
     }))
 }
@@ -558,11 +558,11 @@ pub async fn merged_into(
     let row = sqlx::query!(
         r#"SELECT d.id, d.slug FROM threads t JOIN threads d ON d.id = t.merged_into_thread_id
            WHERE t.id = $1 AND t.deleted_at IS NOT NULL AND d.deleted_at IS NULL
-             AND thread_readable(t.visibility, t.category_id, $2, $3)
-             AND thread_readable(d.visibility, d.category_id, $2, $3)"#,
+             AND thread_readable(t.visibility, t.space_id, $2, $3)
+             AND thread_readable(d.visibility, d.space_id, $2, $3)"#,
         thread_id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
     )
     .fetch_optional(db.pool())
     .await?;

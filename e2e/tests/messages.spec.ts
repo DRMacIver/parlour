@@ -81,7 +81,7 @@ test("members message each other and are notified", async ({ page }) => {
   await page.locator("main a", { hasText: "Cancel" }).click();
   await expect(page).toHaveURL(new RegExp(`/u/${sender}$`));
 
-  // Watching a category and a thread, from their pages. (In the same test,
+  // Watching a space and a thread, from their pages. (In the same test,
   // so as not to log in again: logins are rate limited per account.)
   await page.goto("/c/board-games");
   await expect(page.locator(".watch-form select")).toBeVisible();

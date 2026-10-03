@@ -1,11 +1,11 @@
 //! Conversations (direct messages, DESIGN.md §3.7), as the people in them
-//! see them. A conversation is a thread with no category whose visibility
+//! see them. A conversation is a thread with no space whose visibility
 //! is `private`; only its current participants can read it, which the
 //! shared `dm_readable` SQL function checks. Staff are no exception, until
 //! a participant reports a message in it: then staff can read that
 //! conversation (and only that one) too.
 //!
-//! Lists of category threads (the index, `/latest`, category pages,
+//! Lists of space threads (the index, `/latest`, space pages,
 //! profiles' post counts) use `thread_readable`, which never matches a
 //! private thread, so conversations can't appear in them.
 
@@ -322,7 +322,7 @@ pub async fn conversation_page(
                (SELECT tr.last_read_seq FROM thread_reads tr
                 WHERE tr.thread_id = t.id AND tr.user_id = $2) AS read_marker
         FROM threads t
-        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.category_id IS NULL
+        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.space_id IS NULL
           AND dm_readable(t.id, t.visibility, $2)
         "#,
         thread_id,

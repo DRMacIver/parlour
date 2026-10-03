@@ -12,27 +12,27 @@ async function discover(page: Page): Promise<Record<string, string>> {
   const lastPage = (await pageLink.getAttribute("href"))!;
   const longThread = lastPage.split("?")[0];
   const firstThread = (await page.locator(".thread-list .row-title a").first().getAttribute("href"))!;
-  // A category with more than one page of threads.
+  // A space with more than one page of threads.
   await page.goto("/");
-  let longCategory = "";
+  let longSpace = "";
   for (const href of await page.locator("a[href^='/c/']").evaluateAll((links) =>
     links.map((link) => link.getAttribute("href")!),
   )) {
     await page.goto(href);
     if ((await page.locator(".pagination a[href*='?page=2']").count()) > 0) {
-      longCategory = href;
+      longSpace = href;
       break;
     }
   }
-  expect(longCategory, "the seed has a category with several pages").not.toBe("");
+  expect(longSpace, "the seed has a space with several pages").not.toBe("");
   await page.goto("/latest");
   const fork = (await page.locator(".row-title a", { hasText: "Do solo modes count" }).first().getAttribute("href"))!;
   return {
     index: "/",
     latest: "/latest",
     "latest page 2": "/latest?page=2",
-    category: "/c/board-games",
-    "category page 2": `${longCategory}?page=2`,
+    space: "/c/board-games",
+    "space page 2": `${longSpace}?page=2`,
     thread: firstThread,
     "long thread": longThread,
     "long thread, last page": lastPage,
@@ -79,8 +79,8 @@ const names = [
   "index",
   "latest",
   "latest page 2",
-  "category",
-  "category page 2",
+  "space",
+  "space page 2",
   "thread",
   "long thread",
   "long thread, last page",
@@ -105,7 +105,7 @@ for (const name of names) {
 }
 
 test("the not-found page renders and fits the viewport", async ({ page }) => {
-  await visit(page, "/c/no-such-category", 404);
+  await visit(page, "/c/no-such-space", 404);
   await expect(page.locator("h1").first()).toBeVisible();
   await expectNoHorizontalScroll(page);
 });

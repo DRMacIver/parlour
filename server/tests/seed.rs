@@ -11,7 +11,7 @@ use sqlx::PgPool;
 async fn seed_fills_an_empty_forum_with_browsable_content(pool: PgPool) {
     let summary = seed::seed(&pool).await.unwrap();
     assert!(summary.users >= 10, "{summary:?}");
-    assert!(summary.categories >= 6, "{summary:?}");
+    assert!(summary.spaces >= 6, "{summary:?}");
     assert!(summary.threads >= 40, "{summary:?}");
     assert!(summary.posts >= 500, "{summary:?}");
 
@@ -19,17 +19,16 @@ async fn seed_fills_an_empty_forum_with_browsable_content(pool: PgPool) {
     let index = f.page("/").await;
     assert!(index.contains("The Tuesday Club"));
     assert!(index.contains("Community") && index.contains("Hobbies"));
-    // The members-only section has no categories an anonymous visitor can
+    // The members-only section has no spaces an anonymous visitor can
     // see, so it isn't shown at all.
     assert!(!index.contains("Members only"));
 
-    // Every public category has threads and every thread page renders.
-    let categories: Vec<(String, String)> =
-        sqlx::query_as("SELECT slug, read_level FROM categories")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
-    for (slug, level) in &categories {
+    // Every public space has threads and every thread page renders.
+    let spaces: Vec<(String, String)> = sqlx::query_as("SELECT slug, read_level FROM spaces")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    for (slug, level) in &spaces {
         let response = f.get(&format!("/c/{slug}")).await;
         let expected = if level == "public" {
             StatusCode::OK
@@ -79,7 +78,7 @@ async fn seed_includes_the_interesting_cases(pool: PgPool) {
         count("SELECT count(*) FROM threads WHERE last_seq > 100").await >= 2,
         "long threads"
     );
-    assert!(count("SELECT count(*) FROM categories c WHERE (SELECT count(*) FROM threads t WHERE t.category_id = c.id) > 30").await >= 1, "a category with several pages");
+    assert!(count("SELECT count(*) FROM spaces c WHERE (SELECT count(*) FROM threads t WHERE t.space_id = c.id) > 30").await >= 1, "a space with several pages");
     assert!(
         count("SELECT count(*) FROM threads WHERE pinned").await >= 2,
         "pinned threads"
@@ -109,8 +108,8 @@ async fn seed_includes_the_interesting_cases(pool: PgPool) {
         "edited posts"
     );
     assert!(
-        count("SELECT count(*) FROM categories WHERE read_level <> 'public'").await >= 2,
-        "private categories"
+        count("SELECT count(*) FROM spaces WHERE read_level <> 'public'").await >= 2,
+        "private spaces"
     );
     assert!(
         count("SELECT count(*) FROM users WHERE status_line IS NOT NULL").await >= 5,
@@ -160,7 +159,7 @@ async fn seed_includes_the_interesting_cases(pool: PgPool) {
         .await,
         0
     );
-    // The organisers' category is read by its group, which has ordinary
+    // The organisers' space is read by its group, which has ordinary
     // members in it as well as staff.
     assert_eq!(
         count(
@@ -174,8 +173,8 @@ async fn seed_includes_the_interesting_cases(pool: PgPool) {
     // Members only post in, react in and have read markers for threads
     // they can read.
     const CANT_READ: &str = "t.visibility = 'groups' AND u.role = 'user' AND NOT EXISTS (
-        SELECT 1 FROM group_members m JOIN category_groups cg ON cg.group_id = m.group_id
-        WHERE m.user_id = u.id AND cg.category_id = t.category_id AND cg.access = 'read')";
+        SELECT 1 FROM group_members m JOIN space_groups cg ON cg.group_id = m.group_id
+        WHERE m.user_id = u.id AND cg.space_id = t.space_id AND cg.access = 'read')";
     for sql in [
         "SELECT count(*) FROM thread_reads r JOIN threads t ON t.id = r.thread_id
          JOIN users u ON u.id = r.user_id",
@@ -213,14 +212,7 @@ async fn seed_refuses_to_touch_a_forum_with_content(pool: PgPool) {
 async fn reset_empties_the_content_tables(pool: PgPool) {
     seed::seed(&pool).await.unwrap();
     seed::reset(&pool).await.unwrap();
-    for table in [
-        "users",
-        "sections",
-        "categories",
-        "groups",
-        "threads",
-        "posts",
-    ] {
+    for table in ["users", "sections", "spaces", "groups", "threads", "posts"] {
         let n: i64 =
             sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
                 .fetch_one(&pool)
@@ -241,7 +233,7 @@ async fn count(pool: &PgPool, table: &str) -> i64 {
 async fn reset_refuses_a_database_seed_did_not_create(pool: PgPool) {
     let f = Forum::new(pool.clone());
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     f.thread(games, ruth, "Real content", "x").await;
     assert!(matches!(
         seed::reset(&pool).await,
@@ -288,12 +280,7 @@ async fn a_failed_seed_leaves_nothing_behind(pool: PgPool) {
         Err(SeedError::Database(_))
     ));
     for table in [
-        "users",
-        "sections",
-        "categories",
-        "threads",
-        "posts",
-        "settings",
+        "users", "sections", "spaces", "threads", "posts", "settings",
     ] {
         assert_eq!(count(&pool, table).await, 0, "{table}");
     }

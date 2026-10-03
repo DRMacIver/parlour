@@ -1,10 +1,10 @@
 //! Groups of members (DESIGN.md §3.1). Admins make them and add members to
-//! them, and invites can add the people who use them. Categories with the
+//! them, and invites can add the people who use them. Spaces with the
 //! `groups` read or write level name the groups that may read or post in
-//! them (in `category_groups`, set by [`crate::store::update_category`]).
+//! them (in `space_groups`, set by [`crate::store::update_space`]).
 //!
-//! Group names show on the index next to group-restricted categories, but
-//! only to viewers who can read those categories, and they are never in the
+//! Group names show on the index next to group-restricted spaces, but
+//! only to viewers who can read those spaces, and they are never in the
 //! anonymous cache, so changing groups clears no cached pages.
 
 use chrono::{DateTime, Utc};
@@ -61,7 +61,7 @@ impl GroupFields {
     }
 }
 
-/// Whether text has the form the database requires of category and group
+/// Whether text has the form the database requires of space and group
 /// slugs: lower-case words of letters and digits joined by single hyphens.
 pub fn valid_slug(slug: &str) -> bool {
     !slug.is_empty()
@@ -130,7 +130,7 @@ pub async fn update(db: &Db, id: i64, fields: &GroupFields) -> sqlx::Result<Resu
     }
 }
 
-/// Deletes a group, taking it off every category and invite. Returns
+/// Deletes a group, taking it off every space and invite. Returns
 /// whether there was one.
 pub async fn delete(db: &Db, id: i64) -> sqlx::Result<bool> {
     let done = sqlx::query!("DELETE FROM groups WHERE id = $1", id)
@@ -229,13 +229,13 @@ pub struct GroupMember {
     pub added_by: Option<UserRef>,
 }
 
-/// A category that names a group.
-pub struct GroupCategory {
+/// A space that names a group.
+pub struct GroupSpace {
     pub slug: String,
     pub name: String,
     pub read: bool,
     pub write: bool,
-    /// The category is group-restricted and this is the only group that
+    /// The space is group-restricted and this is the only group that
     /// may read it, so without the group only staff could.
     pub only_readers: bool,
     /// Likewise for posting.
@@ -246,7 +246,7 @@ pub struct GroupCategory {
 pub struct GroupDetail {
     pub group: GroupSummary,
     pub members: Vec<GroupMember>,
-    pub categories: Vec<GroupCategory>,
+    pub spaces: Vec<GroupSpace>,
     /// Invites that can still be used and add people to the group.
     pub usable_invites: i64,
 }
@@ -286,18 +286,18 @@ pub async fn detail(db: &Db, id: i64) -> sqlx::Result<Option<GroupDetail>> {
         },
     })
     .collect();
-    let categories = sqlx::query!(
+    let spaces = sqlx::query!(
         r#"SELECT c.slug, c.name,
                   bool_or(cg.access = 'read') AS "read!", bool_or(cg.access = 'write') AS "write!",
                   bool_or(cg.access = 'read' AND c.read_level = 'groups' AND NOT EXISTS (
-                      SELECT 1 FROM category_groups o
-                      WHERE o.category_id = c.id AND o.access = 'read' AND o.group_id <> $1
+                      SELECT 1 FROM space_groups o
+                      WHERE o.space_id = c.id AND o.access = 'read' AND o.group_id <> $1
                   )) AS "only_readers!",
                   bool_or(cg.access = 'write' AND c.write_level = 'groups' AND NOT EXISTS (
-                      SELECT 1 FROM category_groups o
-                      WHERE o.category_id = c.id AND o.access = 'write' AND o.group_id <> $1
+                      SELECT 1 FROM space_groups o
+                      WHERE o.space_id = c.id AND o.access = 'write' AND o.group_id <> $1
                   )) AS "only_writers!"
-           FROM category_groups cg JOIN categories c ON c.id = cg.category_id
+           FROM space_groups cg JOIN spaces c ON c.id = cg.space_id
            WHERE cg.group_id = $1
            GROUP BY c.id
            ORDER BY c.position, c.id"#,
@@ -306,7 +306,7 @@ pub async fn detail(db: &Db, id: i64) -> sqlx::Result<Option<GroupDetail>> {
     .fetch_all(db.pool())
     .await?
     .into_iter()
-    .map(|row| GroupCategory {
+    .map(|row| GroupSpace {
         slug: row.slug,
         name: row.name,
         read: row.read,
@@ -326,7 +326,7 @@ pub async fn detail(db: &Db, id: i64) -> sqlx::Result<Option<GroupDetail>> {
     Ok(Some(GroupDetail {
         group,
         members,
-        categories,
+        spaces,
         usable_invites,
     }))
 }

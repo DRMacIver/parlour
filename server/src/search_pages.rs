@@ -15,7 +15,7 @@ use crate::client::ClientIp;
 use crate::content::search::{
     self, HitPlace, MAX_QUERY_CHARS, SearchHit, SearchOutcome, SearchQuery,
 };
-use crate::content::{self, CategoryTarget};
+use crate::content::{self, SpaceTarget};
 use crate::error::AppError;
 use crate::ratelimit::{Action, Scope};
 use crate::viewer::Viewer;
@@ -30,7 +30,7 @@ pub const MAX_PAGES: i64 = 25;
 struct SearchTemplate {
     layout: Layout,
     query: SearchQuery,
-    categories: Vec<CategoryTarget>,
+    spaces: Vec<SpaceTarget>,
     /// Whether a search was made (there was a query).
     searched: bool,
     no_terms: bool,
@@ -42,16 +42,16 @@ struct SearchTemplate {
 }
 
 impl SearchTemplate {
-    fn category_selected(&self, slug: &str) -> bool {
-        self.query.category.as_deref() == Some(slug)
+    fn space_selected(&self, slug: &str) -> bool {
+        self.query.space.as_deref() == Some(slug)
     }
 }
 
 /// The URL of another page of the same search.
 fn page_url(query: &SearchQuery, page: i64) -> String {
     let mut url = format!("/search?q={}", query_encode(&query.text));
-    if let Some(category) = &query.category {
-        url.push_str(&format!("&in={}", query_encode(category)));
+    if let Some(space) = &query.space {
+        url.push_str(&format!("&in={}", query_encode(space)));
     }
     if let Some(author) = &query.author {
         url.push_str(&format!("&by={}", query_encode(author)));
@@ -106,7 +106,7 @@ pub async fn search_page(
             .replace(char::is_control, " ")
             .trim()
             .to_owned(),
-        category: blank(param(&params, "in")),
+        space: blank(param(&params, "in")),
         author: blank(param(&params, "by")).map(|a| a.trim_start_matches('@').to_owned()),
         newest_first: param(&params, "sort") == Some("new"),
     };
@@ -119,7 +119,7 @@ pub async fn search_page(
     };
     let mut template = SearchTemplate {
         layout: Layout::load(&state, &viewer, Nav::Search).await?,
-        categories: content::readable_categories(state.db(), &viewer).await?,
+        spaces: content::readable_spaces(state.db(), &viewer).await?,
         searched: !query.text.is_empty(),
         no_terms: false,
         hits: Vec::new(),
@@ -138,13 +138,8 @@ pub async fn search_page(
         ))
     } else if template.query.author.as_ref().is_some_and(|a| a.len() > 64) {
         Some("Usernames are at most 64 characters long.".to_owned())
-    } else if template
-        .query
-        .category
-        .as_ref()
-        .is_some_and(|c| c.len() > 100)
-    {
-        Some("Category names are at most 100 characters long.".to_owned())
+    } else if template.query.space.as_ref().is_some_and(|c| c.len() > 100) {
+        Some("Space names are at most 100 characters long.".to_owned())
     } else {
         None
     };
@@ -178,14 +173,14 @@ impl SearchHit {
     /// Where it was found, as a link.
     fn place_href(&self) -> String {
         match &self.place {
-            HitPlace::Category { slug, .. } => format!("/c/{slug}"),
+            HitPlace::Space { slug, .. } => format!("/c/{slug}"),
             HitPlace::Conversation { .. } => format!("/messages/{}", self.thread_id),
         }
     }
 
     fn place_name(&self) -> &str {
         match &self.place {
-            HitPlace::Category { name, .. } => name,
+            HitPlace::Space { name, .. } => name,
             HitPlace::Conversation { name, .. } => name,
         }
     }
@@ -195,7 +190,7 @@ impl SearchHit {
     /// without a title needs).
     fn title(&self) -> &str {
         match &self.place {
-            HitPlace::Category { .. } => &self.thread_title,
+            HitPlace::Space { .. } => &self.thread_title,
             HitPlace::Conversation { name, .. } => name,
         }
     }
@@ -204,7 +199,7 @@ impl SearchHit {
     /// otherwise.
     fn conversation_with(&self) -> Option<&str> {
         match &self.place {
-            HitPlace::Category { .. } => None,
+            HitPlace::Space { .. } => None,
             HitPlace::Conversation { with, .. } => Some(with),
         }
     }

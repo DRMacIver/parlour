@@ -87,8 +87,8 @@ pub fn names(names: &[String]) -> String {
     text
 }
 
-/// Who can read a category, for a label beside its name: nothing for a
-/// public category, "Members only", or the groups that may read it.
+/// Who can read a space, for a label beside its name: nothing for a
+/// public space, "Members only", or the groups that may read it.
 pub fn access_label(read_level: &str, group_names: &[String]) -> Option<String> {
     match read_level {
         "public" => None,
@@ -110,7 +110,7 @@ pub fn access_label(read_level: &str, group_names: &[String]) -> Option<String> 
     }
 }
 
-/// Whether a category's access label names groups (rather than saying
+/// Whether a space's access label names groups (rather than saying
 /// "Members only" or "Staff only"), for its icon.
 pub fn access_is_groups(read_level: &str, group_names: &[String]) -> bool {
     read_level == "groups" && !group_names.is_empty()

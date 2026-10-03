@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(t.id) AS \"n!\" FROM spaces c LEFT JOIN threads t ON t.space_id = c.id\n           WHERE c.id = $1 AND space_readable(c.read_level, c.id, $2, $3)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0ad1dfaec6874ccd1fbff14adbbafac289ad01dce64a8f6fc0ff21cf35b0d2d7"
+}

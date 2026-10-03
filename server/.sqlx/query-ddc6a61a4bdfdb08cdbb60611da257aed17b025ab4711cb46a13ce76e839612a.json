@@ -1,0 +1,141 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT p.body_html, t.title, t.slug, c.id AS space_id, c.slug AS space_slug, c.name AS space_name,\n               u.id AS author_id, u.username, u.display_name, u.title AS author_title\n        FROM posts p\n        JOIN threads t ON t.id = p.thread_id\n        JOIN spaces c ON c.id = t.space_id\n        JOIN users u ON u.id = p.author_id\n        WHERE p.id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "body_html",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "body_html"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "space_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "space_slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "space_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "author_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "username",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "author_title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "title"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "ddc6a61a4bdfdb08cdbb60611da257aed17b025ab4711cb46a13ce76e839612a"
+}

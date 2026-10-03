@@ -1,9 +1,9 @@
 //! Property-based tests over random forum histories (DESIGN.md §6, §12).
 //!
-//! A state machine creates categories, threads, posts and quote-forks, then
+//! A state machine creates spaces, threads, posts and quote-forks, then
 //! edits (inside and after the grace period, so that some edits keep
 //! history), reacts to, deletes, hides, moves and renames them, changes
-//! category levels and read groups, moves the logged-in member in and out
+//! space levels and read groups, moves the logged-in member in and out
 //! of groups, and reports each change as a write handler would.
 //! Throughout:
 //!
@@ -25,12 +25,12 @@
 //!   deletions, along with the moderation and island pages about each post.
 //!   There are many of those per post, so each check visits them for a
 //!   sample of posts, threads and messages that Hegel draws afresh. The member writes posts of their own, so that leaving a
-//!   group can strand them in a category they no longer read.
+//!   group can strand them in a space they no longer read.
 //! - Conversations (DMs) come and go among the members, the member viewer
 //!   and the moderator viewer, who join, leave and are added back: a
 //!   conversation's title and messages are seen by its current
 //!   participants and nobody else (staff included), never through the
-//!   anonymous cache, the category lists, the notifications page or any
+//!   anonymous cache, the space lists, the notifications page or any
 //!   page about a post. Every new post is put through the notification
 //!   fan-out, so the notifications page is checked too.
 //! - Notification email is sent as members are away, and every email holds
@@ -58,27 +58,27 @@ use parlour::db::Db;
 use parlour::groups::{self, GroupFields};
 use parlour::pagination::page_href;
 use parlour::sessions;
-use parlour::store::{self, CategorySettings, NewCategory, NewPost, NewThread, NewUser};
+use parlour::store::{self, NewPost, NewSpace, NewThread, NewUser, SpaceSettings};
 use parlour::users::{self, RoleChange};
 use parlour::viewer::Viewer;
 use parlour::writing;
 use sqlx::PgPool;
 use tokio::runtime::Handle;
 
-/// Counts the (member, category) pairs whose maintained post count, as
+/// Counts the (member, space) pairs whose maintained post count, as
 /// thread pages and profiles show it, differs from counting the posts
-/// afresh: live posts in live threads in that category.
+/// afresh: live posts in live threads in that space.
 const STALE_POST_COUNTS: &str = "
     WITH actual AS (
-        SELECT p.author_id AS user_id, t.category_id, count(*) AS posts
+        SELECT p.author_id AS user_id, t.space_id, count(*) AS posts
         FROM posts p JOIN threads t ON t.id = p.thread_id
-        WHERE t.category_id IS NOT NULL AND t.deleted_at IS NULL
+        WHERE t.space_id IS NOT NULL AND t.deleted_at IS NULL
           AND p.deleted_at IS NULL AND p.hidden_at IS NULL
         GROUP BY 1, 2
     ), kept AS (
-        SELECT user_id, category_id, posts FROM user_category_post_counts WHERE posts <> 0
+        SELECT user_id, space_id, posts FROM user_space_post_counts WHERE posts <> 0
     )
-    SELECT count(*) FROM actual FULL JOIN kept USING (user_id, category_id)
+    SELECT count(*) FROM actual FULL JOIN kept USING (user_id, space_id)
     WHERE actual.posts IS DISTINCT FROM kept.posts";
 
 const LEVELS: [&str; 3] = ["public", "members", "groups"];
@@ -100,13 +100,13 @@ enum Mode {
     Visibility(Who),
 }
 
-struct CategoryModel {
+struct SpaceModel {
     id: i64,
     slug: String,
     read_level: &'static str,
     /// The groups that may read it, as indexes into `World::groups`.
     read_groups: BTreeSet<usize>,
-    /// The token in the category's current name.
+    /// The token in the space's current name.
     token: String,
 }
 
@@ -130,7 +130,7 @@ struct MessageModel {
 
 struct ThreadModel {
     id: i64,
-    category: usize,
+    space: usize,
     title_token: String,
     deleted: bool,
     last_seq: i64,
@@ -210,7 +210,7 @@ struct World {
     cached: Forum,
     fresh: Forum,
     users: Vec<i64>,
-    categories: Vec<CategoryModel>,
+    spaces: Vec<SpaceModel>,
     threads: Vec<ThreadModel>,
     posts: Vec<PostModel>,
     /// Every token ever used, including ones edited or renamed away.
@@ -242,7 +242,7 @@ impl World {
     fn new(rt: Handle, db: PgPool, mode: Mode) -> World {
         rt.block_on(async {
             sqlx::raw_sql(
-                "TRUNCATE settings, jobs, posts, threads, categories, sections, groups, users RESTART IDENTITY CASCADE",
+                "TRUNCATE settings, jobs, posts, threads, spaces, sections, groups, users RESTART IDENTITY CASCADE",
             )
             .execute(&db)
             .await
@@ -263,7 +263,7 @@ impl World {
             .without_rate_limits(),
             rt,
             users: Vec::new(),
-            categories: Vec::new(),
+            spaces: Vec::new(),
             threads: Vec::new(),
             posts: Vec::new(),
             all_tokens: Vec::new(),
@@ -330,7 +330,7 @@ impl World {
             world.groups.push(id);
         }
         for level in ["public", "public", "members", "groups"] {
-            world.add_category(level);
+            world.add_space(level);
         }
         // Everyone can be emailed, as soon as a notification is made.
         world.exec("UPDATE users SET email_verified_at = now()".to_owned());
@@ -369,25 +369,25 @@ impl World {
         self.block(self.cached.exec(&sql));
     }
 
-    fn add_category(&mut self, level: &'static str) {
+    fn add_space(&mut self, level: &'static str) {
         let token = self.token();
-        let slug = format!("c{}", self.categories.len());
+        let slug = format!("c{}", self.spaces.len());
         let id = self
-            .block(store::create_category(
+            .block(store::create_space(
                 self.db(),
-                &NewCategory {
+                &NewSpace {
                     section_id: None,
                     slug: slug.clone(),
-                    name: format!("Category {token}"),
+                    name: format!("Space {token}"),
                     description: String::new(),
-                    position: self.categories.len() as i32,
+                    position: self.spaces.len() as i32,
                     read_level: level.into(),
                     write_level: "members".into(),
                 },
             ))
             .unwrap();
-        self.changed(Change::CategoryChanged { category_id: id });
-        self.categories.push(CategoryModel {
+        self.changed(Change::SpaceChanged { space_id: id });
+        self.spaces.push(SpaceModel {
             id,
             slug,
             read_level: level,
@@ -496,11 +496,11 @@ impl World {
 
     // -- The reference permission function, independent of the app's SQL.
 
-    /// DESIGN.md §3.1: anyone reads public categories, members also read
-    /// members-only ones, members of a category's read groups read it, and
+    /// DESIGN.md §3.1: anyone reads public spaces, members also read
+    /// members-only ones, members of a space's read groups read it, and
     /// staff read everything.
-    fn category_readable(&self, category: usize, who: Who) -> bool {
-        let c = &self.categories[category];
+    fn space_readable(&self, space: usize, who: Who) -> bool {
+        let c = &self.spaces[space];
         // A suspended member reads what visitors read.
         let who = if who == Who::Member && self.member_suspended {
             Who::Anonymous
@@ -516,7 +516,7 @@ impl World {
 
     fn thread_readable(&self, thread: usize, who: Who) -> bool {
         let t = &self.threads[thread];
-        !t.deleted && self.category_readable(t.category, who)
+        !t.deleted && self.space_readable(t.space, who)
     }
 
     fn post_readable(&self, post: usize, who: Who) -> bool {
@@ -535,11 +535,11 @@ impl World {
     /// The viewer a member is, for the reference permission function:
     /// the logged-in viewers as themselves, and the other members (who
     /// are in no groups) as a member viewer in no groups would be.
-    fn category_readable_by(&self, category: usize, user: i64) -> bool {
+    fn space_readable_by(&self, space: usize, user: i64) -> bool {
         if user == self.staff_id {
             return true;
         }
-        let c = &self.categories[category];
+        let c = &self.spaces[space];
         if user == self.member_id && self.member_suspended {
             return c.read_level == "public";
         }
@@ -553,14 +553,13 @@ impl World {
     fn tokens_for_user(&self, user: i64) -> BTreeSet<&str> {
         let mut tokens = BTreeSet::new();
         for t in &self.threads {
-            if !t.deleted && self.category_readable_by(t.category, user) {
+            if !t.deleted && self.space_readable_by(t.space, user) {
                 tokens.insert(t.title_token.as_str());
             }
         }
         for p in &self.posts {
             let t = &self.threads[p.thread];
-            if !p.deleted && !p.hidden && !t.deleted && self.category_readable_by(t.category, user)
-            {
+            if !p.deleted && !p.hidden && !t.deleted && self.space_readable_by(t.space, user) {
                 tokens.insert(p.body_token.as_str());
             }
         }
@@ -655,7 +654,7 @@ impl World {
     /// email sent holds only what its recipient may read now. Every unread
     /// notification is emailed again, not only new ones, so that each is
     /// checked against how things are now: after posts were deleted or
-    /// moved, categories closed, groups or conversations left.
+    /// moved, spaces closed, groups or conversations left.
     fn send_emails(&mut self) {
         self.exec("UPDATE notifications SET emailed_at = NULL WHERE read_at IS NULL".to_owned());
         let unread: Vec<i64> = self
@@ -694,8 +693,8 @@ impl World {
     /// Tokens this viewer may see somewhere.
     fn visible_tokens(&self, who: Who) -> BTreeSet<&str> {
         let mut tokens = BTreeSet::new();
-        for (i, c) in self.categories.iter().enumerate() {
-            if self.category_readable(i, who) {
+        for (i, c) in self.spaces.iter().enumerate() {
+            if self.space_readable(i, who) {
                 tokens.insert(c.token.as_str());
             }
         }
@@ -752,11 +751,11 @@ impl World {
         for page in 1..=page_count(visible_threads, THREADS_PER_PAGE) + 1 {
             paths.push(page_href("/latest", page));
         }
-        for (i, c) in self.categories.iter().enumerate() {
+        for (i, c) in self.spaces.iter().enumerate() {
             let threads = self
                 .threads
                 .iter()
-                .filter(|t| t.category == i && !t.deleted)
+                .filter(|t| t.space == i && !t.deleted)
                 .count() as i64;
             for page in 1..=page_count(threads, THREADS_PER_PAGE) + 1 {
                 paths.push(page_href(&format!("/c/{}", c.slug), page));
@@ -807,7 +806,7 @@ impl World {
             // Writing pages show logged-in viewers the text they quote,
             // fork or edit. Visitors are only asked to log in. The ones for
             // particular posts and threads are in `item_paths`.
-            for c in &self.categories {
+            for c in &self.spaces {
                 paths.push(format!("/c/{}/new", c.slug));
             }
             for c in &self.conversations {
@@ -990,9 +989,7 @@ impl World {
                 assert_eq!(response.status, StatusCode::OK);
                 assert!(response.body.contains(&t.title_token));
             } else if let Some(into) = t.merged_into.filter(|&into| {
-                t.deleted
-                    && self.category_readable(t.category, who)
-                    && self.thread_readable(into, who)
+                t.deleted && self.space_readable(t.space, who) && self.thread_readable(into, who)
             }) {
                 // A merged thread leads to the one it was merged into.
                 let into = &self.threads[into];
@@ -1049,9 +1046,9 @@ impl World {
                 assert_eq!(history.status, StatusCode::NOT_FOUND, "post {}", p.id);
             }
         }
-        for (i, c) in self.categories.iter().enumerate() {
+        for (i, c) in self.spaces.iter().enumerate() {
             let response = pages.get(&format!("/c/{}", c.slug));
-            let expected = if self.category_readable(i, who) {
+            let expected = if self.space_readable(i, who) {
                 StatusCode::OK
             } else {
                 StatusCode::NOT_FOUND
@@ -1120,7 +1117,7 @@ impl World {
 impl World {
     #[rule]
     fn create_thread(&mut self, tc: TestCase) {
-        let category = tc.draw(gs::integers::<usize>().max_value(self.categories.len() - 1));
+        let space = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
         let author = tc.draw(gs::sampled_from(self.users.clone()));
         let fork_of = if self.posts.is_empty() || !tc.draw(gs::booleans()) {
             None
@@ -1134,7 +1131,7 @@ impl World {
             .block(store::create_thread(
                 self.db(),
                 &NewThread {
-                    category_id: self.categories[category].id,
+                    space_id: self.spaces[space].id,
                     title: format!("Thread {title_token}"),
                     author_id: author,
                     body_md: format!("Opening {body_token}"),
@@ -1147,7 +1144,7 @@ impl World {
             .unwrap();
         self.threads.push(ThreadModel {
             id: created.thread_id,
-            category,
+            space,
             title_token,
             deleted: false,
             last_seq: 1,
@@ -1282,16 +1279,16 @@ impl World {
     fn move_thread(&mut self, tc: TestCase) {
         tc.assume(!self.threads.is_empty());
         let thread = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
-        let category = tc.draw(gs::integers::<usize>().max_value(self.categories.len() - 1));
-        let previous = self.threads[thread].category;
-        self.threads[thread].category = category;
+        let space = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
+        let previous = self.threads[thread].space;
+        self.threads[thread].space = space;
         self.exec(format!(
-            "UPDATE threads SET category_id = {} WHERE id = {}",
-            self.categories[category].id, self.threads[thread].id
+            "UPDATE threads SET space_id = {} WHERE id = {}",
+            self.spaces[space].id, self.threads[thread].id
         ));
         self.changed(Change::ThreadChanged {
             thread_id: self.threads[thread].id,
-            previous_category_id: Some(self.categories[previous].id),
+            previous_space_id: Some(self.spaces[previous].id),
         });
     }
 
@@ -1328,28 +1325,28 @@ impl World {
         }
         self.changed(Change::ThreadChanged {
             thread_id: id,
-            previous_category_id: None,
+            previous_space_id: None,
         });
     }
 
     #[rule]
-    fn change_category(&mut self, tc: TestCase) {
-        let category = tc.draw(gs::integers::<usize>().max_value(self.categories.len() - 1));
-        let id = self.categories[category].id;
+    fn change_space(&mut self, tc: TestCase) {
+        let space = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
+        let id = self.spaces[space].id;
         if tc.draw(gs::booleans()) {
             let level = tc.draw(gs::sampled_from(LEVELS.to_vec()));
-            self.categories[category].read_level = level;
+            self.spaces[space].read_level = level;
             self.exec(format!(
-                "UPDATE categories SET read_level = '{level}' WHERE id = {id}"
+                "UPDATE spaces SET read_level = '{level}' WHERE id = {id}"
             ));
         } else {
             let token = self.token();
             self.exec(format!(
-                "UPDATE categories SET name = 'Category {token}' WHERE id = {id}"
+                "UPDATE spaces SET name = 'Space {token}' WHERE id = {id}"
             ));
-            self.categories[category].token = token;
+            self.spaces[space].token = token;
         }
-        self.changed(Change::CategoryChanged { category_id: id });
+        self.changed(Change::SpaceChanged { space_id: id });
     }
 
     /// The member viewer joins or leaves a group.
@@ -1368,49 +1365,49 @@ impl World {
         }
     }
 
-    /// An admin changes which groups may read a category, as the category
+    /// An admin changes which groups may read a space, as the space
     /// form does.
     #[rule]
     fn set_read_groups(&mut self, tc: TestCase) {
-        let c = tc.draw(gs::integers::<usize>().max_value(self.categories.len() - 1));
+        let c = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
         let read_groups: BTreeSet<usize> = (0..self.groups.len())
             .filter(|_| tc.draw(gs::booleans()))
             .collect();
-        let category = &self.categories[c];
-        let settings = CategorySettings {
+        let space = &self.spaces[c];
+        let settings = SpaceSettings {
             section_id: None,
-            slug: category.slug.clone(),
-            name: format!("Category {}", category.token),
+            slug: space.slug.clone(),
+            name: format!("Space {}", space.token),
             description: String::new(),
             position: c as i32,
-            read_level: category.read_level.into(),
+            read_level: space.read_level.into(),
             write_level: "members".into(),
             read_groups: read_groups.iter().map(|&g| self.groups[g]).collect(),
             write_groups: Vec::new(),
         }
         .clean()
         .unwrap();
-        self.block(store::update_category(
+        self.block(store::update_space(
             self.cached.state.db(),
-            category.id,
+            space.id,
             &settings,
         ))
         .unwrap()
         .unwrap();
-        let id = category.id;
-        self.categories[c].read_groups = if settings.read_level == "groups" {
+        let id = space.id;
+        self.spaces[c].read_groups = if settings.read_level == "groups" {
             read_groups
         } else {
             BTreeSet::new()
         };
-        self.changed(Change::CategoryChanged { category_id: id });
+        self.changed(Change::SpaceChanged { space_id: id });
     }
 
     #[rule]
-    fn add_category_rule(&mut self, tc: TestCase) {
-        tc.assume(self.categories.len() < 7);
+    fn add_space_rule(&mut self, tc: TestCase) {
+        tc.assume(self.spaces.len() < 7);
         let level = tc.draw(gs::sampled_from(LEVELS.to_vec()));
-        self.add_category(level);
+        self.add_space(level);
     }
 
     #[rule]
@@ -1680,16 +1677,16 @@ impl World {
             .filter(|&t| t != from && !self.threads[t].deleted)
             .collect();
         let new_thread = others.is_empty() || tc.draw(gs::booleans());
-        let (destination, title_token, category) = if new_thread {
-            let category = tc.draw(gs::integers::<usize>().max_value(self.categories.len() - 1));
+        let (destination, title_token, space) = if new_thread {
+            let space = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
             let token = self.token();
             (
                 Destination::New {
-                    category: self.categories[category].slug.clone(),
+                    space: self.spaces[space].slug.clone(),
                     title: format!("Thread {token}"),
                 },
                 Some(token),
-                category,
+                space,
             )
         } else {
             let to = tc.draw(gs::sampled_from(others));
@@ -1715,7 +1712,7 @@ impl World {
             Some(title_token) => {
                 self.threads.push(ThreadModel {
                     id: to_id,
-                    category,
+                    space,
                     title_token,
                     deleted: false,
                     last_seq: 0,
@@ -1724,7 +1721,7 @@ impl World {
                 });
                 self.threads.len() - 1
             }
-            None => category,
+            None => space,
         };
         assert_eq!(self.threads[to].id, to_id);
         for p in moving {
@@ -1743,14 +1740,14 @@ impl World {
     fn hold_post(&mut self, tc: TestCase) {
         tc.assume(self.held.len() < 3);
         let author = tc.draw(gs::sampled_from(self.users.clone()));
-        let category = tc.draw(gs::integers::<usize>().max_value(self.categories.len() - 1));
+        let space = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
         let (title_token, body_token) = (self.token(), self.token());
         let id = self
             .block(parlour::mod_records::hold(
                 self.db(),
                 author,
                 &parlour::mod_records::HeldPlace::Thread {
-                    category_id: self.categories[category].id,
+                    space_id: self.spaces[space].id,
                     title: format!("Thread {title_token}"),
                     forked_from_post_id: None,
                 },
@@ -1778,10 +1775,10 @@ impl World {
                 .block(parlour::moderation::approve(&self.cached.state, &staff, id))
                 .unwrap();
             if let Ok(post_id) = approved {
-                let (thread_id, category_id): (i64, i64) = self
+                let (thread_id, space_id): (i64, i64) = self
                     .block(
                         sqlx::query_as(
-                            "SELECT t.id, t.category_id FROM posts p JOIN threads t ON t.id = p.thread_id
+                            "SELECT t.id, t.space_id FROM posts p JOIN threads t ON t.id = p.thread_id
                              WHERE p.id = $1",
                         )
                         .bind(post_id)
@@ -1789,11 +1786,7 @@ impl World {
                     )
                     .unwrap();
                 let held = &self.held[h];
-                let category = self
-                    .categories
-                    .iter()
-                    .position(|c| c.id == category_id)
-                    .unwrap();
+                let space = self.spaces.iter().position(|c| c.id == space_id).unwrap();
                 let (title_token, body_token, author) = (
                     held.title_token.clone(),
                     held.body_token.clone(),
@@ -1801,7 +1794,7 @@ impl World {
                 );
                 self.threads.push(ThreadModel {
                     id: thread_id,
-                    category,
+                    space,
                     title_token,
                     deleted: false,
                     last_seq: 1,
@@ -1914,10 +1907,10 @@ async fn members_see_only_what_members_may(pool: PgPool) {
     run_in_blocking_thread(pool, Mode::Visibility(Who::Member)).await;
 }
 
-/// Staff see every category, and their browsing never reaches anonymous
+/// Staff see every space, and their browsing never reaches anonymous
 /// visitors either.
 #[sqlx::test]
-async fn staff_see_every_category(pool: PgPool) {
+async fn staff_see_every_space(pool: PgPool) {
     run_in_blocking_thread(pool, Mode::Visibility(Who::Staff)).await;
 }
 
@@ -1925,11 +1918,11 @@ async fn staff_see_every_category(pool: PgPool) {
 // The access layer itself (DESIGN.md §6)
 //
 // A second state machine builds random forums out of groups, memberships,
-// roles, categories with read and write levels and groups, threads, posts,
+// roles, spaces with read and write levels and groups, threads, posts,
 // quote-forks, moves and deletions, and asks the `content` module directly
 // what each viewer gets, where they may post, and where they may quote
 // each post they can read. Every answer is checked, in both directions,
-// against `Access::reads_category` and friends below, which are written from
+// against `Access::reads_space` and friends below, which are written from
 // DESIGN.md §3.1 and know nothing of the SQL.
 
 struct UserModel {
@@ -1949,7 +1942,7 @@ impl UserModel {
     }
 }
 
-struct AccessCategory {
+struct AccessSpace {
     id: i64,
     slug: String,
     level: &'static str,
@@ -1960,7 +1953,7 @@ struct AccessCategory {
 
 struct AccessThread {
     id: i64,
-    category: usize,
+    space: usize,
     deleted: bool,
     /// The post this thread quote-forks.
     fork_of: Option<usize>,
@@ -2003,7 +1996,7 @@ struct Access {
     state: AppState,
     users: Vec<UserModel>,
     groups: Vec<i64>,
-    categories: Vec<AccessCategory>,
+    spaces: Vec<AccessSpace>,
     threads: Vec<AccessThread>,
     posts: Vec<AccessPost>,
     /// For each post, the threads it has been moved out of.
@@ -2022,7 +2015,7 @@ impl Access {
     fn new(rt: Handle, pool: PgPool) -> Access {
         rt.block_on(async {
             sqlx::raw_sql(
-                "TRUNCATE settings, jobs, posts, threads, categories, sections, groups, users RESTART IDENTITY CASCADE",
+                "TRUNCATE settings, jobs, posts, threads, spaces, sections, groups, users RESTART IDENTITY CASCADE",
             )
             .execute(&pool)
             .await
@@ -2035,7 +2028,7 @@ impl Access {
             rt,
             users: Vec::new(),
             groups: Vec::new(),
-            categories: Vec::new(),
+            spaces: Vec::new(),
             threads: Vec::new(),
             posts: Vec::new(),
             moved_from: Vec::new(),
@@ -2075,7 +2068,7 @@ impl Access {
             world.add_group();
         }
         for level in ["public", "members", "groups", "groups"] {
-            world.add_category(level);
+            world.add_space(level);
         }
         world
     }
@@ -2105,16 +2098,16 @@ impl Access {
         self.groups.push(id);
     }
 
-    fn add_category(&mut self, level: &'static str) {
-        let n = self.categories.len();
+    fn add_space(&mut self, level: &'static str) {
+        let n = self.spaces.len();
         let slug = format!("c{n}");
         let id = self
-            .block(store::create_category(
+            .block(store::create_space(
                 &self.pool,
-                &NewCategory {
+                &NewSpace {
                     section_id: None,
                     slug: slug.clone(),
-                    name: format!("Category {n}"),
+                    name: format!("Space {n}"),
                     description: String::new(),
                     position: n as i32,
                     read_level: level.into(),
@@ -2122,7 +2115,7 @@ impl Access {
                 },
             ))
             .unwrap();
-        self.categories.push(AccessCategory {
+        self.spaces.push(AccessSpace {
             id,
             slug,
             level,
@@ -2176,8 +2169,8 @@ impl Access {
     /// `who` is an index into `users`, or `None` for an anonymous visitor.
     /// A suspended member reads what a visitor reads (DESIGN.md §3.1:
     /// members-only means members who are not suspended).
-    fn reads_category(&self, who: Option<usize>, category: usize) -> bool {
-        let c = &self.categories[category];
+    fn reads_space(&self, who: Option<usize>, space: usize) -> bool {
+        let c = &self.spaces[space];
         let who = who.filter(|&u| !self.users[u].suspended);
         match (c.level, who) {
             ("public", _) => true,
@@ -2204,7 +2197,7 @@ impl Access {
 
     fn reads_thread(&self, who: Option<usize>, thread: usize) -> bool {
         let t = &self.threads[thread];
-        !t.deleted && self.reads_category(who, t.category)
+        !t.deleted && self.reads_space(who, t.space)
     }
 
     fn post_live(&self, post: usize) -> bool {
@@ -2284,7 +2277,7 @@ impl Access {
             ] {
                 assert_eq!(found, visible, "{who:?}: conversation {c}");
             }
-            // Conversations never have category pages.
+            // Conversations never have space pages.
             assert!(
                 self.block(content::thread_slug(db, viewer, conversation.id))
                     .unwrap()
@@ -2374,15 +2367,15 @@ impl Access {
         }
     }
 
-    /// Whether the viewer may start threads in a category: they read it,
+    /// Whether the viewer may start threads in a space: they read it,
     /// and they are staff, or it lets every member post, or they are in
     /// one of its write groups.
-    fn posts_in_category(&self, who: Option<usize>, category: usize) -> bool {
+    fn posts_in_space(&self, who: Option<usize>, space: usize) -> bool {
         let Some(u) = who else { return false };
-        let (c, user) = (&self.categories[category], &self.users[u]);
+        let (c, user) = (&self.spaces[space], &self.users[u]);
         !user.silenced
             && !user.suspended
-            && self.reads_category(who, category)
+            && self.reads_space(who, space)
             && match c.write_level {
                 "members" => true,
                 "groups" => user.staff || !user.groups.is_disjoint(&c.write_groups),
@@ -2391,9 +2384,9 @@ impl Access {
     }
 
     /// The "at most as visible" table in DESIGN.md §3.1: may content from
-    /// category `source` be quoted into category `dest`?
+    /// space `source` be quoted into space `dest`?
     fn may_quote_into(&self, source: usize, dest: usize) -> bool {
-        let (s, d) = (&self.categories[source], &self.categories[dest]);
+        let (s, d) = (&self.spaces[source], &self.spaces[dest]);
         match (s.level, d.level) {
             ("public", _) => true,
             ("members", "members" | "groups") => true,
@@ -2406,20 +2399,14 @@ impl Access {
     /// each post they can read.
     fn check_writing(&self, who: Option<usize>, viewer: &Viewer) {
         let db = &self.db;
-        let readable = self
-            .block(content::readable_categories(db, viewer))
-            .unwrap();
+        let readable = self.block(content::readable_spaces(db, viewer)).unwrap();
         let may_post: BTreeSet<i64> = readable
             .iter()
             .filter(|c| writing::may_post_in(viewer, c))
-            .map(|c| c.category.id)
+            .map(|c| c.space.id)
             .collect();
-        let expected = Self::ids(
-            &self.categories,
-            |c| self.posts_in_category(who, c),
-            |c| c.id,
-        );
-        assert_eq!(may_post, expected, "{who:?}: categories to post in");
+        let expected = Self::ids(&self.spaces, |c| self.posts_in_space(who, c), |c| c.id);
+        assert_eq!(may_post, expected, "{who:?}: spaces to post in");
         for (p, post) in self.posts.iter().enumerate() {
             if !self.reads_post(who, p) {
                 continue;
@@ -2432,12 +2419,12 @@ impl Access {
                 .block(writing::fork_destinations(&self.state, viewer, &source))
                 .unwrap_or_else(|_| panic!("{who:?}: fork destinations of post {p} failed"))
                 .iter()
-                .map(|c| c.category.id)
+                .map(|c| c.space.id)
                 .collect();
-            let from = self.threads[post.thread].category;
+            let from = self.threads[post.thread].space;
             let expected = Self::ids(
-                &self.categories,
-                |c| self.posts_in_category(who, c) && self.may_quote_into(from, c),
+                &self.spaces,
+                |c| self.posts_in_space(who, c) && self.may_quote_into(from, c),
                 |c| c.id,
             );
             assert_eq!(
@@ -2447,9 +2434,9 @@ impl Access {
         }
     }
 
-    /// Gives category `c` random read and write levels and groups, as an
-    /// admin can with the category form.
-    fn set_category_access(&mut self, tc: &TestCase, c: usize) {
+    /// Gives space `c` random read and write levels and groups, as an
+    /// admin can with the space form.
+    fn set_space_access(&mut self, tc: &TestCase, c: usize) {
         let level = tc.draw(gs::sampled_from(LEVELS.to_vec()));
         let read_groups: BTreeSet<usize> = (0..self.groups.len())
             .filter(|_| tc.draw(gs::booleans()))
@@ -2462,12 +2449,12 @@ impl Access {
             // The form refuses groups that may post but not read.
             write_groups.retain(|g| read_groups.contains(g));
         }
-        let category = &self.categories[c];
+        let space = &self.spaces[c];
         let to_ids = |groups: &BTreeSet<usize>| groups.iter().map(|&g| self.groups[g]).collect();
-        let settings = CategorySettings {
+        let settings = SpaceSettings {
             section_id: None,
-            slug: category.slug.clone(),
-            name: format!("Category {c}"),
+            slug: space.slug.clone(),
+            name: format!("Space {c}"),
             description: String::new(),
             position: c as i32,
             read_level: level.into(),
@@ -2477,18 +2464,18 @@ impl Access {
         }
         .clean()
         .unwrap();
-        self.block(store::update_category(&self.db, category.id, &settings))
+        self.block(store::update_space(&self.db, space.id, &settings))
             .unwrap()
             .unwrap();
-        let category = &mut self.categories[c];
-        category.level = level;
-        category.read_groups = if level == "groups" {
+        let space = &mut self.spaces[c];
+        space.level = level;
+        space.read_groups = if level == "groups" {
             read_groups
         } else {
             BTreeSet::new()
         };
-        category.write_level = write_level;
-        category.write_groups = if write_level == "groups" {
+        space.write_level = write_level;
+        space.write_groups = if write_level == "groups" {
             write_groups
         } else {
             BTreeSet::new()
@@ -2517,8 +2504,7 @@ impl Access {
         let viewer = self.viewer(who);
         let db = &self.db;
         let mut deps = Deps::new();
-        let readable_categories =
-            Self::ids(&self.categories, |c| self.reads_category(who, c), |c| c.id);
+        let readable_spaces = Self::ids(&self.spaces, |c| self.reads_space(who, c), |c| c.id);
         let readable_threads = Self::ids(&self.threads, |t| self.reads_thread(who, t), |t| t.id);
         let thread_index: HashMap<i64, usize> = self
             .threads
@@ -2528,26 +2514,26 @@ impl Access {
             .collect();
 
         let targets: BTreeSet<i64> = self
-            .block(content::readable_categories(db, &viewer))
+            .block(content::readable_spaces(db, &viewer))
             .unwrap()
             .iter()
-            .map(|c| c.category.id)
+            .map(|c| c.space.id)
             .collect();
-        assert_eq!(targets, readable_categories, "{who:?}: readable categories");
+        assert_eq!(targets, readable_spaces, "{who:?}: readable spaces");
 
         let sections = self
             .block(content::index_sections(db, &viewer, &mut deps))
             .unwrap();
         let mut listed = BTreeSet::new();
-        for summary in sections.iter().flat_map(|s| &s.categories) {
-            listed.insert(summary.category.id);
+        for summary in sections.iter().flat_map(|s| &s.spaces) {
+            listed.insert(summary.space.id);
             let c = self
-                .categories
+                .spaces
                 .iter()
-                .position(|c| c.id == summary.category.id)
+                .position(|c| c.id == summary.space.id)
                 .unwrap();
             let threads_here = (0..self.threads.len())
-                .filter(|&t| self.threads[t].category == c && self.reads_thread(who, t))
+                .filter(|&t| self.threads[t].space == c && self.reads_thread(who, t))
                 .count() as i64;
             assert_eq!(
                 summary.thread_count, threads_here,
@@ -2555,10 +2541,10 @@ impl Access {
             );
             if let Some(last) = &summary.last {
                 let t = thread_index[&last.thread.id];
-                assert!(self.reads_thread(who, t) && self.threads[t].category == c);
+                assert!(self.reads_thread(who, t) && self.threads[t].space == c);
             }
         }
-        assert_eq!(listed, readable_categories, "{who:?}: index");
+        assert_eq!(listed, readable_spaces, "{who:?}: index");
 
         let latest = self
             .block(content::latest(db, &viewer, 1, 10_000, &mut deps))
@@ -2575,27 +2561,21 @@ impl Access {
             assert_eq!(row.forked_from.as_ref().map(|f| f.id), expected);
         }
 
-        for (c, category) in self.categories.iter().enumerate() {
+        for (c, space) in self.spaces.iter().enumerate() {
             let page = self
-                .block(content::category_page(
-                    db,
-                    &viewer,
-                    &category.slug,
-                    1,
-                    &mut deps,
-                ))
+                .block(content::space_page(db, &viewer, &space.slug, 1, &mut deps))
                 .unwrap();
             match page {
-                None => assert!(!self.reads_category(who, c), "{who:?}: category {c}"),
+                None => assert!(!self.reads_space(who, c), "{who:?}: space {c}"),
                 Some(page) => {
-                    assert!(self.reads_category(who, c), "{who:?}: category {c}");
+                    assert!(self.reads_space(who, c), "{who:?}: space {c}");
                     let shown: BTreeSet<i64> = page.threads.iter().map(|r| r.thread.id).collect();
                     let expected = Self::ids(
                         &self.threads,
-                        |t| self.threads[t].category == c && self.reads_thread(who, t),
+                        |t| self.threads[t].space == c && self.reads_thread(who, t),
                         |t| t.id,
                     );
-                    assert_eq!(shown, expected, "{who:?}: threads in category {c}");
+                    assert_eq!(shown, expected, "{who:?}: threads in space {c}");
                 }
             }
         }
@@ -2845,24 +2825,24 @@ impl Access {
     }
 
     #[rule]
-    fn new_category(&mut self, tc: TestCase) {
-        tc.assume(self.categories.len() < 5);
+    fn new_space(&mut self, tc: TestCase) {
+        tc.assume(self.spaces.len() < 5);
         let level = tc.draw(gs::sampled_from(LEVELS.to_vec()));
-        self.add_category(level);
+        self.add_space(level);
     }
 
-    /// What the admin's category form does: new read and write levels and
+    /// What the admin's space form does: new read and write levels and
     /// groups.
     #[rule]
     fn set_access(&mut self, tc: TestCase) {
-        let c = tc.draw(gs::integers::<usize>().max_value(self.categories.len() - 1));
-        self.set_category_access(&tc, c);
+        let c = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
+        self.set_space_access(&tc, c);
     }
 
     #[rule]
     fn new_thread(&mut self, tc: TestCase) {
         tc.assume(self.threads.len() < 12);
-        let category = tc.draw(gs::integers::<usize>().max_value(self.categories.len() - 1));
+        let space = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
         let author = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
         let fork_of = if self.posts.is_empty() || !tc.draw(gs::booleans()) {
             None
@@ -2874,7 +2854,7 @@ impl Access {
             .block(store::create_thread(
                 &self.pool,
                 &NewThread {
-                    category_id: self.categories[category].id,
+                    space_id: self.spaces[space].id,
                     title: "A thread".into(),
                     author_id: self.users[author].id,
                     body_md: format!("Opening{markdown}"),
@@ -2887,7 +2867,7 @@ impl Access {
             .unwrap();
         self.threads.push(AccessThread {
             id: created.thread_id,
-            category,
+            space,
             deleted: false,
             fork_of,
         });
@@ -2983,16 +2963,16 @@ impl Access {
     fn move_thread(&mut self, tc: TestCase) {
         tc.assume(!self.threads.is_empty());
         let t = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
-        let c = tc.draw(gs::integers::<usize>().max_value(self.categories.len() - 1));
+        let c = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
         let previous = self
             .block(store::move_thread(
                 &self.db,
                 self.threads[t].id,
-                self.categories[c].id,
+                self.spaces[c].id,
             ))
             .unwrap();
-        assert_eq!(previous, Some(self.categories[self.threads[t].category].id));
-        self.threads[t].category = c;
+        assert_eq!(previous, Some(self.spaces[self.threads[t].space].id));
+        self.threads[t].space = c;
     }
 
     #[rule]
@@ -3267,14 +3247,14 @@ impl Access {
         assert_eq!(stale, 0, "maintained post counts are stale");
     }
 
-    /// The denormalised `threads.visibility` is always the category's read
+    /// The denormalised `threads.visibility` is always the space's read
     /// level, however threads move and levels change.
     #[invariant(always_run)]
     fn visibility_copies_are_current(&self, _: TestCase) {
         let stale: i64 = self
             .block(
                 sqlx::query_scalar(
-                    "SELECT count(*) FROM threads t JOIN categories c ON c.id = t.category_id
+                    "SELECT count(*) FROM threads t JOIN spaces c ON c.id = t.space_id
                      WHERE t.visibility <> c.read_level",
                 )
                 .fetch_one(&self.pool),
@@ -3289,7 +3269,7 @@ impl Access {
                         .fetch_one(&self.pool),
                 )
                 .unwrap();
-            assert_eq!(level, self.categories[t.category].level);
+            assert_eq!(level, self.spaces[t.space].level);
         }
     }
 }
@@ -3299,8 +3279,8 @@ fn run_access(tc: TestCase, rt: &Handle, pool: &PgPool) {
     let mut world = Access::new(rt.clone(), pool.clone());
     // Start from random settings, so that every run has a mix of levels
     // and groups to read, post and quote across.
-    for c in 0..world.categories.len() {
-        world.set_category_access(&tc, c);
+    for c in 0..world.spaces.len() {
+        world.set_space_access(&tc, c);
     }
     hegel::stateful::machine(world).steps(30).run(tc);
 }

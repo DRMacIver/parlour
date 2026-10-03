@@ -10,7 +10,7 @@
 //! it), and clears the anonymous pages it changed.
 //!
 //! Entries in the log are public when what they are about is public: a
-//! post or thread in a public category (both before and after, for a
+//! post or thread in a public space (both before and after, for a
 //! move), or a member, whose name is public anyway. Everything about
 //! members-only, group or private content, staff notes, dismissed reports
 //! and appeals is for staff only. The public log still shows a thread's
@@ -150,7 +150,7 @@ fn is_public(audience: &Audience) -> bool {
 /// names the thread, to those who may read it then.
 fn place_name(thread: &ThreadTarget) -> &'static str {
     match &thread.place {
-        Place::Category(_) => "a thread",
+        Place::Space(_) => "a thread",
         Place::Conversation(_) => "a conversation",
     }
 }
@@ -172,7 +172,7 @@ async fn tell(
 // Reporting
 
 /// Files a report about a post the viewer can read: any post in a
-/// category, or a message in one of their conversations, which shows that
+/// space, or a message in one of their conversations, which shows that
 /// conversation (and no other) to the moderators.
 pub async fn report_post(
     state: &AppState,
@@ -497,7 +497,7 @@ pub enum QueueKind {
     Held {
         held: Box<HeldPost>,
         author: Box<MemberRecord>,
-        /// Where it would go: the category or thread, as a link.
+        /// Where it would go: the space or thread, as a link.
         place: (String, String),
     },
 }
@@ -606,22 +606,22 @@ pub async fn held_place(
 ) -> Result<(String, String), AppError> {
     Ok(match place {
         HeldPlace::Thread {
-            category_id, title, ..
-        } => match content::category_by_id(state.db(), viewer, *category_id).await? {
+            space_id, title, ..
+        } => match content::space_by_id(state.db(), viewer, *space_id).await? {
             Some(c) => (
-                format!("{} › new thread “{title}”", c.category.name),
-                format!("/c/{}", c.category.slug),
+                format!("{} › new thread “{title}”", c.space.name),
+                format!("/c/{}", c.space.slug),
             ),
             None => (format!("new thread “{title}”"), "/".to_owned()),
         },
         HeldPlace::Reply { thread_id, .. } => {
             match content::thread_target(state.db(), viewer, *thread_id).await? {
                 Some(t) => {
-                    let category = t
-                        .category()
-                        .map(|c| format!("{} › ", c.category.name))
+                    let space = t
+                        .space()
+                        .map(|c| format!("{} › ", c.space.name))
                         .unwrap_or_default();
-                    (format!("{category}reply in “{}”", t.name), t.href())
+                    (format!("{space}reply in “{}”", t.name), t.href())
                 }
                 None => (
                     "a reply in a thread that has gone".to_owned(),
@@ -968,7 +968,7 @@ pub async fn remove_image(
     let Some(removed) = crate::upload_records::remove(&mut tx, sha256, ext, user.id).await? else {
         return Ok(Err(Refused::NotFound));
     };
-    // Images may be in conversations and groups' categories, so the entry
+    // Images may be in conversations and groups' spaces, so the entry
     // is for staff only.
     let action_id = mod_records::record(
         &mut tx,
@@ -1017,7 +1017,7 @@ pub enum ThreadAction {
     Pin,
     Unpin,
     Rename(String),
-    /// Move to the category with this slug.
+    /// Move to the space with this slug.
     Move(String),
     Delete,
     Restore,
@@ -1039,7 +1039,7 @@ pub async fn moderate_thread(
     let thread = match &action {
         ThreadAction::Restore => None,
         _ => match content::thread_target(db, viewer, thread_id).await? {
-            Some(t) if t.category().is_some() => Some(t),
+            Some(t) if t.space().is_some() => Some(t),
             _ => return Ok(Err(Refused::NotFound)),
         },
     };
@@ -1051,13 +1051,11 @@ pub async fn moderate_thread(
             writing::check_title(&writing::clean_title(title), &mut problems)
         }
         ThreadAction::Move(slug) => {
-            destination = content::category_target(db, viewer, slug).await?;
+            destination = content::space_target(db, viewer, slug).await?;
             match (&destination, &thread) {
-                (None, _) => problems.push("Choose a category to move it to.".to_owned()),
-                (Some(to), Some(t))
-                    if Some(to.category.id) == t.category().map(|c| c.category.id) =>
-                {
-                    problems.push("It is already in that category.".to_owned())
+                (None, _) => problems.push("Choose a space to move it to.".to_owned()),
+                (Some(to), Some(t)) if Some(to.space.id) == t.space().map(|c| c.space.id) => {
+                    problems.push("It is already in that space.".to_owned())
                 }
                 _ => {}
             }
@@ -1068,7 +1066,7 @@ pub async fn moderate_thread(
         return Ok(Err(Refused::Invalid(problems)));
     }
     let audience = thread.as_ref().map(ThreadTarget::audience);
-    let mut previous_category_id = None;
+    let mut previous_space_id = None;
     let mut details = json!({});
     let (key, changed) = match &action {
         ThreadAction::Lock => (
@@ -1097,9 +1095,9 @@ pub async fn moderate_thread(
         }
         ThreadAction::Move(_) => {
             let to = destination.as_ref().expect("checked above");
-            previous_category_id = store::move_thread(db, thread_id, to.category.id).await?;
-            details = json!({ "from_category_id": previous_category_id, "to_category_id": to.category.id });
-            ("move_thread", previous_category_id.is_some())
+            previous_space_id = store::move_thread(db, thread_id, to.space.id).await?;
+            details = json!({ "from_space_id": previous_space_id, "to_space_id": to.space.id });
+            ("move_thread", previous_space_id.is_some())
         }
         ThreadAction::Delete => (
             "delete_thread",
@@ -1164,7 +1162,7 @@ pub async fn moderate_thread(
     state
         .changed(Change::ThreadChanged {
             thread_id,
-            previous_category_id,
+            previous_space_id,
         })
         .await?;
     state.changed(Change::ModLogged).await?;
@@ -1177,8 +1175,8 @@ pub enum Destination {
     /// An existing thread, as the moderator typed it (see
     /// [`parse_thread_ref`]).
     Existing(String),
-    /// A new thread with this title, in the category with this slug.
-    New { category: String, title: String },
+    /// A new thread with this title, in the space with this slug.
+    New { space: String, title: String },
 }
 
 /// Moves the posts with these numbers out of a thread, to the end of
@@ -1198,7 +1196,7 @@ pub async fn move_posts(
     let Some(from) = content::thread_target(db, viewer, thread_id).await? else {
         return Ok(Err(Refused::NotFound));
     };
-    if from.category().is_none() {
+    if from.space().is_none() {
         return Ok(Err(Refused::NotAllowed(
             "Messages can’t be moved out of a conversation.",
         )));
@@ -1220,7 +1218,7 @@ pub async fn move_posts(
     // Where to: an existing thread the moderator can read, or a new one.
     enum To {
         Existing(ThreadTarget),
-        New(content::CategoryTarget, String),
+        New(content::SpaceTarget, String),
     }
     let to = match destination {
         Destination::Existing(text) => match parse_thread_ref(text) {
@@ -1229,7 +1227,7 @@ pub async fn move_posts(
                 None
             }
             Some(id) => match content::thread_target(db, viewer, id).await? {
-                Some(t) if t.category().is_some() => Some(To::Existing(t)),
+                Some(t) if t.space().is_some() => Some(To::Existing(t)),
                 Some(_) => {
                     problems.push("Posts can’t be moved into a conversation.".to_owned());
                     None
@@ -1244,13 +1242,13 @@ pub async fn move_posts(
                 None
             }
         },
-        Destination::New { category, title } => {
+        Destination::New { space, title } => {
             let title = writing::clean_title(title);
             writing::check_title(&title, &mut problems);
-            match content::category_target(db, viewer, category).await? {
+            match content::space_target(db, viewer, space).await? {
                 Some(c) => Some(To::New(c, title)),
                 None => {
-                    problems.push("Choose a category for the new thread.".to_owned());
+                    problems.push("Choose a space for the new thread.".to_owned());
                     None
                 }
             }
@@ -1262,17 +1260,12 @@ pub async fn move_posts(
     let mut tx = db.begin().await?;
     let (to_id, to_audience) = match &to {
         To::Existing(t) => (t.thread.id, t.audience()),
-        To::New(category, title) => {
+        To::New(space, title) => {
             let (_, first_author, first_at) = posts[0];
-            let id = mod_records::empty_thread(
-                &mut tx,
-                category.category.id,
-                title,
-                first_author,
-                first_at,
-            )
-            .await?;
-            (id, category.audience())
+            let id =
+                mod_records::empty_thread(&mut tx, space.space.id, title, first_author, first_at)
+                    .await?;
+            (id, space.audience())
         }
     };
     let ids: Vec<i64> = posts.iter().map(|(id, _, _)| *id).collect();
@@ -1303,7 +1296,7 @@ pub async fn move_posts(
         state
             .changed(Change::ThreadChanged {
                 thread_id: thread,
-                previous_category_id: None,
+                previous_space_id: None,
             })
             .await?;
     }
@@ -1698,26 +1691,25 @@ async fn publish_held(
     }
     let (post_id, thread_id, public) = match &held.place {
         HeldPlace::Thread {
-            category_id,
+            space_id,
             title,
             forked_from_post_id,
         } => {
-            let Some(category) = content::category_by_id(db, &author_viewer, *category_id).await?
-            else {
+            let Some(space) = content::space_by_id(db, &author_viewer, *space_id).await? else {
                 return Ok(Err(Refused::NotAllowed(
-                    "The author can no longer post in that category. Reject it instead.",
+                    "The author can no longer post in that space. Reject it instead.",
                 )));
             };
-            if !writing::may_post_in(&author_viewer, &category) {
+            if !writing::may_post_in(&author_viewer, &space) {
                 return Ok(Err(Refused::NotAllowed(
-                    "The author can no longer post in that category. Reject it instead.",
+                    "The author can no longer post in that space. Reject it instead.",
                 )));
             }
             if let Some(source) = forked_from_post_id {
                 let ok = match content::post_target(db, &author_viewer, *source).await? {
                     Some(post) => {
                         post.is_live()
-                            && at_most_as_visible(&post.thread.audience(), &category.audience())
+                            && at_most_as_visible(&post.thread.audience(), &space.audience())
                     }
                     None => false,
                 };
@@ -1730,7 +1722,7 @@ async fn publish_held(
             let created = store::create_thread(
                 &mut *tx,
                 &NewThread {
-                    category_id: *category_id,
+                    space_id: *space_id,
                     title: title.clone(),
                     author_id: author.id,
                     body_md: held.body_md.clone(),
@@ -1751,7 +1743,7 @@ async fn publish_held(
             (
                 created.first_post_id,
                 created.thread_id,
-                is_public(&category.audience()),
+                is_public(&space.audience()),
             )
         }
         HeldPlace::Reply {
@@ -1995,7 +1987,7 @@ async fn undo(
         state
             .changed(Change::ThreadChanged {
                 thread_id,
-                previous_category_id: None,
+                previous_space_id: None,
             })
             .await
     };

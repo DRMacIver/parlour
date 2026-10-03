@@ -1,5 +1,5 @@
 //! Low-level writes for the content model: creating users, sections,
-//! categories, threads and posts with their bookkeeping (post numbering,
+//! spaces, threads and posts with their bookkeeping (post numbering,
 //! thread activity, rendered HTML) kept consistent.
 //!
 //! Each takes a [`Handle`]: the database, or an open transaction.
@@ -96,7 +96,7 @@ pub async fn create_section<'c>(
 }
 
 #[derive(Clone, Debug)]
-pub struct NewCategory {
+pub struct NewSpace {
     pub section_id: Option<i64>,
     pub slug: String,
     pub name: String,
@@ -108,36 +108,36 @@ pub struct NewCategory {
     pub write_level: String,
 }
 
-pub async fn create_category<'c>(db: impl Handle<'c>, category: &NewCategory) -> sqlx::Result<i64> {
+pub async fn create_space<'c>(db: impl Handle<'c>, space: &NewSpace) -> sqlx::Result<i64> {
     let mut conn = db.open(KEY).acquire().await?;
     sqlx::query_scalar!(
-        r#"INSERT INTO categories (section_id, slug, name, description, position, read_level, write_level)
+        r#"INSERT INTO spaces (section_id, slug, name, description, position, read_level, write_level)
            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"#,
-        category.section_id,
-        category.slug,
-        category.name,
-        category.description,
-        category.position,
-        category.read_level,
-        category.write_level,
+        space.section_id,
+        space.slug,
+        space.name,
+        space.description,
+        space.position,
+        space.read_level,
+        space.write_level,
     )
     .fetch_one(&mut *conn)
     .await
 }
 
 // ---------------------------------------------------------------------------
-// Sections and categories, as admins manage them
+// Sections and spaces, as admins manage them
 
 pub const READ_LEVELS: [&str; 3] = ["public", "members", "groups"];
 pub const WRITE_LEVELS: [&str; 3] = ["members", "groups", "staff"];
 pub const MAX_SECTION_NAME_CHARS: usize = 80;
-pub const MAX_CATEGORY_NAME_CHARS: usize = 80;
-pub const MAX_CATEGORY_DESCRIPTION_CHARS: usize = 500;
-pub const MAX_CATEGORY_SLUG_CHARS: usize = 40;
+pub const MAX_SPACE_NAME_CHARS: usize = 80;
+pub const MAX_SPACE_DESCRIPTION_CHARS: usize = 500;
+pub const MAX_SPACE_SLUG_CHARS: usize = 40;
 
-/// Everything about a category that an admin sets.
+/// Everything about a space that an admin sets.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct CategorySettings {
+pub struct SpaceSettings {
     pub section_id: Option<i64>,
     pub slug: String,
     pub name: String,
@@ -160,12 +160,12 @@ fn one_line(text: &str) -> String {
         .join(" ")
 }
 
-impl CategorySettings {
+impl SpaceSettings {
     /// Tidies the settings, returning the problems with them if any. Group
     /// lists are sorted and deduplicated, and dropped for levels that don't
     /// use them.
-    pub fn clean(&self) -> Result<CategorySettings, Vec<String>> {
-        let mut clean = CategorySettings {
+    pub fn clean(&self) -> Result<SpaceSettings, Vec<String>> {
+        let mut clean = SpaceSettings {
             section_id: self.section_id,
             slug: self.slug.trim().to_ascii_lowercase(),
             name: one_line(&self.name),
@@ -187,26 +187,26 @@ impl CategorySettings {
             clean.write_groups.clear();
         }
         let mut problems = Vec::new();
-        if !crate::groups::valid_slug(&clean.slug) || clean.slug.len() > MAX_CATEGORY_SLUG_CHARS {
+        if !crate::groups::valid_slug(&clean.slug) || clean.slug.len() > MAX_SPACE_SLUG_CHARS {
             problems.push(format!(
-                "The address should be up to {MAX_CATEGORY_SLUG_CHARS} lower-case letters and digits, with single hyphens between words."
+                "The address should be up to {MAX_SPACE_SLUG_CHARS} lower-case letters and digits, with single hyphens between words."
             ));
         }
-        if clean.name.is_empty() || clean.name.chars().count() > MAX_CATEGORY_NAME_CHARS {
+        if clean.name.is_empty() || clean.name.chars().count() > MAX_SPACE_NAME_CHARS {
             problems.push(format!(
-                "The name should be between 1 and {MAX_CATEGORY_NAME_CHARS} characters."
+                "The name should be between 1 and {MAX_SPACE_NAME_CHARS} characters."
             ));
         }
-        if clean.description.chars().count() > MAX_CATEGORY_DESCRIPTION_CHARS {
+        if clean.description.chars().count() > MAX_SPACE_DESCRIPTION_CHARS {
             problems.push(format!(
-                "Keep the description to {MAX_CATEGORY_DESCRIPTION_CHARS} characters."
+                "Keep the description to {MAX_SPACE_DESCRIPTION_CHARS} characters."
             ));
         }
         if !READ_LEVELS.contains(&clean.read_level.as_str()) {
-            problems.push("Choose who can read the category.".to_owned());
+            problems.push("Choose who can read the space.".to_owned());
         }
         if !WRITE_LEVELS.contains(&clean.write_level.as_str()) {
-            problems.push("Choose who can post in the category.".to_owned());
+            problems.push("Choose who can post in the space.".to_owned());
         }
         // Nobody can post where they can't read, so a group that may post
         // but not read would be a mistake.
@@ -227,30 +227,27 @@ impl CategorySettings {
     }
 }
 
-const CATEGORY_SLUG_TAKEN: &str = "Another category has that address.";
+const SPACE_SLUG_TAKEN: &str = "Another space has that address.";
 
 fn slug_clash(err: &sqlx::Error) -> bool {
     matches!(err, sqlx::Error::Database(err) if err.is_unique_violation())
 }
 
-/// Replaces the groups named for a category.
-async fn set_category_groups(
+/// Replaces the groups named for a space.
+async fn set_space_groups(
     conn: &mut sqlx::PgConnection,
-    category_id: i64,
-    settings: &CategorySettings,
+    space_id: i64,
+    settings: &SpaceSettings,
 ) -> sqlx::Result<()> {
+    sqlx::query!("DELETE FROM space_groups WHERE space_id = $1", space_id)
+        .execute(&mut *conn)
+        .await?;
     sqlx::query!(
-        "DELETE FROM category_groups WHERE category_id = $1",
-        category_id
-    )
-    .execute(&mut *conn)
-    .await?;
-    sqlx::query!(
-        "INSERT INTO category_groups (category_id, group_id, access)
+        "INSERT INTO space_groups (space_id, group_id, access)
          SELECT $1::bigint, g, 'read' FROM unnest($2::bigint[]) g
          UNION ALL
          SELECT $1::bigint, g, 'write' FROM unnest($3::bigint[]) g",
-        category_id,
+        space_id,
         &settings.read_groups,
         &settings.write_groups,
     )
@@ -259,15 +256,15 @@ async fn set_category_groups(
     Ok(())
 }
 
-/// Makes a category from settings that [`CategorySettings::clean`]
-/// accepted. Returns the problem if another category has its address.
-pub async fn add_category<'c>(
+/// Makes a space from settings that [`SpaceSettings::clean`]
+/// accepted. Returns the problem if another space has its address.
+pub async fn add_space<'c>(
     db: impl Handle<'c>,
-    settings: &CategorySettings,
+    settings: &SpaceSettings,
 ) -> sqlx::Result<Result<i64, String>> {
     let mut tx = db.open(KEY).begin().await?;
     let inserted = sqlx::query_scalar!(
-        r#"INSERT INTO categories (section_id, slug, name, description, position, read_level, write_level)
+        r#"INSERT INTO spaces (section_id, slug, name, description, position, read_level, write_level)
            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"#,
         settings.section_id,
         settings.slug,
@@ -281,25 +278,25 @@ pub async fn add_category<'c>(
     .await;
     let id = match inserted {
         Ok(id) => id,
-        Err(err) if slug_clash(&err) => return Ok(Err(CATEGORY_SLUG_TAKEN.to_owned())),
+        Err(err) if slug_clash(&err) => return Ok(Err(SPACE_SLUG_TAKEN.to_owned())),
         Err(err) => return Err(err),
     };
-    set_category_groups(&mut tx, id, settings).await?;
+    set_space_groups(&mut tx, id, settings).await?;
     tx.commit().await?;
     Ok(Ok(id))
 }
 
-/// Changes a category to settings that [`CategorySettings::clean`]
+/// Changes a space to settings that [`SpaceSettings::clean`]
 /// accepted. Its threads' visibility follows its new read level (a trigger
-/// sees to that). `Ok(Ok(false))` if there is no such category.
-pub async fn update_category<'c>(
+/// sees to that). `Ok(Ok(false))` if there is no such space.
+pub async fn update_space<'c>(
     db: impl Handle<'c>,
     id: i64,
-    settings: &CategorySettings,
+    settings: &SpaceSettings,
 ) -> sqlx::Result<Result<bool, String>> {
     let mut tx = db.open(KEY).begin().await?;
     let updated = sqlx::query!(
-        r#"UPDATE categories SET section_id = $2, slug = $3, name = $4, description = $5, position = $6,
+        r#"UPDATE spaces SET section_id = $2, slug = $3, name = $4, description = $5, position = $6,
                   read_level = $7, write_level = $8, version = version + 1
            WHERE id = $1"#,
         id,
@@ -316,30 +313,30 @@ pub async fn update_category<'c>(
     match updated {
         Ok(done) if done.rows_affected() == 0 => return Ok(Ok(false)),
         Ok(_) => {}
-        Err(err) if slug_clash(&err) => return Ok(Err(CATEGORY_SLUG_TAKEN.to_owned())),
+        Err(err) if slug_clash(&err) => return Ok(Err(SPACE_SLUG_TAKEN.to_owned())),
         Err(err) => return Err(err),
     }
-    set_category_groups(&mut tx, id, settings).await?;
+    set_space_groups(&mut tx, id, settings).await?;
     tx.commit().await?;
     Ok(Ok(true))
 }
 
-/// Deletes a category that has never had threads. Returns the problem if
-/// it has some, and `Ok(Ok(false))` if there is no such category.
-pub async fn delete_category(db: &crate::db::Db, id: i64) -> sqlx::Result<Result<bool, String>> {
+/// Deletes a space that has never had threads. Returns the problem if
+/// it has some, and `Ok(Ok(false))` if there is no such space.
+pub async fn delete_space(db: &crate::db::Db, id: i64) -> sqlx::Result<Result<bool, String>> {
     let mut tx = db.pool().begin().await?;
     let threads = sqlx::query_scalar!(
-        r#"SELECT count(*) AS "n!" FROM threads WHERE category_id = $1"#,
+        r#"SELECT count(*) AS "n!" FROM threads WHERE space_id = $1"#,
         id
     )
     .fetch_one(&mut *tx)
     .await?;
     if threads > 0 {
         return Ok(Err(
-            "Only an empty category can be deleted. Move its threads elsewhere first.".to_owned(),
+            "Only an empty space can be deleted. Move its threads elsewhere first.".to_owned(),
         ));
     }
-    let done = sqlx::query!("DELETE FROM categories WHERE id = $1", id)
+    let done = sqlx::query!("DELETE FROM spaces WHERE id = $1", id)
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -376,7 +373,7 @@ pub async fn update_section(
     Ok(done.rows_affected() == 1)
 }
 
-/// Deletes a section. Its categories stay, outside any section.
+/// Deletes a section. Its spaces stay, outside any section.
 pub async fn delete_section(db: &crate::db::Db, id: i64) -> sqlx::Result<bool> {
     let done = sqlx::query!("DELETE FROM sections WHERE id = $1", id)
         .execute(db.pool())
@@ -384,18 +381,18 @@ pub async fn delete_section(db: &crate::db::Db, id: i64) -> sqlx::Result<bool> {
     Ok(done.rows_affected() == 1)
 }
 
-/// Moves a thread to another category, returning the category it was in,
-/// or `None` if there is no such thread in a category. Its visibility
-/// follows its new category (a trigger sees to that).
+/// Moves a thread to another space, returning the space it was in,
+/// or `None` if there is no such thread in a space. Its visibility
+/// follows its new space (a trigger sees to that).
 pub async fn move_thread<'c>(
     db: impl Handle<'c>,
     thread_id: i64,
-    category_id: i64,
+    space_id: i64,
 ) -> sqlx::Result<Option<i64>> {
     let mut tx = db.open(KEY).begin().await?;
     let Some(previous) = sqlx::query_scalar!(
-        r#"SELECT category_id AS "category_id!" FROM threads
-           WHERE id = $1 AND category_id IS NOT NULL FOR UPDATE"#,
+        r#"SELECT space_id AS "space_id!" FROM threads
+           WHERE id = $1 AND space_id IS NOT NULL FOR UPDATE"#,
         thread_id
     )
     .fetch_optional(&mut *tx)
@@ -404,9 +401,9 @@ pub async fn move_thread<'c>(
         return Ok(None);
     };
     sqlx::query!(
-        "UPDATE threads SET category_id = $2, version = version + 1 WHERE id = $1",
+        "UPDATE threads SET space_id = $2, version = version + 1 WHERE id = $1",
         thread_id,
-        category_id
+        space_id
     )
     .execute(&mut *tx)
     .await?;
@@ -416,7 +413,7 @@ pub async fn move_thread<'c>(
 
 #[derive(Clone, Debug)]
 pub struct NewThread {
-    pub category_id: i64,
+    pub space_id: i64,
     pub title: String,
     pub author_id: i64,
     pub body_md: String,
@@ -441,11 +438,11 @@ pub async fn create_thread<'c>(
     let mut tx = db.open(KEY).begin().await?;
     let created_at = thread.created_at.unwrap_or_else(Utc::now);
     let thread_id = sqlx::query_scalar!(
-        r#"INSERT INTO threads (category_id, visibility, title, slug, author_id, forked_from_post_id,
+        r#"INSERT INTO threads (space_id, visibility, title, slug, author_id, forked_from_post_id,
                                 pinned, locked, created_at, last_post_at)
            VALUES ($1, 'public', $2, $3, $4, $5, $6, $7, $8, $8)
            RETURNING id"#,
-        thread.category_id,
+        thread.space_id,
         thread.title,
         slugify(&thread.title),
         thread.author_id,
@@ -579,7 +576,7 @@ pub async fn create_conversation<'c>(
     let mut tx = db.open(KEY).begin().await?;
     let created_at = conversation.created_at.unwrap_or_else(Utc::now);
     let thread_id = sqlx::query_scalar!(
-        r#"INSERT INTO threads (category_id, visibility, title, slug, author_id, created_at, last_post_at)
+        r#"INSERT INTO threads (space_id, visibility, title, slug, author_id, created_at, last_post_at)
            VALUES (NULL, 'private', $1, 'message', $2, $3, $3)
            RETURNING id"#,
         conversation.title,
@@ -829,7 +826,7 @@ pub async fn mark_read<'c>(
     Ok(())
 }
 
-/// Marks every thread in a category, as listed in `thread_ids`, as read up
+/// Marks every thread in a space, as listed in `thread_ids`, as read up
 /// to its last post.
 pub async fn mark_threads_read<'c>(
     db: impl Handle<'c>,

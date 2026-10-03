@@ -3,7 +3,7 @@
 //!
 //! Reading is checked in SQL by the access layer ([`crate::content`]);
 //! these are the decisions made in Rust before a write. They work on
-//! [`Audience`]s, which name the group sets of group-restricted categories
+//! [`Audience`]s, which name the group sets of group-restricted spaces
 //! in full.
 
 use std::collections::BTreeSet;
@@ -24,7 +24,7 @@ pub enum Audience {
 }
 
 impl Audience {
-    /// The audience of a category with this read level and these read
+    /// The audience of a space with this read level and these read
     /// groups. An unknown level is treated as the most private there is.
     pub fn from_level(level: &str, groups: impl IntoIterator<Item = i64>) -> Audience {
         match level {
@@ -51,10 +51,10 @@ pub fn at_most_as_visible(source: &Audience, dest: &Audience) -> bool {
     }
 }
 
-/// Who may start threads and reply in a category.
+/// Who may start threads and reply in a space.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WriteLevel {
-    /// Every member who can read the category.
+    /// Every member who can read the space.
     Members,
     /// Members of any of these groups (and staff).
     Groups(BTreeSet<i64>),
@@ -90,7 +90,7 @@ pub fn user_can_read(user: &UserCtx, audience: &Audience) -> bool {
     }
 }
 
-/// Whether the viewer may start threads and reply in a category that they
+/// Whether the viewer may start threads and reply in a space that they
 /// can read. Silenced and suspended members may not post anywhere.
 pub fn may_post(viewer: &Viewer, read: &Audience, write: &WriteLevel) -> bool {
     let Some(user) = viewer.user() else {
@@ -108,7 +108,7 @@ pub fn may_post(viewer: &Viewer, read: &Audience, write: &WriteLevel) -> bool {
 }
 
 /// Whether the viewer may add posts to a thread they can read: they may
-/// post in its category, and it isn't locked (staff can still post in
+/// post in its space, and it isn't locked (staff can still post in
 /// locked threads).
 pub fn may_reply(viewer: &Viewer, read: &Audience, write: &WriteLevel, locked: bool) -> bool {
     may_post(viewer, read, write) && (!locked || viewer.is_staff())
@@ -293,7 +293,7 @@ mod tests {
             role,
             created_at: Utc::now(),
             group_ids: groups.into_iter().collect(),
-            group_category_ids: Vec::new(),
+            group_space_ids: Vec::new(),
             silenced_until: None,
             suspended_until: None,
             blocked_user_ids: Vec::new(),

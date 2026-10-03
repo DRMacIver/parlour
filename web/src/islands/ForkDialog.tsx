@@ -14,7 +14,7 @@ export interface ForkDialogProps {
 interface Fork {
   action: string;
   source: { seq: number; author: string; thread: string; href: string; html: string };
-  categories: { slug: string; label: string; selected: boolean }[];
+  spaces: { slug: string; label: string; selected: boolean }[];
 }
 
 export default function ForkDialog(props: ForkDialogProps) {
@@ -34,7 +34,7 @@ export default function ForkDialog(props: ForkDialogProps) {
       event.preventDefault();
       try {
         const loaded = await getJson<Fork>(props.endpoint.replace("{id}", link.dataset.fork ?? ""));
-        if (loaded.categories.length === 0) {
+        if (loaded.spaces.length === 0) {
           // The page explains why not.
           window.location.href = link.href;
           return;
@@ -83,13 +83,13 @@ export default function ForkDialog(props: ForkDialogProps) {
               <input type="text" id="fork-title" name="title" maxLength={150} required />
             </div>
             <div className="field">
-              <label htmlFor="fork-category">Category</label>
+              <label htmlFor="fork-space">Space</label>
               <select
-                id="fork-category"
-                name="category"
-                defaultValue={fork.categories.find((c) => c.selected)?.slug ?? fork.categories[0].slug}
+                id="fork-space"
+                name="space"
+                defaultValue={fork.spaces.find((c) => c.selected)?.slug ?? fork.spaces[0].slug}
               >
-                {fork.categories.map((c) => (
+                {fork.spaces.map((c) => (
                   <option key={c.slug} value={c.slug}>
                     {c.label}
                   </option>
@@ -109,7 +109,7 @@ export default function ForkDialog(props: ForkDialogProps) {
               />
             </div>
             <p className="form-note">
-              The quoted post stays where it is and appears at the top of the new thread. Only categories at
+              The quoted post stays where it is and appears at the top of the new thread. Only spaces at
               least as private as its own are offered.
             </p>
             <div className="form-actions">

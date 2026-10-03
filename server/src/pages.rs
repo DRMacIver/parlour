@@ -9,8 +9,8 @@ use axum::response::{IntoResponse, Redirect, Response};
 
 use crate::AppState;
 use crate::content::{
-    self, CategoryPage, Deps, Embed, IndexSection, LATEST_ON_INDEX, POSTS_PER_PAGE, PostBody,
-    ReactionType, THREADS_PER_PAGE, ThreadPage, ThreadRow, page_count, page_of_seq,
+    self, Deps, Embed, IndexSection, LATEST_ON_INDEX, POSTS_PER_PAGE, PostBody, ReactionType,
+    SpacePage, THREADS_PER_PAGE, ThreadPage, ThreadRow, page_count, page_of_seq,
 };
 use crate::error::AppError;
 use crate::format;
@@ -38,7 +38,7 @@ pub(crate) fn parse_id(id: &str) -> Option<i64> {
     id.parse().ok().filter(|&n: &i64| n >= 1)
 }
 
-/// Whether `slug` has the form the database requires of category and
+/// Whether `slug` has the form the database requires of space and
 /// thread slugs, so that it can appear in a URL unescaped.
 fn well_formed_slug(slug: &str) -> bool {
     !slug.is_empty()
@@ -105,7 +105,7 @@ struct LatestTemplate {
     layout: Layout,
     threads: Vec<ThreadRow>,
     pagination: Pagination,
-    show_category: bool,
+    show_space: bool,
 }
 
 pub async fn latest(
@@ -130,7 +130,7 @@ pub async fn latest(
             layout: Layout::load(&state, &viewer, Nav::Latest).await?,
             threads: latest.threads,
             pagination: Pagination::new("/latest", page, total),
-            show_category: true,
+            show_space: true,
         },
         &deps,
     )
@@ -139,27 +139,27 @@ pub async fn latest(
 // ---------------------------------------------------------------------------
 
 #[derive(Template)]
-#[template(path = "category.html")]
-struct CategoryTemplate {
+#[template(path = "space.html")]
+struct SpaceTemplate {
     layout: Layout,
-    category: CategoryPage,
+    space: SpacePage,
     threads: Vec<ThreadRow>,
     pagination: Pagination,
-    show_category: bool,
+    show_space: bool,
     logged_in: bool,
     /// Whether the viewer may start a thread here.
     can_post: bool,
-    /// How closely a logged-in viewer follows the category.
+    /// How closely a logged-in viewer follows the space.
     watch: Option<WatchLevel>,
 }
 
-impl CategoryTemplate {
+impl SpaceTemplate {
     fn watch_action(&self) -> String {
-        format!("/c/{}/watch", self.category.category.slug)
+        format!("/c/{}/watch", self.space.space.slug)
     }
 }
 
-pub async fn category(
+pub async fn space(
     State(state): State<AppState>,
     viewer: Viewer,
     Path(slug): Path<String>,
@@ -173,37 +173,35 @@ pub async fn category(
         return Ok(redirect);
     }
     let mut deps = Deps::new();
-    let Some(mut category) =
-        content::category_page(&state.db, &viewer, &slug, page, &mut deps).await?
+    let Some(mut space) = content::space_page(&state.db, &viewer, &slug, page, &mut deps).await?
     else {
         return web::not_found(&state, &viewer).await;
     };
-    let total = page_count(category.thread_count, THREADS_PER_PAGE);
+    let total = page_count(space.thread_count, THREADS_PER_PAGE);
     if page > total {
         return web::not_found(&state, &viewer).await;
     }
-    let threads = std::mem::take(&mut category.threads);
-    let base = format!("/c/{}", category.category.slug);
+    let threads = std::mem::take(&mut space.threads);
+    let base = format!("/c/{}", space.space.slug);
     let can_post = match viewer.user() {
         None => false,
-        Some(_) => content::category_target(&state.db, &viewer, &slug)
+        Some(_) => content::space_target(&state.db, &viewer, &slug)
             .await?
             .is_some_and(|target| writing::may_post_in(&viewer, &target)),
     };
     let watch = match viewer.user() {
-        Some(user) => Some(
-            social::watch_level(&state.db, user.id, Watched::Category(category.category.id))
-                .await?,
-        ),
+        Some(user) => {
+            Some(social::watch_level(&state.db, user.id, Watched::Space(space.space.id)).await?)
+        }
         None => None,
     };
     cacheable(
-        &CategoryTemplate {
+        &SpaceTemplate {
             layout: Layout::load(&state, &viewer, Nav::None).await?,
-            category,
+            space,
             threads,
             pagination: Pagination::new(base, page, total),
-            show_category: false,
+            show_space: false,
             logged_in: viewer.user().is_some(),
             can_post,
             watch,

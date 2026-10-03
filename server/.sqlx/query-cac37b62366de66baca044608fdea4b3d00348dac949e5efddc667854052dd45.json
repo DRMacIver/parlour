@@ -1,0 +1,66 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH shown_in AS (\n               SELECT post_id FROM post_uploads WHERE sha256 = $1\n               UNION\n               SELECT r.post_id FROM revision_uploads ru JOIN post_revisions r ON r.id = ru.revision_id\n               WHERE ru.sha256 = $1\n           )\n           SELECT p.id, p.seq, t.title, t.space_id IS NULL AS \"private!\",\n                  p.deleted_at IS NOT NULL OR t.deleted_at IS NOT NULL AS \"deleted!\"\n           FROM shown_in s JOIN posts p ON p.id = s.post_id JOIN threads t ON t.id = p.thread_id\n           ORDER BY p.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "seq",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "private!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "deleted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "cac37b62366de66baca044608fdea4b3d00348dac949e5efddc667854052dd45"
+}

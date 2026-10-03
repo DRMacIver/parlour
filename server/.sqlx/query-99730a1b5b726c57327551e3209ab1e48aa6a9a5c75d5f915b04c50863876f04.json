@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT p.id AS \"id!\", p.seq AS \"seq!\", t.slug, t.visibility = 'private' AS \"private!\"\n        FROM threads t\n        CROSS JOIN LATERAL (\n            SELECT coalesce((SELECT tr.last_read_seq FROM thread_reads tr\n                             WHERE tr.thread_id = t.id AND tr.user_id = $4), 0) + 1 AS seq\n        ) wanted\n        -- The first post from there on, or the last post if there is none:\n        -- the places of posts moved elsewhere have no post. Each is one\n        -- probe of the (thread, number) index, however long the thread.\n        JOIN LATERAL (\n            (SELECT p.id, p.seq FROM posts p\n             WHERE p.thread_id = t.id AND p.seq >= wanted.seq\n             ORDER BY p.seq LIMIT 1)\n            UNION ALL\n            (SELECT p.id, p.seq FROM posts p\n             WHERE p.thread_id = t.id\n             ORDER BY p.seq DESC LIMIT 1)\n            LIMIT 1\n        ) p ON true\n        WHERE t.id = $1 AND t.deleted_at IS NULL\n          AND (thread_readable(t.visibility, t.space_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "seq!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "private!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8Array",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "99730a1b5b726c57327551e3209ab1e48aa6a9a5c75d5f915b04c50863876f04"
+}

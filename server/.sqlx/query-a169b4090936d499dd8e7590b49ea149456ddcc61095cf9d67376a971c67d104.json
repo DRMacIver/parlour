@@ -1,0 +1,324 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT a.id AS \"id!\", a.action AS \"action!\", a.reason AS \"reason!\", a.public AS \"public!\",\n               a.details AS \"details!\", a.created_at AS \"created_at!\", a.post_id AS \"post_id?\",\n               actor.id AS \"actor_id!\", actor.username AS \"actor_username!: String\",\n               actor.display_name AS \"actor_name!\",\n               u.id AS \"user_id?\", u.username AS \"username?: String\", u.display_name AS \"user_name?\",\n               t.id AS \"thread_id?\", t.title AS \"thread_title?\", t.slug AS \"thread_slug?\",\n               t.space_id IS NULL AS \"thread_private?\", t.deleted_at IS NULL AS \"thread_live?\",\n               (thread_readable(t.visibility, t.space_id, $4, $5)\n                OR dm_readable(t.id, t.visibility, $6)) AS \"thread_readable?\",\n               t2.id AS \"to_thread_id?\", t2.title AS \"to_title?\", t2.slug AS \"to_slug?\",\n               t2.deleted_at IS NULL AS \"to_live?\",\n               thread_readable(t2.visibility, t2.space_id, $4, $5) AS \"to_readable?\",\n               CASE WHEN space_readable(c1.read_level, c1.id, $4, $5) THEN c1.name END AS \"from_space?\",\n               CASE WHEN space_readable(c1.read_level, c1.id, $4, $5) THEN c1.slug END AS \"from_space_slug?\",\n               CASE WHEN space_readable(c2.read_level, c2.id, $4, $5) THEN c2.name END AS \"to_space?\",\n               CASE WHEN space_readable(c2.read_level, c2.id, $4, $5) THEN c2.slug END AS \"to_space_slug?\"\n        FROM mod_actions a\n        JOIN users actor ON actor.id = a.actor_id\n        LEFT JOIN users u ON u.id = a.user_id\n        LEFT JOIN threads t ON t.id = a.thread_id\n        LEFT JOIN threads t2 ON t2.id = (a.details->>'to_thread_id')::bigint\n        LEFT JOIN spaces c1 ON c1.id = (a.details->>'from_space_id')::bigint\n        LEFT JOIN spaces c2 ON c2.id = (a.details->>'to_space_id')::bigint\n        WHERE ($1 OR a.public) AND ($2::bigint IS NULL OR a.user_id = $2)\n          AND ($3::bigint IS NULL OR a.id = $3)\n        ORDER BY a.created_at DESC, a.id DESC\n        LIMIT $7 OFFSET $8\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mod_actions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "action!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mod_actions",
+            "name": "action"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "reason!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mod_actions",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "public!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "mod_actions",
+            "name": "public"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "details!",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "mod_actions",
+            "name": "details"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mod_actions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "post_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mod_actions",
+            "name": "post_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "actor_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "actor_username!: String",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "actor_name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "user_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "username?: String",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "user_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "thread_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "thread_title?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "thread_slug?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "thread_private?",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 17,
+        "name": "thread_live?",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 18,
+        "name": "thread_readable?",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 19,
+        "name": "to_thread_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "to_title?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "to_slug?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "to_live?",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 23,
+        "name": "to_readable?",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 24,
+        "name": "from_space?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 25,
+        "name": "from_space_slug?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 26,
+        "name": "to_space?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 27,
+        "name": "to_space_slug?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Int8",
+        "Int8",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "a169b4090936d499dd8e7590b49ea149456ddcc61095cf9d67376a971c67d104"
+}

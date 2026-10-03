@@ -157,7 +157,7 @@ pub async fn react(
 // Quote-forks
 
 /// `GET /api/posts/{id}/fork`: what the quote-fork dialog shows: the post,
-/// and the categories it may be quoted into.
+/// and the spaces it may be quoted into.
 pub async fn fork(
     State(state): State<AppState>,
     viewer: Viewer,
@@ -176,7 +176,7 @@ pub async fn fork(
         return Ok(not_found());
     };
     let destinations = writing::fork_destinations(&state, &viewer, &source).await?;
-    let current = source.thread.category().map(|c| c.category.slug.clone());
+    let current = source.thread.space().map(|c| c.space.slug.clone());
     Ok(Json(json!({
         "action": format!("/p/{}/fork", source.post_id),
         "source": {
@@ -186,10 +186,10 @@ pub async fn fork(
             "href": format!("/p/{}", source.post_id),
             "html": source.body.as_ref().map(|b| b.html.clone()).unwrap_or_default(),
         },
-        "categories": destinations.iter().map(|c| json!({
-            "slug": c.category.slug,
-            "label": crate::write_pages::category_label(c),
-            "selected": Some(&c.category.slug) == current.as_ref(),
+        "spaces": destinations.iter().map(|c| json!({
+            "slug": c.space.slug,
+            "label": crate::write_pages::space_label(c),
+            "selected": Some(&c.space.slug) == current.as_ref(),
         })).collect::<Vec<_>>(),
     }))
     .into_response())

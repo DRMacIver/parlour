@@ -9,7 +9,7 @@
 
 use crate::AppState;
 use crate::changes::Change;
-use crate::content::{self, CategoryTarget, Place, PostTarget, ThreadTarget};
+use crate::content::{self, Place, PostTarget, SpaceTarget, ThreadTarget};
 use crate::error::AppError;
 use crate::markdown;
 use crate::mod_records::{self, HeldPlace};
@@ -80,7 +80,7 @@ pub fn restriction(user: &UserCtx) -> Option<&'static str> {
 /// held for approval.
 pub struct Newness {
     pub new: bool,
-    /// Their published posts in categories.
+    /// Their published posts in spaces.
     pub posts: i64,
 }
 
@@ -100,7 +100,7 @@ pub async fn newness(state: &AppState, user: &UserCtx) -> Result<Newness, AppErr
     })
 }
 
-/// Whether a member's next post in a category must wait for a moderator:
+/// Whether a member's next post in a space must wait for a moderator:
 /// they are new and fewer than the site's number of their posts have been
 /// published.
 pub async fn must_hold(state: &AppState, user: &UserCtx) -> Result<bool, AppError> {
@@ -189,14 +189,14 @@ pub fn may_preview(state: &AppState, viewer: &Viewer) -> bool {
     allowed(state, viewer, Action::Preview)
 }
 
-/// Whether the viewer may start threads in a category they can read.
-pub fn may_post_in(viewer: &Viewer, category: &CategoryTarget) -> bool {
-    may_post(viewer, &category.audience(), &category.write())
+/// Whether the viewer may start threads in a space they can read.
+pub fn may_post_in(viewer: &Viewer, space: &SpaceTarget) -> bool {
+    may_post(viewer, &space.audience(), &space.write())
 }
 
-/// Whether the viewer may reply in a category thread they can read.
-pub fn may_reply_in(viewer: &Viewer, category: &CategoryTarget, locked: bool) -> bool {
-    may_reply(viewer, &category.audience(), &category.write(), locked)
+/// Whether the viewer may reply in a space thread they can read.
+pub fn may_reply_in(viewer: &Viewer, space: &SpaceTarget, locked: bool) -> bool {
+    may_reply(viewer, &space.audience(), &space.write(), locked)
 }
 
 /// Why the viewer may not reply in a thread or conversation they can
@@ -211,12 +211,12 @@ pub async fn reply_refusal(
     };
     Ok(match &thread.place {
         Place::Conversation(_) => crate::messages::send_refusal(state, viewer, thread).await?,
-        Place::Category(category) => {
+        Place::Space(space) => {
             if let Some(why) = restriction(user) {
                 Some(why)
-            } else if !may_post_in(viewer, category) {
-                Some("You can’t post in this category.")
-            } else if !may_reply_in(viewer, category, thread.locked) {
+            } else if !may_post_in(viewer, space) {
+                Some("You can’t post in this space.")
+            } else if !may_reply_in(viewer, space, thread.locked) {
                 Some("This thread is locked.")
             } else {
                 None
@@ -261,21 +261,21 @@ pub fn may_delete(viewer: &Viewer, post: &PostTarget) -> bool {
 pub async fn new_thread(
     state: &AppState,
     viewer: &Viewer,
-    category_slug: &str,
+    space_slug: &str,
     title: &str,
     body: &str,
 ) -> Outcome<Written> {
     let Some(user) = viewer.user() else {
         return Ok(Err(Refused::LogIn));
     };
-    let Some(category) = content::category_target(state.db(), viewer, category_slug).await? else {
+    let Some(space) = content::space_target(state.db(), viewer, space_slug).await? else {
         return Ok(Err(Refused::NotFound));
     };
     if let Some(why) = restriction(user) {
         return Ok(Err(Refused::NotAllowed(why)));
     }
-    if !may_post_in(viewer, &category) {
-        return Ok(Err(Refused::NotAllowed("You can’t post in this category.")));
+    if !may_post_in(viewer, &space) {
+        return Ok(Err(Refused::NotAllowed("You can’t post in this space.")));
     }
     let (title, body) = (clean_title(title), clean_body(body));
     let mut problems = Vec::new();
@@ -289,7 +289,7 @@ pub async fn new_thread(
     }
     if must_hold(state, user).await? {
         let place = HeldPlace::Thread {
-            category_id: category.category.id,
+            space_id: space.space.id,
             title,
             forked_from_post_id: None,
         };
@@ -299,7 +299,7 @@ pub async fn new_thread(
     let created = create_thread(
         state,
         &NewThread {
-            category_id: category.category.id,
+            space_id: space.space.id,
             title,
             author_id: user.id,
             body_md: body,
@@ -345,7 +345,7 @@ pub async fn reply(
         return Ok(Err(Refused::Invalid(problems)));
     }
     let action = match thread.place {
-        Place::Category(_) => Action::Post,
+        Place::Space(_) => Action::Post,
         Place::Conversation(_) => Action::Message,
     };
     if !allowed_to_post(state, user, action).await? {
@@ -529,27 +529,27 @@ pub async fn react(
     }))
 }
 
-/// The categories a post could be quoted into: those the viewer may post
+/// The spaces a post could be quoted into: those the viewer may post
 /// in that are at most as visible as the post's own (DESIGN.md §3.1).
 pub async fn fork_destinations(
     state: &AppState,
     viewer: &Viewer,
     source: &PostTarget,
-) -> Result<Vec<CategoryTarget>, AppError> {
+) -> Result<Vec<SpaceTarget>, AppError> {
     let source_audience = source.thread.audience();
-    Ok(content::readable_categories(state.db(), viewer)
+    Ok(content::readable_spaces(state.db(), viewer)
         .await?
         .into_iter()
         .filter(|c| may_post_in(viewer, c) && at_most_as_visible(&source_audience, &c.audience()))
         .collect())
 }
 
-/// Starts a new thread in `category_slug` that embeds post `post_id`.
+/// Starts a new thread in `space_slug` that embeds post `post_id`.
 pub async fn fork(
     state: &AppState,
     viewer: &Viewer,
     post_id: i64,
-    category_slug: &str,
+    space_slug: &str,
     title: &str,
     body: &str,
 ) -> Outcome<Written> {
@@ -570,10 +570,10 @@ pub async fn fork(
     let destination = fork_destinations(state, viewer, &source)
         .await?
         .into_iter()
-        .find(|c| c.category.slug == category_slug);
+        .find(|c| c.space.slug == space_slug);
     if destination.is_none() {
         problems.push(
-            "Choose a category from the list: you can only quote a post somewhere at least as private as where it is."
+            "Choose a space from the list: you can only quote a post somewhere at least as private as where it is."
                 .to_owned(),
         );
     }
@@ -587,7 +587,7 @@ pub async fn fork(
     }
     if must_hold(state, user).await? {
         let place = HeldPlace::Thread {
-            category_id: destination.category.id,
+            space_id: destination.space.id,
             title,
             forked_from_post_id: Some(post_id),
         };
@@ -597,7 +597,7 @@ pub async fn fork(
     let created = create_thread(
         state,
         &NewThread {
-            category_id: destination.category.id,
+            space_id: destination.space.id,
             title,
             author_id: user.id,
             body_md: body,
@@ -614,7 +614,7 @@ pub async fn fork(
     })))
 }
 
-/// Creates a category thread with its first post, has its author watch it,
+/// Creates a space thread with its first post, has its author watch it,
 /// and queues the notifications about it.
 pub(crate) async fn create_thread(
     state: &AppState,
@@ -640,21 +640,21 @@ pub(crate) async fn create_thread(
     Ok(created)
 }
 
-/// Marks every thread the viewer can see in a category as read.
-pub async fn mark_category_read(
+/// Marks every thread the viewer can see in a space as read.
+pub async fn mark_space_read(
     state: &AppState,
     viewer: &Viewer,
-    category_slug: &str,
-) -> Outcome<CategoryTarget> {
+    space_slug: &str,
+) -> Outcome<SpaceTarget> {
     let Some(user) = viewer.user() else {
         return Ok(Err(Refused::LogIn));
     };
-    let Some(category) = content::category_target(state.db(), viewer, category_slug).await? else {
+    let Some(space) = content::space_target(state.db(), viewer, space_slug).await? else {
         return Ok(Err(Refused::NotFound));
     };
-    let threads = content::visible_thread_ids(state.db(), viewer, category.category.id).await?;
+    let threads = content::visible_thread_ids(state.db(), viewer, space.space.id).await?;
     store::mark_threads_read(state.db(), user.id, &threads).await?;
-    Ok(Ok(category))
+    Ok(Ok(space))
 }
 
 #[cfg(test)]

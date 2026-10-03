@@ -1,12 +1,12 @@
 //! Every read of forum content goes through this module (DESIGN.md §6).
 //! Each function takes the [`Viewer`] and filters with the shared
-//! `thread_readable` / `category_readable` SQL functions, so private content
+//! `thread_readable` / `space_readable` SQL functions, so private content
 //! never reaches a template.
 //!
 //! Each function also records in a [`Deps`] what the result was built from,
 //! which the page cache uses to know when to throw the page away. Ids are
 //! recorded even for things the viewer can't see (such as a fork in a
-//! private category), because a later change could make them visible.
+//! private space), because a later change could make them visible.
 
 pub mod messages;
 pub mod moderation;
@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 
 use crate::cache::Tag;
 use crate::permissions::{Audience, WriteLevel};
-use crate::store::CategorySettings;
+use crate::store::SpaceSettings;
 use crate::viewer::Viewer;
 
 pub const POSTS_PER_PAGE: i64 = 50;
@@ -93,7 +93,7 @@ pub struct ThreadRef {
 }
 
 #[derive(Clone, Debug)]
-pub struct CategoryRef {
+pub struct SpaceRef {
     pub id: i64,
     pub slug: String,
     pub name: String,
@@ -104,17 +104,17 @@ pub struct CategoryRef {
 
 #[derive(Debug)]
 pub struct IndexSection {
-    /// `None` for categories that aren't in a section; they come first.
+    /// `None` for spaces that aren't in a section; they come first.
     pub name: Option<String>,
-    pub categories: Vec<CategorySummary>,
+    pub spaces: Vec<SpaceSummary>,
 }
 
 #[derive(Debug)]
-pub struct CategorySummary {
-    pub category: CategoryRef,
+pub struct SpaceSummary {
+    pub space: SpaceRef,
     pub description: String,
     pub read_level: String,
-    /// For a group-restricted category, the groups that may read it.
+    /// For a group-restricted space, the groups that may read it.
     pub group_names: Vec<String>,
     pub thread_count: i64,
     pub post_count: i64,
@@ -140,26 +140,26 @@ pub async fn index_sections(
     let rows = sqlx::query!(
         r#"
         SELECT c.id, c.slug, c.name, c.description, c.read_level, s.name AS "section_name?",
-               array(SELECT g.name FROM category_groups cg JOIN groups g ON g.id = cg.group_id
-                     WHERE cg.category_id = c.id AND cg.access = 'read' AND c.read_level = 'groups'
+               array(SELECT g.name FROM space_groups cg JOIN groups g ON g.id = cg.group_id
+                     WHERE cg.space_id = c.id AND cg.access = 'read' AND c.read_level = 'groups'
                      ORDER BY lower(g.name), g.id) AS "group_names!",
                counts.threads AS "thread_count!", counts.posts AS "post_count!",
                lt.id AS "last_thread_id?", lt.title AS "last_thread_title?", lt.slug AS "last_thread_slug?",
                coalesce(lp.created_at, lt.last_post_at) AS "last_at?", lp.id AS "last_post_id?",
                lu.id AS "last_user_id?", lu.username AS "last_username?", lu.display_name AS "last_display_name?"
-        FROM categories c
+        FROM spaces c
         LEFT JOIN sections s ON s.id = c.section_id
         CROSS JOIN LATERAL (
             SELECT count(*) AS threads, coalesce(sum(t.last_seq), 0)::bigint AS posts
             FROM threads t
-            WHERE t.category_id = c.id AND t.deleted_at IS NULL
-              AND thread_readable(t.visibility, t.category_id, $1, $2)
+            WHERE t.space_id = c.id AND t.deleted_at IS NULL
+              AND thread_readable(t.visibility, t.space_id, $1, $2)
         ) counts
         LEFT JOIN LATERAL (
             SELECT t.id, t.title, t.slug, t.last_post_at
             FROM threads t
-            WHERE t.category_id = c.id AND t.deleted_at IS NULL
-              AND thread_readable(t.visibility, t.category_id, $1, $2)
+            WHERE t.space_id = c.id AND t.deleted_at IS NULL
+              AND thread_readable(t.visibility, t.space_id, $1, $2)
             ORDER BY t.last_post_at DESC, t.id DESC
             LIMIT 1
         ) lt ON true
@@ -170,20 +170,20 @@ pub async fn index_sections(
             LIMIT 1
         ) lp ON true
         LEFT JOIN users lu ON lu.id = lp.author_id
-        WHERE category_readable(c.read_level, c.id, $1, $2)
+        WHERE space_readable(c.read_level, c.id, $1, $2)
         ORDER BY s.position NULLS FIRST, s.id NULLS FIRST, c.position, c.id
         "#,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
     )
     .fetch_all(db.pool())
     .await?;
 
     let mut sections: Vec<IndexSection> = Vec::new();
     for row in rows {
-        deps.add(Tag::Category(row.id));
-        let summary = CategorySummary {
-            category: CategoryRef {
+        deps.add(Tag::Space(row.id));
+        let summary = SpaceSummary {
+            space: SpaceRef {
                 id: row.id,
                 slug: row.slug,
                 name: row.name,
@@ -209,10 +209,10 @@ pub async fn index_sections(
             },
         };
         match sections.last_mut() {
-            Some(section) if section.name == row.section_name => section.categories.push(summary),
+            Some(section) if section.name == row.section_name => section.spaces.push(summary),
             _ => sections.push(IndexSection {
                 name: row.section_name,
-                categories: vec![summary],
+                spaces: vec![summary],
             }),
         }
     }
@@ -232,12 +232,12 @@ fn user_ref(
 }
 
 // ---------------------------------------------------------------------------
-// Thread lists: the category page, /latest and the index's "Latest" list
+// Thread lists: the space page, /latest and the index's "Latest" list
 
 #[derive(Debug)]
 pub struct ThreadRow {
     pub thread: ThreadRef,
-    pub category: CategoryRef,
+    pub space: SpaceRef,
     pub author: UserRef,
     pub created_at: DateTime<Utc>,
     pub post_count: i64,
@@ -256,64 +256,64 @@ pub struct ThreadRow {
     pub unread: Option<i64>,
 }
 
-pub struct CategoryPage {
-    pub category: CategoryRef,
+pub struct SpacePage {
+    pub space: SpaceRef,
     pub section_name: Option<String>,
     pub description: String,
     pub read_level: String,
-    /// For a group-restricted category, the groups that may read it.
+    /// For a group-restricted space, the groups that may read it.
     pub group_names: Vec<String>,
     pub write_level: String,
     pub thread_count: i64,
     pub threads: Vec<ThreadRow>,
 }
 
-/// One page of a category's threads, or `None` if the category doesn't
+/// One page of a space's threads, or `None` if the space doesn't
 /// exist or the viewer can't read it. A page past the end is empty.
-pub async fn category_page(
+pub async fn space_page(
     db: &Db,
     viewer: &Viewer,
     slug: &str,
     page: i64,
     deps: &mut Deps,
-) -> sqlx::Result<Option<CategoryPage>> {
+) -> sqlx::Result<Option<SpacePage>> {
     let filter = viewer.filter();
-    let Some(category) = sqlx::query!(
+    let Some(space) = sqlx::query!(
         r#"
         SELECT c.id, c.slug, c.name, c.description, c.read_level, c.write_level, s.name AS "section_name?",
-               array(SELECT g.name FROM category_groups cg JOIN groups g ON g.id = cg.group_id
-                     WHERE cg.category_id = c.id AND cg.access = 'read' AND c.read_level = 'groups'
+               array(SELECT g.name FROM space_groups cg JOIN groups g ON g.id = cg.group_id
+                     WHERE cg.space_id = c.id AND cg.access = 'read' AND c.read_level = 'groups'
                      ORDER BY lower(g.name), g.id) AS "group_names!",
                (SELECT count(*) FROM threads t
-                WHERE t.category_id = c.id AND t.deleted_at IS NULL
-                  AND thread_readable(t.visibility, t.category_id, $2, $3)) AS "thread_count!"
-        FROM categories c
+                WHERE t.space_id = c.id AND t.deleted_at IS NULL
+                  AND thread_readable(t.visibility, t.space_id, $2, $3)) AS "thread_count!"
+        FROM spaces c
         LEFT JOIN sections s ON s.id = c.section_id
-        WHERE c.slug = $1 AND category_readable(c.read_level, c.id, $2, $3)
+        WHERE c.slug = $1 AND space_readable(c.read_level, c.id, $2, $3)
         "#,
         slug,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
     )
     .fetch_optional(db.pool())
     .await?
     else {
         return Ok(None);
     };
-    deps.add(Tag::Category(category.id));
-    let threads = thread_rows(db, viewer, Some(category.id), page, THREADS_PER_PAGE, deps).await?;
-    Ok(Some(CategoryPage {
-        category: CategoryRef {
-            id: category.id,
-            slug: category.slug,
-            name: category.name,
+    deps.add(Tag::Space(space.id));
+    let threads = thread_rows(db, viewer, Some(space.id), page, THREADS_PER_PAGE, deps).await?;
+    Ok(Some(SpacePage {
+        space: SpaceRef {
+            id: space.id,
+            slug: space.slug,
+            name: space.name,
         },
-        section_name: category.section_name,
-        description: category.description,
-        read_level: category.read_level,
-        group_names: category.group_names,
-        write_level: category.write_level,
-        thread_count: category.thread_count,
+        section_name: space.section_name,
+        description: space.description,
+        read_level: space.read_level,
+        group_names: space.group_names,
+        write_level: space.write_level,
+        thread_count: space.thread_count,
         threads,
     }))
 }
@@ -332,26 +332,26 @@ pub async fn latest(
     deps: &mut Deps,
 ) -> sqlx::Result<LatestPage> {
     let filter = viewer.filter();
-    // Any visible category can gain the newest thread, so the list depends
+    // Any visible space can gain the newest thread, so the list depends
     // on all of them.
-    let categories = sqlx::query!(
+    let spaces = sqlx::query!(
         r#"
         SELECT c.id,
                (SELECT count(*) FROM threads t
-                WHERE t.category_id = c.id AND t.deleted_at IS NULL
-                  AND thread_readable(t.visibility, t.category_id, $1, $2)) AS "thread_count!"
-        FROM categories c
-        WHERE category_readable(c.read_level, c.id, $1, $2)
+                WHERE t.space_id = c.id AND t.deleted_at IS NULL
+                  AND thread_readable(t.visibility, t.space_id, $1, $2)) AS "thread_count!"
+        FROM spaces c
+        WHERE space_readable(c.read_level, c.id, $1, $2)
         "#,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
     )
     .fetch_all(db.pool())
     .await?;
     let mut thread_count = 0;
-    for category in categories {
-        deps.add(Tag::Category(category.id));
-        thread_count += category.thread_count;
+    for space in spaces {
+        deps.add(Tag::Space(space.id));
+        thread_count += space.thread_count;
     }
     let threads = thread_rows(db, viewer, None, page, per_page, deps).await?;
     Ok(LatestPage {
@@ -363,7 +363,7 @@ pub async fn latest(
 async fn thread_rows(
     db: &Db,
     viewer: &Viewer,
-    category_id: Option<i64>,
+    space_id: Option<i64>,
     page: i64,
     per_page: i64,
     deps: &mut Deps,
@@ -372,12 +372,12 @@ async fn thread_rows(
         return Ok(Vec::new());
     };
     let filter = viewer.filter();
-    // With a category, pinned threads come first; /latest ignores pins.
+    // With a space, pinned threads come first; /latest ignores pins.
     let rows = sqlx::query!(
         r#"
         SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,
                coalesce(lp.created_at, t.last_post_at) AS "last_post_at!", t.pinned, t.locked,
-               c.id AS category_id, c.slug AS category_slug, c.name AS category_name,
+               c.id AS space_id, c.slug AS space_slug, c.name AS space_name,
                a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name,
                lp.id AS "last_post_id?", lu.id AS "last_user_id?", lu.username AS "last_username?",
                lu.display_name AS "last_display_name?",
@@ -387,7 +387,7 @@ async fn thread_rows(
                     ELSE t.last_seq - coalesce(tr.last_read_seq, 0) END AS unread
         FROM threads t
         LEFT JOIN thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $6
-        JOIN categories c ON c.id = t.category_id
+        JOIN spaces c ON c.id = t.space_id
         JOIN users a ON a.id = t.author_id
         LEFT JOIN LATERAL (
             SELECT p.id, p.author_id, p.created_at FROM posts p
@@ -398,20 +398,20 @@ async fn thread_rows(
         LEFT JOIN users lu ON lu.id = lp.author_id
         LEFT JOIN LATERAL (
             SELECT st.id, st.title, st.slug,
-                   st.deleted_at IS NULL AND thread_readable(st.visibility, st.category_id, $1, $2) AS visible
+                   st.deleted_at IS NULL AND thread_readable(st.visibility, st.space_id, $1, $2) AS visible
             FROM posts sp JOIN threads st ON st.id = sp.thread_id
             WHERE sp.id = t.forked_from_post_id
         ) src ON true
         WHERE t.deleted_at IS NULL
-          AND thread_readable(t.visibility, t.category_id, $1, $2)
-          AND ($3::bigint IS NULL OR t.category_id = $3)
+          AND thread_readable(t.visibility, t.space_id, $1, $2)
+          AND ($3::bigint IS NULL OR t.space_id = $3)
         ORDER BY CASE WHEN $3::bigint IS NULL THEN false ELSE t.pinned END DESC,
                  t.last_post_at DESC, t.id DESC
         LIMIT $4 OFFSET $5
         "#,
         &filter.visibilities,
-        &filter.group_category_ids,
-        category_id,
+        &filter.group_space_ids,
+        space_id,
         per_page,
         offset,
         viewer.user_id(),
@@ -423,7 +423,7 @@ async fn thread_rows(
         .into_iter()
         .map(|row| {
             deps.add(Tag::Thread(row.id));
-            deps.add(Tag::Category(row.category_id));
+            deps.add(Tag::Space(row.space_id));
             if let Some(source) = row.source_thread_id {
                 deps.add(Tag::Thread(source));
             }
@@ -444,10 +444,10 @@ async fn thread_rows(
                     title: row.title,
                     slug: row.slug,
                 },
-                category: CategoryRef {
-                    id: row.category_id,
-                    slug: row.category_slug,
-                    name: row.category_name,
+                space: SpaceRef {
+                    id: row.space_id,
+                    slug: row.space_slug,
+                    name: row.space_name,
                 },
                 author: UserRef {
                     id: row.author_id,
@@ -473,8 +473,8 @@ async fn thread_rows(
 
 pub struct ThreadPage {
     pub thread: ThreadRef,
-    /// The thread's category, with what decides who may post in it.
-    pub category: CategoryTarget,
+    /// The thread's space, with what decides who may post in it.
+    pub space: SpaceTarget,
     pub author: UserRef,
     pub created_at: DateTime<Utc>,
     /// The number of the last post; posts are numbered from 1 and deleted
@@ -500,7 +500,7 @@ impl ThreadPage {
         ThreadTarget {
             thread: self.thread.clone(),
             name: self.thread.title.clone(),
-            place: Place::Category(self.category.clone()),
+            place: Place::Space(self.space.clone()),
             locked: self.locked,
             last_seq: self.last_seq,
         }
@@ -518,7 +518,7 @@ pub struct EmbeddedPost {
     pub post_id: i64,
     pub seq: i64,
     pub thread: ThreadRef,
-    pub category: CategoryRef,
+    pub space: SpaceRef,
     pub author: UserRef,
     pub author_title: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -608,8 +608,8 @@ pub async fn thread_page(
     let Some(thread) = sqlx::query!(
         r#"
         SELECT t.id, t.title, t.slug, t.created_at, t.last_seq, t.pinned, t.locked, t.forked_from_post_id,
-               c.id AS "category_id!", c.slug AS "category_slug!", c.name AS "category_name!",
-               c.description AS "category_description!", c.position AS "category_position!",
+               c.id AS "space_id!", c.slug AS "space_slug!", c.name AS "space_name!",
+               c.description AS "space_description!", c.position AS "space_position!",
                c.section_id AS "section_id?", c.section_name AS "section_name?",
                c.read_level AS "read_level!", c.write_level AS "write_level!",
                c.read_groups AS "read_groups!", c.write_groups AS "write_groups!",
@@ -617,16 +617,16 @@ pub async fn thread_page(
                (SELECT tr.last_read_seq FROM thread_reads tr
                 WHERE tr.thread_id = t.id AND tr.user_id = $4) AS read_marker,
                (SELECT w.level FROM watches w
-                WHERE w.user_id = $5 AND w.thread_id = t.id AND w.category_id IS NULL) AS "watch_level?",
+                WHERE w.user_id = $5 AND w.thread_id = t.id AND w.space_id IS NULL) AS "watch_level?",
                a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name
         FROM threads t
-        JOIN category_targets c ON c.id = t.category_id
+        JOIN space_targets c ON c.id = t.space_id
         JOIN users a ON a.id = t.author_id
-        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $2, $3)
+        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.space_id, $2, $3)
         "#,
         thread_id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
         filter.dm_viewer,
         viewer.user_id(),
     )
@@ -635,8 +635,8 @@ pub async fn thread_page(
     else {
         return Ok(None);
     };
-    // The category's name appears in the breadcrumbs, but renaming a
-    // category clears `site`, and moving the thread clears `thread:N`.
+    // The space's name appears in the breadcrumbs, but renaming a
+    // space clears `site`, and moving the thread clears `thread:N`.
     deps.add(Tag::Thread(thread.id));
 
     let embed = match thread.forked_from_post_id {
@@ -652,16 +652,16 @@ pub async fn thread_page(
             title: thread.title,
             slug: thread.slug,
         },
-        category: CategoryTarget {
-            category: CategoryRef {
-                id: thread.category_id,
-                slug: thread.category_slug,
-                name: thread.category_name,
+        space: SpaceTarget {
+            space: SpaceRef {
+                id: thread.space_id,
+                slug: thread.space_slug,
+                name: thread.space_name,
             },
             section_id: thread.section_id,
             section_name: thread.section_name,
-            description: thread.category_description,
-            position: thread.category_position,
+            description: thread.space_description,
+            position: thread.space_position,
             read_level: thread.read_level,
             write_level: thread.write_level,
             read_groups: thread.read_groups,
@@ -686,7 +686,7 @@ pub async fn thread_page(
 }
 
 /// The posts on one page of a thread the caller has checked the viewer can
-/// read: a category thread or a conversation.
+/// read: a space thread or a conversation.
 pub(super) async fn posts_on_page(
     db: &Db,
     viewer: &Viewer,
@@ -793,7 +793,7 @@ pub(super) async fn posts_on_page(
     let moves = sqlx::query!(
         r#"
         SELECT m.post_id, m.from_seq, m.moved_at, t.id AS thread_id, t.title, t.slug,
-               t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $4, $5) AS "readable!"
+               t.deleted_at IS NULL AND thread_readable(t.visibility, t.space_id, $4, $5) AS "readable!"
         FROM post_moves m
         JOIN posts p ON p.id = m.post_id
         JOIN threads t ON t.id = p.thread_id
@@ -803,7 +803,7 @@ pub(super) async fn posts_on_page(
         first,
         last,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -854,16 +854,16 @@ async fn author_infos(
                u.title, u.pronouns, u.status_line, u.location, u.created_at AS "created_at!",
                av.sha256 AS "avatar_sha256?", av.ext AS "avatar_ext?",
                (SELECT coalesce(sum(pc.posts), 0)::bigint
-                FROM user_category_post_counts pc JOIN categories c ON c.id = pc.category_id
+                FROM user_space_post_counts pc JOIN spaces c ON c.id = pc.space_id
                 WHERE pc.user_id = u.id
-                  AND category_readable(c.read_level, c.id, $2, $3)) AS "post_count!"
+                  AND space_readable(c.read_level, c.id, $2, $3)) AS "post_count!"
         FROM users u
         LEFT JOIN uploads av ON av.id = u.avatar_upload_id
         WHERE u.id = ANY($1)
         "#,
         ids,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -945,7 +945,7 @@ async fn forks_of(
     let rows = sqlx::query!(
         r#"
         SELECT f.id, f.title, f.slug, f.last_seq, f.forked_from_post_id AS "source_post_id!",
-               f.deleted_at IS NULL AND thread_readable(f.visibility, f.category_id, $2, $3) AS "visible!",
+               f.deleted_at IS NULL AND thread_readable(f.visibility, f.space_id, $2, $3) AS "visible!",
                a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name
         FROM threads f
         JOIN users a ON a.id = f.author_id
@@ -954,7 +954,7 @@ async fn forks_of(
         "#,
         post_ids,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -990,14 +990,14 @@ async fn embed(db: &Db, viewer: &Viewer, post_id: i64, deps: &mut Deps) -> sqlx:
         r#"
         SELECT p.id, p.seq, p.created_at, p.edited_at, p.thread_id,
                (p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
-                AND thread_readable(t.visibility, t.category_id, $2, $3)) AS "available!"
+                AND thread_readable(t.visibility, t.space_id, $2, $3)) AS "available!"
         FROM posts p
         JOIN threads t ON t.id = p.thread_id
         WHERE p.id = $1
         "#,
         post_id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
     )
     .fetch_optional(db.pool())
     .await?
@@ -1011,11 +1011,11 @@ async fn embed(db: &Db, viewer: &Viewer, post_id: i64, deps: &mut Deps) -> sqlx:
     // Only now that the post is known to be visible is its content read.
     let post = sqlx::query!(
         r#"
-        SELECT p.body_html, t.title, t.slug, c.id AS category_id, c.slug AS category_slug, c.name AS category_name,
+        SELECT p.body_html, t.title, t.slug, c.id AS space_id, c.slug AS space_slug, c.name AS space_name,
                u.id AS author_id, u.username, u.display_name, u.title AS author_title
         FROM posts p
         JOIN threads t ON t.id = p.thread_id
-        JOIN categories c ON c.id = t.category_id
+        JOIN spaces c ON c.id = t.space_id
         JOIN users u ON u.id = p.author_id
         WHERE p.id = $1
         "#,
@@ -1032,10 +1032,10 @@ async fn embed(db: &Db, viewer: &Viewer, post_id: i64, deps: &mut Deps) -> sqlx:
             title: post.title,
             slug: post.slug,
         },
-        category: CategoryRef {
-            id: post.category_id,
-            slug: post.category_slug,
-            name: post.category_name,
+        space: SpaceRef {
+            id: post.space_id,
+            slug: post.space_slug,
+            name: post.space_name,
         },
         author: UserRef {
             id: post.author_id,
@@ -1053,20 +1053,20 @@ async fn embed(db: &Db, viewer: &Viewer, post_id: i64, deps: &mut Deps) -> sqlx:
 // Profiles
 
 /// How many of a member's posts the viewer can see, from the counts per
-/// category that triggers keep (migration 0019), so it costs the same
+/// space that triggers keep (migration 0019), so it costs the same
 /// however much they have posted. A post in a thread counts in the
-/// thread's category, whose read level the thread's visibility always
+/// thread's space, whose read level the thread's visibility always
 /// copies. Pages showing it depend on `user:N`, which new posts and thread
 /// moves clear.
 pub async fn visible_post_count(db: &Db, viewer: &Viewer, user_id: i64) -> sqlx::Result<i64> {
     let filter = viewer.filter();
     sqlx::query_scalar!(
         r#"SELECT coalesce(sum(pc.posts), 0)::bigint AS "n!"
-           FROM user_category_post_counts pc JOIN categories c ON c.id = pc.category_id
-           WHERE pc.user_id = $1 AND category_readable(c.read_level, c.id, $2, $3)"#,
+           FROM user_space_post_counts pc JOIN spaces c ON c.id = pc.space_id
+           WHERE pc.user_id = $1 AND space_readable(c.read_level, c.id, $2, $3)"#,
         user_id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
     )
     .fetch_one(db.pool())
     .await
@@ -1113,11 +1113,11 @@ pub async fn post_location(
         SELECT t.id, t.slug, p.seq, t.visibility = 'private' AS "private!"
         FROM posts p JOIN threads t ON t.id = p.thread_id
         WHERE p.id = $1 AND t.deleted_at IS NULL
-          AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
+          AND (thread_readable(t.visibility, t.space_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
         "#,
         post_id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
         filter.dm_viewer,
     )
     .fetch_optional(db.pool())
@@ -1136,11 +1136,11 @@ pub async fn thread_slug(db: &Db, viewer: &Viewer, thread_id: i64) -> sqlx::Resu
     sqlx::query_scalar!(
         r#"
         SELECT t.slug FROM threads t
-        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.category_id, $2, $3)
+        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.space_id, $2, $3)
         "#,
         thread_id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
     )
     .fetch_optional(db.pool())
     .await
@@ -1152,10 +1152,10 @@ pub async fn thread_slug(db: &Db, viewer: &Viewer, thread_id: i64) -> sqlx::Resu
 // These say where something is and who may see it; whether the viewer may
 // write there is for [`crate::permissions`] to decide.
 
-/// A category the viewer can read, as somewhere to post.
+/// A space the viewer can read, as somewhere to post.
 #[derive(Clone, Debug)]
-pub struct CategoryTarget {
-    pub category: CategoryRef,
+pub struct SpaceTarget {
+    pub space: SpaceRef,
     pub section_id: Option<i64>,
     pub section_name: Option<String>,
     pub description: String,
@@ -1166,13 +1166,13 @@ pub struct CategoryTarget {
     /// `groups` read and write levels.
     pub read_groups: Vec<i64>,
     pub write_groups: Vec<i64>,
-    /// The names of the groups that may read a group-restricted category.
+    /// The names of the groups that may read a group-restricted space.
     pub group_names: Vec<String>,
     /// The names of the groups that may post, with the `groups` write level.
     pub write_group_names: Vec<String>,
 }
 
-impl CategoryTarget {
+impl SpaceTarget {
     pub fn audience(&self) -> Audience {
         Audience::from_level(&self.read_level, self.read_groups.iter().copied())
     }
@@ -1181,12 +1181,12 @@ impl CategoryTarget {
         WriteLevel::from_level(&self.write_level, self.write_groups.iter().copied())
     }
 
-    /// The category's settings, as an admin edits them.
-    pub fn settings(&self) -> CategorySettings {
-        CategorySettings {
+    /// The space's settings, as an admin edits them.
+    pub fn settings(&self) -> SpaceSettings {
+        SpaceSettings {
             section_id: self.section_id,
-            slug: self.category.slug.clone(),
-            name: self.category.name.clone(),
+            slug: self.space.slug.clone(),
+            name: self.space.name.clone(),
             description: self.description.clone(),
             position: self.position,
             read_level: self.read_level.clone(),
@@ -1197,25 +1197,21 @@ impl CategoryTarget {
     }
 }
 
-/// A category the viewer can read, by id.
-pub async fn category_by_id(
-    db: &Db,
-    viewer: &Viewer,
-    id: i64,
-) -> sqlx::Result<Option<CategoryTarget>> {
-    Ok(category_targets(db, viewer, Some(id), None).await?.pop())
+/// A space the viewer can read, by id.
+pub async fn space_by_id(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result<Option<SpaceTarget>> {
+    Ok(space_targets(db, viewer, Some(id), None).await?.pop())
 }
 
-/// How many threads a category the viewer can read has ever had,
-/// including deleted ones: only a category with none can be deleted.
-pub async fn category_thread_count(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result<i64> {
+/// How many threads a space the viewer can read has ever had,
+/// including deleted ones: only a space with none can be deleted.
+pub async fn space_thread_count(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result<i64> {
     let filter = viewer.filter();
     sqlx::query_scalar!(
-        r#"SELECT count(t.id) AS "n!" FROM categories c LEFT JOIN threads t ON t.category_id = c.id
-           WHERE c.id = $1 AND category_readable(c.read_level, c.id, $2, $3)"#,
+        r#"SELECT count(t.id) AS "n!" FROM spaces c LEFT JOIN threads t ON t.space_id = c.id
+           WHERE c.id = $1 AND space_readable(c.read_level, c.id, $2, $3)"#,
         id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
     )
     .fetch_one(db.pool())
     .await
@@ -1240,19 +1236,19 @@ pub async fn sections(db: &Db) -> sqlx::Result<Vec<Section>> {
     .await
 }
 
-/// Every category the viewer can read, in index order.
-pub async fn readable_categories(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<CategoryTarget>> {
-    category_targets(db, viewer, None, None).await
+/// Every space the viewer can read, in index order.
+pub async fn readable_spaces(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<SpaceTarget>> {
+    space_targets(db, viewer, None, None).await
 }
 
-/// The categories the viewer can read, in index order: all of them, or
+/// The spaces the viewer can read, in index order: all of them, or
 /// (with `id` or `slug`) just the one so named.
-async fn category_targets(
+async fn space_targets(
     db: &Db,
     viewer: &Viewer,
     id: Option<i64>,
     slug: Option<&str>,
-) -> sqlx::Result<Vec<CategoryTarget>> {
+) -> sqlx::Result<Vec<SpaceTarget>> {
     let filter = viewer.filter();
     let rows = sqlx::query!(
         r#"
@@ -1261,14 +1257,14 @@ async fn category_targets(
                c.read_level AS "read_level!", c.write_level AS "write_level!",
                c.read_groups AS "read_groups!", c.write_groups AS "write_groups!",
                c.group_names AS "group_names!", c.write_group_names AS "write_group_names!"
-        FROM category_targets c
-        WHERE category_readable(c.read_level, c.id, $1, $2)
+        FROM space_targets c
+        WHERE space_readable(c.read_level, c.id, $1, $2)
           AND ($3::bigint IS NULL OR c.id = $3)
           AND ($4::text IS NULL OR c.slug = $4)
         ORDER BY c.section_position NULLS FIRST, c.section_id NULLS FIRST, c.position, c.id
         "#,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
         id,
         slug,
     )
@@ -1276,8 +1272,8 @@ async fn category_targets(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|row| CategoryTarget {
-            category: CategoryRef {
+        .map(|row| SpaceTarget {
+            space: SpaceRef {
                 id: row.id,
                 slug: row.slug,
                 name: row.name,
@@ -1296,13 +1292,13 @@ async fn category_targets(
         .collect())
 }
 
-/// A category the viewer can read, by slug.
-pub async fn category_target(
+/// A space the viewer can read, by slug.
+pub async fn space_target(
     db: &Db,
     viewer: &Viewer,
     slug: &str,
-) -> sqlx::Result<Option<CategoryTarget>> {
-    Ok(category_targets(db, viewer, None, Some(slug)).await?.pop())
+) -> sqlx::Result<Option<SpaceTarget>> {
+    Ok(space_targets(db, viewer, None, Some(slug)).await?.pop())
 }
 
 /// A thread or conversation the viewer can read, as somewhere to reply.
@@ -1317,24 +1313,24 @@ pub struct ThreadTarget {
     pub last_seq: i64,
 }
 
-/// Where a thread is: in a category, or a conversation between members.
+/// Where a thread is: in a space, or a conversation between members.
 #[derive(Clone, Debug)]
 pub enum Place {
-    Category(CategoryTarget),
+    Space(SpaceTarget),
     Conversation(messages::ConversationTarget),
 }
 
 impl ThreadTarget {
-    pub fn category(&self) -> Option<&CategoryTarget> {
+    pub fn space(&self) -> Option<&SpaceTarget> {
         match &self.place {
-            Place::Category(category) => Some(category),
+            Place::Space(space) => Some(space),
             Place::Conversation(_) => None,
         }
     }
 
     pub fn conversation(&self) -> Option<&messages::ConversationTarget> {
         match &self.place {
-            Place::Category(_) => None,
+            Place::Space(_) => None,
             Place::Conversation(conversation) => Some(conversation),
         }
     }
@@ -1342,7 +1338,7 @@ impl ThreadTarget {
     /// Who can read it.
     pub fn audience(&self) -> Audience {
         match &self.place {
-            Place::Category(category) => category.audience(),
+            Place::Space(space) => space.audience(),
             Place::Conversation(_) => Audience::Private,
         }
     }
@@ -1350,7 +1346,7 @@ impl ThreadTarget {
     /// Its page: the thread, or the conversation.
     pub fn href(&self) -> String {
         match &self.place {
-            Place::Category(_) => crate::format::thread_href(&self.thread.id, &self.thread.slug),
+            Place::Space(_) => crate::format::thread_href(&self.thread.id, &self.thread.slug),
             Place::Conversation(_) => format!("/messages/{}", self.thread.id),
         }
     }
@@ -1364,14 +1360,14 @@ pub async fn thread_target(
     let filter = viewer.filter();
     let Some(row) = sqlx::query!(
         r#"
-        SELECT t.id, t.title, t.slug, t.locked, t.last_seq, t.category_id
+        SELECT t.id, t.title, t.slug, t.locked, t.last_seq, t.space_id
         FROM threads t
         WHERE t.id = $1 AND t.deleted_at IS NULL
-          AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
+          AND (thread_readable(t.visibility, t.space_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
         "#,
         thread_id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
         filter.dm_viewer,
     )
     .fetch_optional(db.pool())
@@ -1379,17 +1375,17 @@ pub async fn thread_target(
     else {
         return Ok(None);
     };
-    let place = match row.category_id {
-        Some(category_id) => {
-            let Some(category) = category_by_id(db, viewer, category_id).await? else {
+    let place = match row.space_id {
+        Some(space_id) => {
+            let Some(space) = space_by_id(db, viewer, space_id).await? else {
                 return Ok(None);
             };
-            Place::Category(category)
+            Place::Space(space)
         }
         None => Place::Conversation(messages::conversation_target(db, row.id).await?),
     };
     let name = match &place {
-        Place::Category(_) => row.title.clone(),
+        Place::Space(_) => row.title.clone(),
         Place::Conversation(c) => c.name(&row.title, viewer.user_id()),
     };
     Ok(Some(ThreadTarget {
@@ -1451,11 +1447,11 @@ pub async fn post_target(
         JOIN threads t ON t.id = p.thread_id
         JOIN users u ON u.id = p.author_id
         WHERE p.id = $1 AND t.deleted_at IS NULL
-          AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
+          AND (thread_readable(t.visibility, t.space_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
         "#,
         post_id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
         filter.dm_viewer,
         viewer.is_staff(),
     )
@@ -1486,20 +1482,16 @@ pub async fn post_target(
     }))
 }
 
-/// The ids of the threads in a category that the viewer can see.
-pub async fn visible_thread_ids(
-    db: &Db,
-    viewer: &Viewer,
-    category_id: i64,
-) -> sqlx::Result<Vec<i64>> {
+/// The ids of the threads in a space that the viewer can see.
+pub async fn visible_thread_ids(db: &Db, viewer: &Viewer, space_id: i64) -> sqlx::Result<Vec<i64>> {
     let filter = viewer.filter();
     sqlx::query_scalar!(
         r#"SELECT t.id FROM threads t
-           WHERE t.category_id = $1 AND t.deleted_at IS NULL
-             AND thread_readable(t.visibility, t.category_id, $2, $3)"#,
-        category_id,
+           WHERE t.space_id = $1 AND t.deleted_at IS NULL
+             AND thread_readable(t.visibility, t.space_id, $2, $3)"#,
+        space_id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
     )
     .fetch_all(db.pool())
     .await
@@ -1537,11 +1529,11 @@ pub async fn first_unread(
             LIMIT 1
         ) p ON true
         WHERE t.id = $1 AND t.deleted_at IS NULL
-          AND (thread_readable(t.visibility, t.category_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
+          AND (thread_readable(t.visibility, t.space_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
         "#,
         thread_id,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
         filter.dm_viewer,
     )
     .fetch_optional(db.pool())

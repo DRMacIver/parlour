@@ -23,8 +23,8 @@ struct Setup {
 async fn setup(pool: PgPool) -> Setup {
     let f = Forum::new(pool).without_rate_limits();
     f.no_new_members().await;
-    let public = f.category("games", "public", None, 0).await;
-    let members = f.category("lounge", "members", None, 1).await;
+    let public = f.space("games", "public", None, 0).await;
+    let members = f.space("lounge", "members", None, 1).await;
     let ruth = f.member("ruth", "user", None).await;
     let jonah = f.member("jonah", "user", None).await;
     Setup {
@@ -333,7 +333,7 @@ async fn filters_and_pages(pool: PgPool) {
         s.f.page_as("/search?q=zebra&by=nobody", &s.ruth_cookie)
             .await;
     assert!(hits(&page).is_empty());
-    // Visitors can't use a category they can't read as a filter, and it
+    // Visitors can't use a space they can't read as a filter, and it
     // isn't offered.
     let response = s.f.get("/search?q=zebra&in=lounge").await;
     assert!(hits(&response.body).is_empty());
@@ -382,7 +382,7 @@ async fn empty_and_odd_queries(pool: PgPool) {
     assert!(
         response
             .body
-            .contains("Category names are at most 100 characters long.")
+            .contains("Space names are at most 100 characters long.")
     );
     assert!(!response.body.contains("Searches can be"));
     // Pages far past the end aren't searched.
@@ -395,7 +395,7 @@ async fn empty_and_odd_queries(pool: PgPool) {
 #[sqlx::test]
 async fn searching_is_rate_limited(pool: PgPool) {
     let f = Forum::new(pool).trusting_proxy();
-    let public = f.category("games", "public", None, 0).await;
+    let public = f.space("games", "public", None, 0).await;
     let ruth = f.member("ruth", "user", None).await;
     f.thread(public, ruth, "Heat", "Heat.").await;
     let search = |ip: &'static str| {

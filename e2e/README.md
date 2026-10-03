@@ -14,7 +14,7 @@ other hosts; and they walk through the main flows:
   search, terms and privacy pages (`accounts.spec.ts`, `pages.spec.ts`);
 - writing: threads, replies, quotes, quote-forks, edits, reactions and
   deleting (`writing.spec.ts`);
-- private categories and groups (`privacy.spec.ts`);
+- private spaces and groups (`privacy.spec.ts`);
 - direct messages and their notifications (`messages.spec.ts`);
 - reporting and moderating, and finding an image to remove
   (`moderation.spec.ts`);

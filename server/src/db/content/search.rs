@@ -4,7 +4,7 @@
 //! finds the thread's first post), with `websearch_to_tsquery`, so quoted
 //! phrases, `or` and `-word` work as on web search engines. What may be
 //! found is decided in the same query, by the shared visibility condition:
-//! `thread_readable` for category threads and, for conversations,
+//! `thread_readable` for space threads and, for conversations,
 //! `dm_searchable`, which only their current participants pass. Deleted
 //! posts and threads are never found, and hidden posts only by staff, as
 //! with reading them where they are.
@@ -23,8 +23,8 @@ pub const MAX_QUERY_CHARS: usize = 200;
 #[derive(Clone, Debug, Default)]
 pub struct SearchQuery {
     pub text: String,
-    /// Only in this category (by slug).
-    pub category: Option<String>,
+    /// Only in this space (by slug).
+    pub space: Option<String>,
     /// Only posts by this member (by username).
     pub author: Option<String>,
     /// Newest first, rather than best match first.
@@ -34,7 +34,7 @@ pub struct SearchQuery {
 /// Where a post that was found is.
 #[derive(Clone, Debug)]
 pub enum HitPlace {
-    Category {
+    Space {
         slug: String,
         name: String,
     },
@@ -109,18 +109,18 @@ pub async fn search(
         ),
         page AS (
             SELECT p.id, p.seq, p.created_at, p.body_md, p.hidden_at IS NOT NULL AS hidden,
-                   t.id AS thread_id, t.title, c.slug AS category_slug, c.name AS category_name,
+                   t.id AS thread_id, t.title, c.slug AS space_slug, c.name AS space_name,
                    a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name,
                    ts_rank_cd(p.search, q.q) + CASE WHEN p.seq = 1 AND t.search @@ q.q THEN 1 ELSE 0 END AS rank
             FROM found
             JOIN posts p ON p.id = found.id
             JOIN threads t ON t.id = p.thread_id
-            LEFT JOIN categories c ON c.id = t.category_id
+            LEFT JOIN spaces c ON c.id = t.space_id
             JOIN users a ON a.id = p.author_id
             CROSS JOIN q
             WHERE p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $5)
               AND t.deleted_at IS NULL
-              AND (thread_readable(t.visibility, t.category_id, $2, $3)
+              AND (thread_readable(t.visibility, t.space_id, $2, $3)
                    OR dm_searchable(t.id, t.visibility, $4))
               AND ($6::text IS NULL OR c.slug = $6)
               AND ($7::text IS NULL OR a.username = $7::citext)
@@ -130,7 +130,7 @@ pub async fn search(
         )
         SELECT page.id AS "id!", page.seq AS "seq!", page.created_at AS "created_at!",
                page.hidden AS "hidden!", page.thread_id AS "thread_id!", page.title AS "title!",
-               page.category_slug AS "category_slug?", page.category_name AS "category_name?",
+               page.space_slug AS "space_slug?", page.space_name AS "space_name?",
                page.author_id AS "author_id!", page.author_username AS "author_username!",
                page.author_display_name AS "author_display_name!",
                page.body_md AS "body_md!"
@@ -140,10 +140,10 @@ pub async fn search(
         "#,
         query.text,
         &filter.visibilities,
-        &filter.group_category_ids,
+        &filter.group_space_ids,
         filter.dm_viewer,
         staff,
-        query.category,
+        query.space,
         query.author as _,
         query.newest_first,
         per_page + 1,
@@ -174,8 +174,8 @@ pub async fn search(
     .await?;
     let mut hits = Vec::with_capacity(rows.len());
     for (row, snippet) in rows.into_iter().zip(snippets) {
-        let place = match (row.category_slug, row.category_name) {
-            (Some(slug), Some(name)) => HitPlace::Category { slug, name },
+        let place = match (row.space_slug, row.space_name) {
+            (Some(slug), Some(name)) => HitPlace::Space { slug, name },
             _ => {
                 let conversation = messages::conversation_target(db, row.thread_id).await?;
                 HitPlace::Conversation {

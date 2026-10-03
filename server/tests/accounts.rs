@@ -331,14 +331,14 @@ async fn sessions_record_activity_without_writing_on_every_request(db: PgPool) {
 // Visibility for logged-in members
 
 #[sqlx::test]
-async fn members_see_members_only_categories_and_staff_see_everything(db: PgPool) {
+async fn members_see_members_only_spaces_and_staff_see_everything(db: PgPool) {
     let forum = Forum::new(db);
     let author = forum.user("author").await;
     let member = forum.member("ruth", "user", None).await;
     let moderator = forum.member("sam", "moderator", None).await;
-    let public = forum.category("lobby", "public", None, 0).await;
-    let members = forum.category("back-room", "members", None, 1).await;
-    let groups = forum.category("committee", "groups", None, 2).await;
+    let public = forum.space("lobby", "public", None, 0).await;
+    let members = forum.space("back-room", "members", None, 1).await;
+    let groups = forum.space("committee", "groups", None, 2).await;
     let t_public = forum
         .thread(public, author, "Public thread", "Hello everyone")
         .await;

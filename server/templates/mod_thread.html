@@ -28,13 +28,13 @@
   <h2 class="panel-bar">Rename or move</h2>
   <div class="form">
     <div class="field"><label for="title">Title</label><input id="title" name="title" type="text" maxlength="150" value="{{ thread.thread.title }}"></div>
-    <div class="field"><label for="category">Category</label>
-      <select id="category" name="category">{% for c in categories %}<option value="{{ c.category.slug }}"{% if self.current_category(c.category.slug) %} selected{% endif %}>{{ c.category.name }}{% if let Some(access) = crate::format::access_label(c.read_level, c.group_names) %} ({{ access }}){% endif %}</option>{% endfor %}</select>
+    <div class="field"><label for="space">Space</label>
+      <select id="space" name="space">{% for c in spaces %}<option value="{{ c.space.slug }}"{% if self.current_space(c.space.slug) %} selected{% endif %}>{{ c.space.name }}{% if let Some(access) = crate::format::access_label(c.read_level, c.group_names) %} ({{ access }}){% endif %}</option>{% endfor %}</select>
     </div>
     <div class="field"><label for="reason-edit">Reason</label><input id="reason-edit" name="reason" type="text" maxlength="500" required></div>
     <div class="form-actions">
       <button class="button" type="submit" name="action" value="rename">Rename</button>
-      <button class="button button-quiet" type="submit" name="action" value="move">Move to that category</button>
+      <button class="button button-quiet" type="submit" name="action" value="move">Move to that space</button>
     </div>
     <p class="form-note">Moving a thread somewhere more public shows it to everyone who can read there.</p>
   </div>
@@ -47,7 +47,7 @@
     <div class="field"><label for="numbers">Post numbers</label><input id="numbers" name="numbers" type="text" placeholder="12, 14-20" required><span class="field-hint">For example “12, 14-20”.</span></div>
     <fieldset class="field">
       <legend>To</legend>
-      <label class="choice choice-wrap"><input type="radio" name="to" value="new" checked> a new thread titled <input class="input-inline" name="title" type="text" maxlength="150" aria-label="New thread’s title"> in <select name="category" aria-label="New thread’s category">{% for c in categories %}<option value="{{ c.category.slug }}"{% if self.current_category(c.category.slug) %} selected{% endif %}>{{ c.category.name }}</option>{% endfor %}</select></label>
+      <label class="choice choice-wrap"><input type="radio" name="to" value="new" checked> a new thread titled <input class="input-inline" name="title" type="text" maxlength="150" aria-label="New thread’s title"> in <select name="space" aria-label="New thread’s space">{% for c in spaces %}<option value="{{ c.space.slug }}"{% if self.current_space(c.space.slug) %} selected{% endif %}>{{ c.space.name }}</option>{% endfor %}</select></label>
       <label class="choice choice-wrap"><input type="radio" name="to" value="existing"> the thread <input class="input-inline" name="thread" type="text" placeholder="number or link" aria-label="Thread number or link"></label>
     </fieldset>
     <div class="field"><label for="reason-move">Reason</label><input id="reason-move" name="reason" type="text" maxlength="500" required></div>

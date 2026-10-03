@@ -82,7 +82,7 @@ pub async fn in_post(db: &Db, post_id: i64) -> sqlx::Result<Vec<String>> {
         .collect())
 }
 
-/// A post in a category thread that shows an image, now or in an earlier
+/// A post in a space thread that shows an image, now or in an earlier
 /// version.
 pub struct ImageInPost {
     pub post_id: i64,
@@ -97,7 +97,7 @@ pub struct ImageUse {
     pub height: i32,
     pub bytes: i32,
     pub uploaders: Vec<UserRef>,
-    /// Posts in category threads, which staff may read.
+    /// Posts in space threads, which staff may read.
     pub posts: Vec<ImageInPost>,
     /// How many posts in conversations show it. Staff aren't told which,
     /// as they may not read the conversations.
@@ -156,7 +156,7 @@ pub async fn image_use(db: &Db, sha256: &str, ext: &str) -> sqlx::Result<ImageLo
                SELECT r.post_id FROM revision_uploads ru JOIN post_revisions r ON r.id = ru.revision_id
                WHERE ru.sha256 = $1
            )
-           SELECT p.id, p.seq, t.title, t.category_id IS NULL AS "private!",
+           SELECT p.id, p.seq, t.title, t.space_id IS NULL AS "private!",
                   p.deleted_at IS NOT NULL OR t.deleted_at IS NOT NULL AS "deleted!"
            FROM shown_in s JOIN posts p ON p.id = s.post_id JOIN threads t ON t.id = p.thread_id
            ORDER BY p.id"#,

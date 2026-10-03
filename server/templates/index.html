@@ -6,26 +6,26 @@
   <div class="index-main">
   {% if sections.is_empty() %}
     <section class="panel">
-      <h2 class="panel-bar">Categories</h2>
-      <p class="empty">There are no categories yet.{% if let Some(user) = layout.user %}{% if user.is_admin %} <a href="/admin/categories">Make the first ones in Admin → Categories.</a>{% endif %}{% endif %}</p>
+      <h2 class="panel-bar">Spaces</h2>
+      <p class="empty">There are no spaces yet.{% if let Some(user) = layout.user %}{% if user.is_admin %} <a href="/admin/spaces">Make the first ones in Admin → Spaces.</a>{% endif %}{% endif %}</p>
     </section>
   {% endif %}
   {% for section in sections %}
-    <table class="list category-list">
+    <table class="list space-list">
       <thead>
         <tr>
-          <th scope="col">{% if let Some(name) = section.name %}{{ name }}{% else %}Categories{% endif %}</th>
+          <th scope="col">{% if let Some(name) = section.name %}{{ name }}{% else %}Spaces{% endif %}</th>
           <th scope="col" class="num">Threads</th>
           <th scope="col" class="num">Posts</th>
           <th scope="col" class="last-col">Last post</th>
         </tr>
       </thead>
       <tbody>
-      {% for summary in section.categories %}
+      {% for summary in section.spaces %}
         <tr>
           <td class="main-col">
             <div class="row-title">
-              <a href="/c/{{ summary.category.slug }}">{{ summary.category.name }}</a>
+              <a href="/c/{{ summary.space.slug }}">{{ summary.space.name }}</a>
               {% call m::access_flag(summary.read_level, summary.group_names) %}{% endcall %}
             </div>
             {% if !summary.description.is_empty() %}<div class="row-meta">{{ summary.description }}</div>{% endif %}
@@ -59,7 +59,7 @@
     {% for row in latest %}
       <li>
         <a href="{{ crate::format::thread_href(row.thread.id, row.thread.slug) }}">{{ row.thread.title }}</a>
-        <div class="row-meta">{{ row.category.name }} · {% call m::time(row.last_post_at) %}{% endcall %}</div>
+        <div class="row-meta">{{ row.space.name }} · {% call m::time(row.last_post_at) %}{% endcall %}</div>
       </li>
     {% endfor %}
     </ol>

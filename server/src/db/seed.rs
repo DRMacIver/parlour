@@ -1,6 +1,6 @@
 //! `parlour seed`: fills an empty database with sample content for
 //! development, in the style of a small hobby club ("The Tuesday Club"):
-//! sections, public and private categories, long threads that run to
+//! sections, public and private spaces, long threads that run to
 //! several pages, quote-replies, a quote-fork, and deleted, hidden and
 //! edited posts.
 //!
@@ -24,7 +24,7 @@ use serde_json::json;
 
 use crate::db::moderation::{self as mod_records, HeldPlace, NewAction, NewReport, ReportAbout};
 use crate::markdown;
-use crate::store::{self, CreatedThread, NewCategory, NewPost, NewThread, NewUser};
+use crate::store::{self, CreatedThread, NewPost, NewSpace, NewThread, NewUser};
 
 #[derive(Debug)]
 pub enum SeedError {
@@ -43,7 +43,7 @@ impl fmt::Display for SeedError {
         match self {
             SeedError::NotEmpty => write!(
                 f,
-                "the database already has categories or users; run `parlour seed --reset` to replace them"
+                "the database already has spaces or users; run `parlour seed --reset` to replace them"
             ),
             SeedError::NotSeeded => write!(
                 f,
@@ -74,7 +74,7 @@ pub const DEV_PASSWORD: &str = "tuesday-club";
 #[derive(Debug, Default)]
 pub struct SeedSummary {
     pub users: usize,
-    pub categories: usize,
+    pub spaces: usize,
     pub threads: usize,
     pub posts: usize,
     pub conversations: usize,
@@ -86,7 +86,7 @@ pub struct SeedSummary {
 const HIGH_WATER_MARK: &str = "jsonb_build_object(
     'users', (SELECT coalesce(max(id), 0) FROM users),
     'sections', (SELECT coalesce(max(id), 0) FROM sections),
-    'categories', (SELECT coalesce(max(id), 0) FROM categories),
+    'spaces', (SELECT coalesce(max(id), 0) FROM spaces),
     'groups', (SELECT coalesce(max(id), 0) FROM groups),
     'threads', (SELECT coalesce(max(id), 0) FROM threads),
     'posts', (SELECT coalesce(max(id), 0) FROM posts))";
@@ -96,14 +96,12 @@ const HIGH_WATER_MARK: &str = "jsonb_build_object(
 /// Settings other than the seed's own record are kept.
 pub async fn reset(db: &PgPool) -> Result<(), SeedError> {
     let mut tx = db.begin().await?;
-    sqlx::raw_sql(
-        "LOCK TABLE users, sections, categories, groups, threads, posts IN EXCLUSIVE MODE",
-    )
-    .execute(&mut *tx)
-    .await?;
+    sqlx::raw_sql("LOCK TABLE users, sections, spaces, groups, threads, posts IN EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await?;
     let (empty, matches): (bool, Option<bool>) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT NOT EXISTS (SELECT 1 FROM users) AND NOT EXISTS (SELECT 1 FROM sections)
-                AND NOT EXISTS (SELECT 1 FROM categories),
+                AND NOT EXISTS (SELECT 1 FROM spaces),
                 (SELECT value = {HIGH_WATER_MARK} FROM settings WHERE key = 'dev_seed')"
     )))
     .fetch_one(&mut *tx)
@@ -114,7 +112,7 @@ pub async fn reset(db: &PgPool) -> Result<(), SeedError> {
         (false, Some(false)) => return Err(SeedError::ChangedSinceSeed),
     }
     sqlx::raw_sql(
-        "TRUNCATE posts, threads, categories, sections, groups, users, retired_usernames
+        "TRUNCATE posts, threads, spaces, sections, groups, users, retired_usernames
              RESTART IDENTITY CASCADE;
          DELETE FROM settings WHERE key = 'dev_seed';",
     )
@@ -128,7 +126,7 @@ pub async fn reset(db: &PgPool) -> Result<(), SeedError> {
 pub async fn seed(db: &PgPool) -> Result<SeedSummary, SeedError> {
     let mut tx = db.begin().await?;
     let existing: i64 = sqlx::query_scalar!(
-        r#"SELECT (SELECT count(*) FROM users) + (SELECT count(*) FROM categories)
+        r#"SELECT (SELECT count(*) FROM users) + (SELECT count(*) FROM spaces)
                   + (SELECT count(*) FROM groups) AS "n!""#
     )
     .fetch_one(&mut *tx)
@@ -144,7 +142,7 @@ pub async fn seed(db: &PgPool) -> Result<SeedSummary, SeedError> {
             .expect("minutes divide time"),
         users: Vec::new(),
         summary: SeedSummary::default(),
-        organisers_category: None,
+        organisers_space: None,
     };
     seeder.run().await?;
     let summary = seeder.summary;
@@ -190,16 +188,16 @@ struct Seeder<'a> {
     /// (username, id)
     users: Vec<(&'static str, i64)>,
     summary: SeedSummary,
-    /// The category only the Organisers group reads, whose threads only
+    /// The space only the Organisers group reads, whose threads only
     /// organisers post in.
-    organisers_category: Option<i64>,
+    organisers_space: Option<i64>,
 }
 
 /// The members of the Organisers group. Sam and Ruth are staff, who read
 /// everything anyway; Priya and Dev are ordinary members.
 const ORGANISERS: &[&str] = &["sam", "ruth", "priya", "dev"];
 
-/// Whether a seeded member can read the organisers' category.
+/// Whether a seeded member can read the organisers' space.
 fn reads_organisers(spec: &UserSpec) -> bool {
     spec.role != "user" || ORGANISERS.contains(&spec.username)
 }
@@ -490,7 +488,7 @@ const REACTIONS: &[&str] = &[
     "Fair point, I hadn’t thought of it that way.",
 ];
 
-/// The general chat titles, for a category with several pages of threads.
+/// The general chat titles, for a space with several pages of threads.
 const CHAT_TITLES: &[&str] = &[
     "Favourite rainy-day pub in Leeds?",
     "What podcasts are you listening to?",
@@ -612,7 +610,7 @@ impl Seeder<'_> {
         let members = store::create_section(&mut *self.db, "Members only", 3).await?;
 
         let announcements = self
-            .category(
+            .space(
                 community,
                 1,
                 "announcements",
@@ -623,7 +621,7 @@ impl Seeder<'_> {
             )
             .await?;
         let general = self
-            .category(
+            .space(
                 community,
                 2,
                 "general",
@@ -634,7 +632,7 @@ impl Seeder<'_> {
             )
             .await?;
         let introductions = self
-            .category(
+            .space(
                 community,
                 3,
                 "introductions",
@@ -645,7 +643,7 @@ impl Seeder<'_> {
             )
             .await?;
         let games = self
-            .category(
+            .space(
                 hobbies,
                 1,
                 "board-games",
@@ -656,7 +654,7 @@ impl Seeder<'_> {
             )
             .await?;
         let books = self
-            .category(
+            .space(
                 hobbies,
                 2,
                 "books",
@@ -667,7 +665,7 @@ impl Seeder<'_> {
             )
             .await?;
         let making = self
-            .category(
+            .space(
                 hobbies,
                 3,
                 "making-things",
@@ -678,7 +676,7 @@ impl Seeder<'_> {
             )
             .await?;
         let lounge = self
-            .category(
+            .space(
                 members,
                 1,
                 "lounge",
@@ -689,7 +687,7 @@ impl Seeder<'_> {
             )
             .await?;
         let organisers = self
-            .category(
+            .space(
                 members,
                 2,
                 "organisers",
@@ -767,7 +765,7 @@ impl Seeder<'_> {
             games,
             Topic::Games,
             pinned(
-                thread("How this category works (read me)", "sam", 1, 270),
+                thread("How this space works (read me)", "sam", 1, 270),
                 true,
             ),
             Some(GAMES_README),
@@ -1277,7 +1275,7 @@ impl Seeder<'_> {
         let spam = store::create_thread(
             &mut *self.db,
             &NewThread {
-                category_id: general,
+                space_id: general,
                 title: "Best replica watches, cheap".into(),
                 author_id: spammer,
                 body_md: "Hi friends!! Looking for luxury watches at the lowest prices? Visit our shop for 70% off, worldwide shipping…".into(),
@@ -1387,7 +1385,7 @@ impl Seeder<'_> {
             &mut *self.db,
             wren,
             &HeldPlace::Thread {
-                category_id: introductions,
+                space_id: introductions,
                 title: "Hello from Otley".into(),
                 forked_from_post_id: None,
             },
@@ -1427,7 +1425,7 @@ impl Seeder<'_> {
         let bags = store::create_thread(
             &mut *self.db,
             &NewThread {
-                category_id: general,
+                space_id: general,
                 title: "Designer bags 80% off".into(),
                 author_id: old_spammer,
                 body_md: "Genuine designer bags, unbeatable prices, link in my profile".into(),
@@ -1492,10 +1490,10 @@ impl Seeder<'_> {
         .fetch_all(&mut *self.db)
         .await?;
         let first = tail.last().expect("the thread has posts");
-        let spirit_category = self.category_of(spirit).await?;
+        let spirit_space = self.space_of(spirit).await?;
         let split = mod_records::empty_thread(
             &mut *self.db,
-            spirit_category,
+            spirit_space,
             "Spirit Island: favourite spirits for beginners",
             first.author_id,
             first.created_at,
@@ -1671,7 +1669,7 @@ impl Seeder<'_> {
     /// every five hours.
     async fn conversation_thread(
         &mut self,
-        category_id: i64,
+        space_id: i64,
         title: &str,
         days_ago: i64,
         lines: &[(i64, &str)],
@@ -1680,7 +1678,7 @@ impl Seeder<'_> {
         let created = store::create_thread(
             &mut *self.db,
             &NewThread {
-                category_id,
+                space_id,
                 title: title.into(),
                 author_id: lines[0].0,
                 body_md: lines[0].1.into(),
@@ -1710,9 +1708,9 @@ impl Seeder<'_> {
         Ok(())
     }
 
-    async fn category_of(&mut self, thread: i64) -> sqlx::Result<i64> {
+    async fn space_of(&mut self, thread: i64) -> sqlx::Result<i64> {
         sqlx::query_scalar!(
-            r#"SELECT category_id AS "category_id!" FROM threads WHERE id = $1"#,
+            r#"SELECT space_id AS "space_id!" FROM threads WHERE id = $1"#,
             thread
         )
         .fetch_one(&mut *self.db)
@@ -1728,7 +1726,7 @@ impl Seeder<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn category(
+    async fn space(
         &mut self,
         section_id: i64,
         position: i32,
@@ -1738,10 +1736,10 @@ impl Seeder<'_> {
         read_level: &str,
         write_level: &str,
     ) -> sqlx::Result<i64> {
-        self.summary.categories += 1;
-        store::create_category(
+        self.summary.spaces += 1;
+        store::create_space(
             &mut *self.db,
-            &NewCategory {
+            &NewSpace {
                 section_id: Some(section_id),
                 slug: slug.into(),
                 name: name.into(),
@@ -1754,8 +1752,8 @@ impl Seeder<'_> {
         .await
     }
 
-    /// The Organisers group, which alone reads and posts in `category`.
-    async fn organisers_group(&mut self, category: i64) -> sqlx::Result<()> {
+    /// The Organisers group, which alone reads and posts in `space`.
+    async fn organisers_group(&mut self, space: i64) -> sqlx::Result<()> {
         let group = sqlx::query_scalar!(
             "INSERT INTO groups (slug, name, description)
              VALUES ('organisers', 'Organisers', 'The people who run the club.') RETURNING id"
@@ -1775,14 +1773,14 @@ impl Seeder<'_> {
             .await?;
         }
         sqlx::query!(
-            "INSERT INTO category_groups (category_id, group_id, access)
+            "INSERT INTO space_groups (space_id, group_id, access)
              VALUES ($1, $2, 'read'), ($1, $2, 'write')",
-            category,
+            space,
             group
         )
         .execute(&mut *self.db)
         .await?;
-        self.organisers_category = Some(category);
+        self.organisers_space = Some(space);
         Ok(())
     }
 
@@ -1831,7 +1829,7 @@ impl Seeder<'_> {
 
     async fn thread(
         &mut self,
-        category_id: i64,
+        space_id: i64,
         topic: Topic,
         spec: ThreadSpec,
         opening: Option<&str>,
@@ -1845,7 +1843,7 @@ impl Seeder<'_> {
         let created = store::create_thread(
             &mut *self.db,
             &NewThread {
-                category_id,
+                space_id,
                 title: spec.title.into(),
                 author_id,
                 body_md: body.clone(),
@@ -1864,7 +1862,7 @@ impl Seeder<'_> {
             forkable: None,
         };
         for at in &times[1..] {
-            let author = if Some(category_id) == self.organisers_category {
+            let author = if Some(space_id) == self.organisers_space {
                 *self.rng.pick(ORGANISERS)
             } else {
                 self.rng.pick(USERS).username
@@ -2009,7 +2007,7 @@ impl Seeder<'_> {
         let created = store::create_thread(
             &mut *self.db,
             &NewThread {
-                category_id: games,
+                space_id: games,
                 title: "Do solo modes count as ‘playing’ a game?".into(),
                 author_id,
                 body_md: "Strong disagree, but it deserves its own thread rather than derailing that one. Is a solo game a different hobby, or the same hobby with fewer snacks?".into(),

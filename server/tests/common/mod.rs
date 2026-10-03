@@ -12,7 +12,7 @@ use parlour::cache::PageCache;
 use parlour::changes::Change;
 use parlour::islands::IslandAssets;
 use parlour::mail::{Email, Mailer};
-use parlour::store::{self, CreatedThread, NewCategory, NewPost, NewThread, NewUser};
+use parlour::store::{self, CreatedThread, NewPost, NewSpace, NewThread, NewUser};
 use parlour::{AppState, app};
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -293,16 +293,16 @@ impl Forum {
             .unwrap()
     }
 
-    pub async fn category(
+    pub async fn space(
         &self,
         slug: &str,
         read_level: &str,
         section_id: Option<i64>,
         position: i32,
     ) -> i64 {
-        store::create_category(
+        store::create_space(
             &self.db,
-            &NewCategory {
+            &NewSpace {
                 section_id,
                 slug: slug.into(),
                 name: capitalise(&slug.replace('-', " ")),
@@ -318,13 +318,13 @@ impl Forum {
 
     pub async fn thread(
         &self,
-        category_id: i64,
+        space_id: i64,
         author_id: i64,
         title: &str,
         body: &str,
     ) -> CreatedThread {
         self.new_thread(NewThread {
-            category_id,
+            space_id,
             title: title.into(),
             author_id,
             body_md: body.into(),
@@ -388,9 +388,9 @@ impl Forum {
         );
     }
 
-    /// Lets these groups read (and, with `write`, post in) a category,
+    /// Lets these groups read (and, with `write`, post in) a space,
     /// which becomes group-restricted.
-    pub async fn restrict(&self, category_id: i64, groups: &[i64], write: Option<&[i64]>) {
+    pub async fn restrict(&self, space_id: i64, groups: &[i64], write: Option<&[i64]>) {
         let db = self.state.db();
         let viewer = parlour::viewer::Viewer::User(
             parlour::sessions::user_ctx(db, self.staff().await)
@@ -398,7 +398,7 @@ impl Forum {
                 .unwrap()
                 .unwrap(),
         );
-        let mut settings = parlour::content::category_by_id(db, &viewer, category_id)
+        let mut settings = parlour::content::space_by_id(db, &viewer, space_id)
             .await
             .unwrap()
             .unwrap()
@@ -410,11 +410,11 @@ impl Forum {
             settings.write_groups = write.to_vec();
         }
         let settings = settings.clean().unwrap();
-        parlour::store::update_category(db, category_id, &settings)
+        parlour::store::update_space(db, space_id, &settings)
             .await
             .unwrap()
             .unwrap();
-        self.changed(Change::CategoryChanged { category_id }).await;
+        self.changed(Change::SpaceChanged { space_id }).await;
     }
 
     /// Some admin's id, making one if there is none.

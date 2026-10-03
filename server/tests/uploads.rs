@@ -178,8 +178,8 @@ struct Setup {
 async fn setup(pool: PgPool) -> Setup {
     let f = Forum::new(pool).without_rate_limits();
     f.no_new_members().await;
-    let public = f.category("games", "public", None, 0).await;
-    let members = f.category("lounge", "members", None, 1).await;
+    let public = f.space("games", "public", None, 0).await;
+    let members = f.space("lounge", "members", None, 1).await;
     let ruth = f.member("ruth", "user", None).await;
     let jonah = f.member("jonah", "user", None).await;
     Setup {

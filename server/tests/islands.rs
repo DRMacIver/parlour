@@ -35,8 +35,8 @@ async fn setup(pool: PgPool) -> Setup {
     let mut f = Forum::new(pool).without_rate_limits();
     f.state = f.state.clone().with_islands(islands());
     f.no_new_members().await;
-    let public = f.category("games", "public", None, 0).await;
-    let members = f.category("lounge", "members", None, 1).await;
+    let public = f.space("games", "public", None, 0).await;
+    let members = f.space("lounge", "members", None, 1).await;
     let ruth = f.member("ruth", "user", None).await;
     let jonah = f.member("jonah", "user", None).await;
     Setup {
@@ -423,7 +423,7 @@ async fn reactions_change_without_a_page(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn the_fork_dialog_offers_only_allowed_categories(pool: PgPool) {
+async fn the_fork_dialog_offers_only_allowed_spaces(pool: PgPool) {
     let s = setup(pool).await;
     let public = s.f.thread(s.public, s.ruth, "Open", "Quote *me*.").await;
     let private =
@@ -446,15 +446,15 @@ async fn the_fork_dialog_offers_only_allowed_categories(pool: PgPool) {
             .unwrap()
             .contains("<em>me</em>")
     );
-    let slugs: Vec<&str> = fork["categories"]
+    let slugs: Vec<&str> = fork["spaces"]
         .as_array()
         .unwrap()
         .iter()
         .map(|c| c["slug"].as_str().unwrap())
         .collect();
     assert_eq!(slugs, vec!["games", "lounge"]);
-    assert_eq!(fork["categories"][0]["selected"], true);
-    // A members-only post can't be quoted into a public category.
+    assert_eq!(fork["spaces"][0]["selected"], true);
+    // A members-only post can't be quoted into a public space.
     let response = api(
         &s.f,
         "GET",
@@ -463,7 +463,7 @@ async fn the_fork_dialog_offers_only_allowed_categories(pool: PgPool) {
         Some(&s.jonah_cookie),
     )
     .await;
-    let slugs: Vec<Value> = json_of(&response)["categories"]
+    let slugs: Vec<Value> = json_of(&response)["spaces"]
         .as_array()
         .unwrap()
         .iter()

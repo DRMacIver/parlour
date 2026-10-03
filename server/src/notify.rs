@@ -5,14 +5,14 @@
 //! it. The job works out who might want to know:
 //!
 //! - in a conversation, everyone else in it (a `message`);
-//! - in a category thread, the author of the post replied to (`reply`),
+//! - in a space thread, the author of the post replied to (`reply`),
 //!   members mentioned (`mention`), members watching the thread
 //!   (`watched_thread`), and for a thread's first post members watching its
-//!   category (`watched_category`).
+//!   space (`watched_space`).
 //!
 //! Each member gets at most one notification per post, of the most
 //! specific kind. Nobody is notified of their own posts, of posts in
-//! threads (or categories) they have muted, or of posts by someone they
+//! threads (or spaces) they have muted, or of posts by someone they
 //! blocked (unless that someone is staff). And nobody is notified of a post
 //! they can't read: each candidate is checked by asking the access layer
 //! for the post as them.
@@ -73,7 +73,7 @@ fn rank(kind: Kind) -> u8 {
         Kind::Mention => 4,
         Kind::Reply => 3,
         Kind::WatchedThread => 2,
-        Kind::WatchedCategory => 1,
+        Kind::WatchedSpace => 1,
         Kind::Moderation => 0,
     }
 }
@@ -93,9 +93,9 @@ fn consider(candidates: &mut BTreeMap<i64, Kind>, user_id: i64, kind: Kind) {
 async fn candidates(state: &AppState, post: &PostFacts) -> sqlx::Result<BTreeMap<i64, Kind>> {
     let db = state.db();
     let mut candidates = BTreeMap::new();
-    let watchers = stored::watchers(db, post.thread_id, post.category_id).await?;
+    let watchers = stored::watchers(db, post.thread_id, post.space_id).await?;
     let mut muted = Vec::new();
-    match post.category_id {
+    match post.space_id {
         None => {
             for user in stored::participants(db, post.thread_id).await? {
                 consider(&mut candidates, user, Kind::Message);
@@ -114,9 +114,9 @@ async fn candidates(state: &AppState, post: &PostFacts) -> sqlx::Result<BTreeMap
             for user in stored::ids_named(db, &mentioned).await? {
                 consider(&mut candidates, user, Kind::Mention);
             }
-            for (user, thread, category) in watchers {
-                // A thread's own setting wins over its category's.
-                let level = thread.or(match category {
+            for (user, thread, space) in watchers {
+                // A thread's own setting wins over its space's.
+                let level = thread.or(match space {
                     Some(WatchLevel::Muted) => Some(WatchLevel::Muted),
                     _ => None,
                 });
@@ -127,8 +127,8 @@ async fn candidates(state: &AppState, post: &PostFacts) -> sqlx::Result<BTreeMap
                     }
                     _ => {}
                 }
-                if post.seq == 1 && category == Some(WatchLevel::Watching) {
-                    consider(&mut candidates, user, Kind::WatchedCategory);
+                if post.seq == 1 && space == Some(WatchLevel::Watching) {
+                    consider(&mut candidates, user, Kind::WatchedSpace);
                 }
             }
         }
@@ -246,7 +246,7 @@ pub fn topic(kind: Kind) -> EmailTopic {
         Kind::Reply => EmailTopic::Replies,
         Kind::Mention => EmailTopic::Mentions,
         Kind::Message => EmailTopic::Messages,
-        Kind::WatchedThread | Kind::WatchedCategory => EmailTopic::Watching,
+        Kind::WatchedThread | Kind::WatchedSpace => EmailTopic::Watching,
         Kind::Moderation => EmailTopic::Moderation,
     }
 }
@@ -430,7 +430,7 @@ mod tests {
         consider(&mut c, 1, Kind::Mention);
         consider(&mut c, 1, Kind::Reply);
         assert_eq!(c[&1], Kind::Mention);
-        consider(&mut c, 2, Kind::WatchedCategory);
+        consider(&mut c, 2, Kind::WatchedSpace);
         consider(&mut c, 2, Kind::WatchedThread);
         assert_eq!(c[&2], Kind::WatchedThread);
     }

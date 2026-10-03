@@ -4,7 +4,7 @@
 //!   linking (through `/notifications/{id}`, which marks it read) to its
 //!   post; "Mark all read".
 //! - `POST /t/{id}/watch` and `POST /c/{slug}/watch`: watch, follow
-//!   normally or mute a thread, conversation or category.
+//!   normally or mute a thread, conversation or space.
 //! - `POST /settings/messages` and `POST /settings/notifications`: who may
 //!   message the member, and which notifications they want emailed.
 //! - `/unsubscribe/{token}`: the one-click unsubscribe link in notification
@@ -169,7 +169,7 @@ pub async fn watch_thread(
     Ok(see_other(&thread.href()))
 }
 
-pub async fn watch_category(
+pub async fn watch_space(
     State(state): State<AppState>,
     viewer: Viewer,
     Path(slug): Path<String>,
@@ -178,10 +178,10 @@ pub async fn watch_category(
     let Some(user) = viewer.user() else {
         return Ok(web::login_first(&format!("/c/{slug}")));
     };
-    let Some(category) = content::category_target(state.db(), &viewer, &slug).await? else {
+    let Some(space) = content::space_target(state.db(), &viewer, &slug).await? else {
         return web::not_found(&state, &viewer).await;
     };
-    let back = format!("/c/{}", category.category.slug);
+    let back = format!("/c/{}", space.space.slug);
     let Some(level) = watch_level(&fields) else {
         return web::message(
             &state,
@@ -193,13 +193,7 @@ pub async fn watch_category(
         )
         .await;
     };
-    social::set_watch(
-        state.db(),
-        user.id,
-        Watched::Category(category.category.id),
-        level,
-    )
-    .await?;
+    social::set_watch(state.db(), user.id, Watched::Space(space.space.id), level).await?;
     Ok(see_other(&back))
 }
 

@@ -19,14 +19,14 @@ pub enum Change {
     /// A post was deleted, hidden, or restored.
     PostRemoved { post_id: i64 },
     /// A thread was renamed, pinned, locked, deleted, restored or moved. For
-    /// a move, `previous_category_id` is where it was before.
+    /// a move, `previous_space_id` is where it was before.
     ThreadChanged {
         thread_id: i64,
-        previous_category_id: Option<i64>,
+        previous_space_id: Option<i64>,
     },
-    /// A category's name, description, levels, section or position changed,
+    /// A space's name, description, levels, section or position changed,
     /// or it was created. Changes the index structure, so clears `site`.
-    CategoryChanged { category_id: i64 },
+    SpaceChanged { space_id: i64 },
     /// A user was renamed or changed their post-info column.
     UserChanged { user_id: i64 },
     /// Someone joined. Changes the invite tree and the inviter's profile.
@@ -49,7 +49,7 @@ pub async fn tags_for(db: &Db, change: Change) -> sqlx::Result<Vec<Tag>> {
         Change::PostCreated { post_id } | Change::PostRemoved { post_id } => {
             if let Some(post) = post_context(db, post_id).await? {
                 tags.push(Tag::Thread(post.thread_id));
-                tags.extend(post.category_id.map(Tag::Category));
+                tags.extend(post.space_id.map(Tag::Space));
                 tags.push(Tag::User(post.author_id));
                 // A new thread that quote-forks a post adds a backlink to the
                 // post's thread.
@@ -70,12 +70,12 @@ pub async fn tags_for(db: &Db, change: Change) -> sqlx::Result<Vec<Tag>> {
         }
         Change::ThreadChanged {
             thread_id,
-            previous_category_id,
+            previous_space_id,
         } => {
             tags.push(Tag::Thread(thread_id));
-            tags.extend(previous_category_id.map(Tag::Category));
+            tags.extend(previous_space_id.map(Tag::Space));
             let thread = sqlx::query!(
-                r#"SELECT t.category_id,
+                r#"SELECT t.space_id,
                           (SELECT p.thread_id FROM posts p WHERE p.id = t.forked_from_post_id) AS forked_from_thread_id
                    FROM threads t WHERE t.id = $1"#,
                 thread_id
@@ -83,7 +83,7 @@ pub async fn tags_for(db: &Db, change: Change) -> sqlx::Result<Vec<Tag>> {
             .fetch_optional(db.pool())
             .await?;
             if let Some(thread) = thread {
-                tags.extend(thread.category_id.map(Tag::Category));
+                tags.extend(thread.space_id.map(Tag::Space));
                 tags.extend(thread.forked_from_thread_id.map(Tag::Thread));
             }
             // Post counts next to posts only count visible threads.
@@ -95,8 +95,8 @@ pub async fn tags_for(db: &Db, change: Change) -> sqlx::Result<Vec<Tag>> {
             .await?;
             tags.extend(authors.into_iter().map(Tag::User));
         }
-        Change::CategoryChanged { category_id } => {
-            tags.push(Tag::Category(category_id));
+        Change::SpaceChanged { space_id } => {
+            tags.push(Tag::Space(space_id));
             tags.push(Tag::Site);
         }
         Change::UserChanged { user_id } => {
@@ -137,14 +137,14 @@ pub async fn post_seq(db: &Db, post_id: i64) -> sqlx::Result<Option<(i64, i64)>>
 
 struct PostContext {
     thread_id: i64,
-    category_id: Option<i64>,
+    space_id: Option<i64>,
     author_id: i64,
     forked_from_thread_id: Option<i64>,
 }
 
 async fn post_context(db: &Db, post_id: i64) -> sqlx::Result<Option<PostContext>> {
     let row = sqlx::query!(
-        r#"SELECT p.thread_id, p.author_id, t.category_id,
+        r#"SELECT p.thread_id, p.author_id, t.space_id,
                   (SELECT sp.thread_id FROM posts sp WHERE sp.id = t.forked_from_post_id) AS forked_from_thread_id
            FROM posts p JOIN threads t ON t.id = p.thread_id
            WHERE p.id = $1"#,
@@ -154,7 +154,7 @@ async fn post_context(db: &Db, post_id: i64) -> sqlx::Result<Option<PostContext>
     .await?;
     Ok(row.map(|row| PostContext {
         thread_id: row.thread_id,
-        category_id: row.category_id,
+        space_id: row.space_id,
         author_id: row.author_id,
         forked_from_thread_id: row.forked_from_thread_id,
     }))

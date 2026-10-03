@@ -87,7 +87,7 @@ test("a member logs in and their pages fit the screen", async ({ page }) => {
   await expectFits(page);
   // Members see the members-only section.
   await page.goto("/");
-  await expect(page.locator(".category-list th", { hasText: "Members only" })).toBeVisible();
+  await expect(page.locator(".space-list th", { hasText: "Members only" })).toBeVisible();
   await page.locator(".nav-form button").click();
   await expect(page.locator(".topnav a[href='/login']")).toBeVisible();
 });

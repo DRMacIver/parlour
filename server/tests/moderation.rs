@@ -11,7 +11,7 @@ use parlour::settings::{self, MessageSettings, ModerationSettings};
 use parlour::store::{self, NewConversation};
 use sqlx::PgPool;
 
-/// A forum with a public category `games` and a members-only `lounge`;
+/// A forum with a public space `games` and a members-only `lounge`;
 /// members ruth, jonah and maya, who don't count as new; and staff: sam,
 /// an admin, and mo, a moderator. Everyone has a session.
 struct Setup {
@@ -31,8 +31,8 @@ struct Setup {
 async fn setup(pool: PgPool) -> Setup {
     let f = Forum::new(pool).trusting_proxy();
     f.no_new_members().await;
-    let games = f.category("games", "public", None, 0).await;
-    let lounge = f.category("lounge", "members", None, 1).await;
+    let games = f.space("games", "public", None, 0).await;
+    let lounge = f.space("lounge", "members", None, 1).await;
     let ruth = f.member("ruth", "user", None).await;
     let jonah = f.member("jonah", "user", None).await;
     let maya = f.member("maya", "user", None).await;
@@ -745,10 +745,10 @@ async fn moderators_lock_pin_rename_move_and_delete_threads(pool: PgPool) {
         &s.mo_cookie,
     )
     .await;
-    let category = s.f.page("/c/games").await;
+    let space = s.f.page("/c/games").await;
     assert!(
-        category.contains("Pinned") || category.contains("pinned"),
-        "{category}"
+        space.contains("Pinned") || space.contains("pinned"),
+        "{space}"
     );
 
     ok(
@@ -776,7 +776,7 @@ async fn moderators_lock_pin_rename_move_and_delete_threads(pool: PgPool) {
         &action,
         &[
             ("action", "move"),
-            ("category", "lounge"),
+            ("space", "lounge"),
             ("reason", "Members only"),
         ],
         &s.mo_cookie,
@@ -788,7 +788,7 @@ async fn moderators_lock_pin_rename_move_and_delete_threads(pool: PgPool) {
     assert!(!log.contains("New title"), "{log}");
     assert!(!log.contains("Old title"), "{log}");
     assert!(log.contains("a thread you can’t see"), "{log}");
-    // The move itself, into a members-only category, isn't public.
+    // The move itself, into a members-only space, isn't public.
     assert!(!log.contains("Members only"), "{log}");
     let staff_log = s.f.page_as("/mod/log", &s.mo_cookie).await;
     assert!(staff_log.contains("Members only"), "{staff_log}");
@@ -860,7 +860,7 @@ async fn moving_posts_to_a_new_thread_keeps_numbers_and_links(pool: PgPool) {
                 ("numbers", "3-4, 6"),
                 ("to", "new"),
                 ("title", "Spirit Island strategy"),
-                ("category", "games"),
+                ("space", "games"),
                 ("reason", "Split off"),
             ],
             Some(&s.mo_cookie),
@@ -983,8 +983,8 @@ async fn moving_all_posts_merges_threads(pool: PgPool) {
         response.location(),
         format!("/t/{}/main-thread", target.thread_id)
     );
-    let category = s.f.page("/c/games").await;
-    assert!(!category.contains("Duplicate"), "{category}");
+    let space = s.f.page("/c/games").await;
+    assert!(!space.contains("Duplicate"), "{space}");
     // Nonsense is refused.
     for fields in [
         vec![
@@ -1001,7 +1001,7 @@ async fn moving_all_posts_merges_threads(pool: PgPool) {
             ("numbers", "1"),
             ("to", "new"),
             ("title", ""),
-            ("category", "games"),
+            ("space", "games"),
         ],
     ] {
         let mut fields = fields;
@@ -1053,7 +1053,7 @@ async fn silenced_members_read_but_dont_write(pool: PgPool) {
         ),
         (
             format!("/p/{}/fork", t.first_post_id),
-            vec![("title", "Fork"), ("body", "Hello"), ("category", "games")],
+            vec![("title", "Fork"), ("body", "Hello"), ("space", "games")],
         ),
         (
             "/messages/new".to_owned(),
@@ -1449,8 +1449,8 @@ async fn deleting_a_spammer_removes_everything(pool: PgPool) {
         &s.mo_cookie,
     )
     .await;
-    let category = s.f.page("/c/games").await;
-    assert!(!category.contains("Best replica watches"), "{category}");
+    let space = s.f.page("/c/games").await;
+    assert!(!space.contains("Best replica watches"), "{space}");
     let page =
         s.f.page(&format!("/t/{}/real-thread", other.thread_id))
             .await;
@@ -1957,7 +1957,7 @@ fn restrictions_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle
     tries.sort();
     rt.block_on(async {
         sqlx::raw_sql(
-            "TRUNCATE settings, jobs, reports, mod_actions, posts, threads, categories, sections, users
+            "TRUNCATE settings, jobs, reports, mod_actions, posts, threads, spaces, sections, users
              RESTART IDENTITY CASCADE",
         )
         .execute(db)
@@ -1965,8 +1965,8 @@ fn restrictions_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle
         .unwrap();
         let f = Forum::new(db.clone()).without_rate_limits();
         f.no_new_members().await;
-        let games = f.category("games", "public", None, 0).await;
-        let lounge = f.category("lounge", "members", None, 1).await;
+        let games = f.space("games", "public", None, 0).await;
+        let lounge = f.space("lounge", "members", None, 1).await;
         let me = f.member("me", "user", None).await;
         let ruth = f.member("ruth", "user", None).await;
         f.member("mo", "moderator", None).await;
@@ -1981,7 +1981,11 @@ fn restrictions_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle
             let cookie = cookie.to_owned();
             async move {
                 let response = f
-                    .submit("/messages/new", &[("to", to), ("body", "Hello")], Some(&cookie))
+                    .submit(
+                        "/messages/new",
+                        &[("to", to), ("body", "Hello")],
+                        Some(&cookie),
+                    )
                     .await;
                 assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
                 response
@@ -2003,8 +2007,10 @@ fn restrictions_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle
             Standing::SuspensionOver => Some(("suspended_until", "now() - interval '1 second'")),
         };
         if let Some((column, until)) = restriction {
-            f.exec(&format!("UPDATE users SET {column} = {until} WHERE id = {me}"))
-                .await;
+            f.exec(&format!(
+                "UPDATE users SET {column} = {until} WHERE id = {me}"
+            ))
+            .await;
         }
         for attempt in tries {
             let before = state(&f).await;
@@ -2015,7 +2021,10 @@ fn restrictions_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle
                     "/c/games/new".into(),
                     vec![("title", "Mine".into()), ("body", "New".into())],
                 ),
-                Try::Reply => (format!("/t/{}/reply", t.thread_id), vec![("body", "Reply".into())]),
+                Try::Reply => (
+                    format!("/t/{}/reply", t.thread_id),
+                    vec![("body", "Reply".into())],
+                ),
                 Try::Edit => (format!("/p/{mine}/edit"), vec![("body", "Changed".into())]),
                 Try::React => (
                     format!("/p/{}/reactions", t.first_post_id),
@@ -2026,18 +2035,25 @@ fn restrictions_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle
                     vec![
                         ("title", "Fork".into()),
                         ("body", "Forked".into()),
-                        ("category", "games".into()),
+                        ("space", "games".into()),
                     ],
                 ),
                 Try::StartConversation => (
                     "/messages/new".into(),
                     vec![("to", "ruth".into()), ("body", "Hi".into())],
                 ),
-                Try::MessageMember => (format!("/messages/{with_ruth}"), vec![("body", "Hi".into())]),
-                Try::MessageStaff => (format!("/messages/{with_staff}"), vec![("body", "Sorry".into())]),
-                Try::MessageStaffAndMember => {
-                    (format!("/messages/{with_both}"), vec![("body", "Ruth, listen".into())])
-                }
+                Try::MessageMember => (
+                    format!("/messages/{with_ruth}"),
+                    vec![("body", "Hi".into())],
+                ),
+                Try::MessageStaff => (
+                    format!("/messages/{with_staff}"),
+                    vec![("body", "Sorry".into())],
+                ),
+                Try::MessageStaffAndMember => (
+                    format!("/messages/{with_both}"),
+                    vec![("body", "Ruth, listen".into())],
+                ),
                 Try::Invite => ("/invites".into(), vec![("note", "A friend".into())]),
                 Try::Report => (
                     format!("/p/{}/report", t.first_post_id),
@@ -2070,7 +2086,11 @@ fn restrictions_follow_the_rule(tc: hegel::TestCase, rt: &tokio::runtime::Handle
             );
             if !succeeded && !reading {
                 assert_eq!(after, before, "{standing:?} {attempt:?} changed something");
-                assert!(response.status.is_client_error(), "{attempt:?}: {}", response.status);
+                assert!(
+                    response.status.is_client_error(),
+                    "{attempt:?}: {}",
+                    response.status
+                );
             }
             if reading && !succeeded {
                 assert!(!response.body.contains("Members only text"));

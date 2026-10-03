@@ -18,7 +18,7 @@
         <label for="search-in">In</label>
         <select id="search-in" name="in">
           <option value="">Everywhere you can read</option>
-          {% for c in categories %}<option value="{{ c.category.slug }}"{% if self.category_selected(c.category.slug) %} selected{% endif %}>{{ c.category.name }}</option>{% endfor %}
+          {% for c in spaces %}<option value="{{ c.space.slug }}"{% if self.space_selected(c.space.slug) %} selected{% endif %}>{{ c.space.name }}</option>{% endfor %}
         </select>
       </div>
       <div class="field">

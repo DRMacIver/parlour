@@ -1,6 +1,6 @@
-// Members-only and group-restricted categories in a real browser: who sees
+// Members-only and group-restricted spaces in a real browser: who sees
 // them and how the index labels them, and an admin making a group, putting
-// a member in it and giving it a category of its own.
+// a member in it and giving it a space of its own.
 
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import { admin, expectFits, logIn, member, ownAddress } from "./helpers.js";
@@ -12,7 +12,7 @@ test.beforeEach(async ({ page }) => {
   await ownAddress(page);
 });
 
-test("visitors don't see members-only or group categories", async ({ page }) => {
+test("visitors don't see members-only or group spaces", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".flag-access")).toHaveCount(0);
   await expect(page.locator("a[href='/c/lounge']")).toHaveCount(0);
@@ -23,13 +23,13 @@ test("visitors don't see members-only or group categories", async ({ page }) => 
   await expectFits(page);
 });
 
-test("the index says who can read each category", async ({ page }) => {
+test("the index says who can read each space", async ({ page }) => {
   const username = member();
   await logIn(page, username);
   await page.goto("/");
-  const lounge = page.locator(".category-list tr", { has: page.locator("a[href='/c/lounge']") });
+  const lounge = page.locator(".space-list tr", { has: page.locator("a[href='/c/lounge']") });
   await expect(lounge.locator(".flag-access")).toHaveText("Members only");
-  const organisers = page.locator(".category-list tr", { has: page.locator("a[href='/c/organisers']") });
+  const organisers = page.locator(".space-list tr", { has: page.locator("a[href='/c/organisers']") });
   if (ORGANISERS.includes(username)) {
     await expect(organisers.locator(".flag-access")).toHaveText("Organisers group");
     await page.goto("/c/organisers");
@@ -50,14 +50,14 @@ async function loggedIn(browser: Browser, username: string) {
   return page;
 }
 
-test("an admin gives a new group a category of its own", async ({ page, browser }) => {
+test("an admin gives a new group a space of its own", async ({ page, browser }) => {
   const project = test.info().project.name;
   const slug = `e2e-${project}`;
   const groupName = `Testers ${project}`;
   await logIn(page, admin());
 
-  // The admin pages for categories and groups fit the screen.
-  for (const path of ["/admin/categories", "/admin/groups", "/admin/categories/new"]) {
+  // The admin pages for spaces and groups fit the screen.
+  for (const path of ["/admin/spaces", "/admin/groups", "/admin/spaces/new"]) {
     const response = await page.goto(path);
     expect(response?.status(), path).toBe(200);
     await expectFits(page);
@@ -82,7 +82,7 @@ test("an admin gives a new group a category of its own", async ({ page, browser 
   await page.locator("form a", { hasText: "Keep it" }).click();
   await expect(page.locator("h1")).toHaveText(groupName);
 
-  await page.goto("/admin/categories/new");
+  await page.goto("/admin/spaces/new");
   // Each choice's text starts beside its radio or checkbox, wrapping
   // under itself rather than dropping below the control.
   const misplaced = await page.evaluate(() =>
@@ -100,15 +100,15 @@ test("an admin gives a new group a category of its own", async ({ page, browser 
   await page.fill("#slug", slug);
   await page.check("input[name=read_level][value=groups]");
   await page.locator("label.choice", { hasText: groupName }).locator("input[name=read_group]").check();
-  await page.locator("form[action='/admin/categories/new'] button[type=submit]").click();
+  await page.locator("form[action='/admin/spaces/new'] button[type=submit]").click();
   await expect(page.locator(".notice-success")).toHaveText("Saved.");
-  await expect(page.locator(".admin-categories a", { hasText: `Private ${project}` })).toBeVisible();
+  await expect(page.locator(".admin-spaces a", { hasText: `Private ${project}` })).toBeVisible();
   await expectFits(page);
 
   // The member in the group reads it; visitors don't know it is there.
   const reader = await loggedIn(browser, member());
   await reader.goto("/");
-  const row = reader.locator(".category-list tr", { has: reader.locator(`a[href='/c/${slug}']`) });
+  const row = reader.locator(".space-list tr", { has: reader.locator(`a[href='/c/${slug}']`) });
   await expect(row.locator(".flag-access")).toHaveText(`${groupName} group`);
   expect((await reader.goto(`/c/${slug}`))?.status()).toBe(200);
   await reader.context().close();
@@ -146,30 +146,30 @@ async function longGroupNamesFit(page: Page, browser: Browser) {
     await expect(page.locator(".notice-success")).toHaveText("Added to the group.");
   }
 
-  const categories = [
+  const spaces = [
     { slug: `wide-many-${project}`, groups: ids.slice(0, 3) },
     { slug: `wide-long-${project}`, groups: ids.slice(3) },
   ];
-  for (const { slug, groups } of categories) {
-    await page.goto("/admin/categories/new");
+  for (const { slug, groups } of spaces) {
+    await page.goto("/admin/spaces/new");
     await page.fill("#name", `Planning ${slug}`);
     await page.fill("#slug", slug);
     await page.check("input[name=read_level][value=groups]");
     for (const id of groups) {
       await page.check(`input[name=read_group][value='${id}']`);
     }
-    await page.locator("form[action='/admin/categories/new'] button[type=submit]").click();
+    await page.locator("form[action='/admin/spaces/new'] button[type=submit]").click();
     await expect(page.locator(".notice-success")).toHaveText("Saved.");
   }
   await expectFits(page);
 
   const viewer = await loggedIn(browser, reader);
   await viewer.goto("/");
-  for (const { slug } of categories) {
+  for (const { slug } of spaces) {
     await expect(viewer.locator(`a[href='/c/${slug}']`)).toBeVisible();
   }
   await expectFits(viewer);
-  for (const { slug } of categories) {
+  for (const { slug } of spaces) {
     expect((await viewer.goto(`/c/${slug}`))?.status()).toBe(200);
     await expect(viewer.locator("h1 .flag-access")).toContainText("group");
     await expectFits(viewer);

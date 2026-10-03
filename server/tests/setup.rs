@@ -537,15 +537,15 @@ async fn setup_doesnt_copy_the_environments_smtp_password(db: PgPool) {
 }
 
 /// The last step points the new admin at what to do before members
-/// arrive: make categories, and know that new members' first posts are
+/// arrive: make spaces, and know that new members' first posts are
 /// held for approval.
 #[sqlx::test]
-async fn setup_ends_by_pointing_at_categories_and_held_posts(db: PgPool) {
+async fn setup_ends_by_pointing_at_spaces_and_held_posts(db: PgPool) {
     let forum = Forum::new(db);
     let sam = forum.member("sam", "admin", None).await;
     let cookie = forum.session(sam).await;
     let page = forum.page_as("/setup/invites", &cookie).await;
-    assert!(page.contains("href=\"/admin/categories\""), "{page}");
+    assert!(page.contains("href=\"/admin/spaces\""), "{page}");
     assert!(page.contains("href=\"/admin/moderation\""), "{page}");
     assert!(page.contains("first 2 posts"), "{page}");
     parlour::settings::set(

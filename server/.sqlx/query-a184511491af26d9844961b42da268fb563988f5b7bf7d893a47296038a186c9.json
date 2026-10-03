@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT read_level FROM spaces WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "read_level",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "read_level"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a184511491af26d9844961b42da268fb563988f5b7bf7d893a47296038a186c9"
+}

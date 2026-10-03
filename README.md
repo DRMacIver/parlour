@@ -1,6 +1,6 @@
 # Parlour
 
-A minimal, fast, self-hosted web forum in the old-school style: categories,
+A minimal, fast, self-hosted web forum in the old-school style: spaces,
 flat threads with numbered posts, quote-forks, reactions, direct messages,
 invites with a public invite tree, groups, moderation, search and image
 uploads. Pages are plain server-rendered HTML that work without JavaScript;
@@ -62,7 +62,7 @@ variables.
 ### The sample forum
 
 `parlour seed` creates "The Tuesday Club", a board games and books club
-taken from the mockups: 27 members (and one deleted spammer), 3 sections, 8 categories (one
+taken from the mockups: 27 members (and one deleted spammer), 3 sections, 8 spaces (one
 members-only, one for the Organisers group only), about 70 threads and over
 1,500 posts, conversations, reactions, read markers, edit history, and a
 moderation queue with reports and a held post.
@@ -78,7 +78,7 @@ Every member's password is `tuesday-club`. Some useful accounts:
 | `wren` | a new member whose first post is waiting for approval |
 
 `parlour seed` refuses to touch a database that already has users or
-categories. `parlour seed --reset` deletes the sample content first, but
+spaces. `parlour seed --reset` deletes the sample content first, but
 only if `parlour seed` created it and nothing has been added since. To
 start completely afresh:
 
@@ -97,8 +97,8 @@ afterwards.
 Run `cargo run` against an empty database instead of seeding it. The server
 logs a one-time link, `http://localhost:8080/setup?token=…`, which walks
 through creating the admin account, the email settings (with a test
-send) and the first invitations. Then make some categories in Admin →
-Categories: members have nowhere to post until there are some. By default
+send) and the first invitations. Then make some spaces in Admin →
+Spaces: members have nowhere to post until there are some. By default
 each new member's first 2 posts are held for a moderator to approve; change
 that in Admin → Moderation (0 turns it off).
 

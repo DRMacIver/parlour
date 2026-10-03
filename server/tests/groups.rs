@@ -1,4 +1,4 @@
-//! Members-only and group-restricted categories, end to end (DESIGN.md
+//! Members-only and group-restricted spaces, end to end (DESIGN.md
 //! §3.1): who can read and post in them, what the index says about them,
 //! and that membership changes take effect straight away.
 
@@ -25,9 +25,9 @@ async fn club(pool: PgPool) -> Club {
     let ruth = f.member("ruth", "user", None).await;
     let jonah = f.member("jonah", "user", None).await;
     let sam = f.member("sam", "moderator", None).await;
-    f.category("games", "public", None, 0).await;
-    f.category("lounge", "members", None, 1).await;
-    let planning = f.category("planning", "public", None, 2).await;
+    f.space("games", "public", None, 0).await;
+    f.space("lounge", "members", None, 1).await;
+    let planning = f.space("planning", "public", None, 2).await;
     let organisers = f.group("organisers", "Organisers").await;
     f.join_group(organisers, ruth).await;
     f.restrict(planning, &[organisers], None).await;
@@ -56,7 +56,7 @@ impl Club {
         format!("/t/{}/budget-for-2027", self.thread.thread_id)
     }
 
-    /// The pages about the restricted thread and its category.
+    /// The pages about the restricted thread and its space.
     fn private_paths(&self) -> Vec<String> {
         vec![
             "/c/planning".to_owned(),
@@ -77,10 +77,10 @@ impl Club {
 const WRITE_PAGES: [&str; 3] = ["/fork", "/reply", "/new"];
 
 #[sqlx::test]
-async fn only_group_members_and_staff_read_a_group_category(pool: PgPool) {
+async fn only_group_members_and_staff_read_a_group_space(pool: PgPool) {
     let club = club(pool).await;
     // Visitors and members outside the group get a 404, not a 403, so the
-    // category's existence isn't revealed.
+    // space's existence isn't revealed.
     for cookie in [None, Some(club.jonah_cookie.as_str())] {
         for path in club.private_paths() {
             let response = club.f.get_as(&path, cookie).await;
@@ -125,10 +125,10 @@ async fn only_group_members_and_staff_read_a_group_category(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn the_index_says_who_can_read_each_category(pool: PgPool) {
+async fn the_index_says_who_can_read_each_space(pool: PgPool) {
     let club = club(pool).await;
     let index = club.f.page_as("/", &club.ruth_cookie).await;
-    // As in the mockup, a padlock marks members-only categories and a
+    // As in the mockup, a padlock marks members-only spaces and a
     // pair of people group ones (Main.dc.html).
     let flags = access_flags(&index);
     assert_eq!(flags.len(), 2, "{index}");
@@ -142,11 +142,11 @@ async fn the_index_says_who_can_read_each_category(pool: PgPool) {
         "{}",
         flags[1]
     );
-    let category = club.f.page_as("/c/planning", &club.ruth_cookie).await;
-    assert!(category.contains("Organisers group"));
+    let space = club.f.page_as("/c/planning", &club.ruth_cookie).await;
+    assert!(space.contains("Organisers group"));
     let lounge = club.f.page_as("/c/lounge", &club.ruth_cookie).await;
     assert!(lounge.contains("Members only"));
-    // Staff see group categories that no group may read, as staff only.
+    // Staff see group spaces that no group may read, as staff only.
     club.f.restrict(club.planning, &[], None).await;
     let index = club.f.page_as("/", &club.staff_cookie).await;
     assert!(
@@ -195,10 +195,10 @@ async fn joining_and_leaving_a_group_takes_effect_at_once(pool: PgPool) {
         club.f.get_as(&path, Some(&club.ruth_cookie)).await.status,
         StatusCode::NOT_FOUND
     );
-    // Opening the category to members lets everyone logged in read it.
+    // Opening the space to members lets everyone logged in read it.
     club.f
         .exec(&format!(
-            "UPDATE categories SET read_level = 'members' WHERE id = {}",
+            "UPDATE spaces SET read_level = 'members' WHERE id = {}",
             club.planning
         ))
         .await;
@@ -223,7 +223,7 @@ async fn post(f: &Forum, cookie: &str) -> StatusCode {
 async fn group_members_post_where_their_group_may_write(pool: PgPool) {
     let club = club(pool).await;
     // Anyone can read the notices; only organisers post them.
-    let notices = club.f.category("notices", "public", None, 3).await;
+    let notices = club.f.space("notices", "public", None, 3).await;
     let db = club.f.state.db();
     let viewer = parlour::viewer::Viewer::User(
         parlour::sessions::user_ctx(db, club.ruth)
@@ -231,14 +231,14 @@ async fn group_members_post_where_their_group_may_write(pool: PgPool) {
             .unwrap()
             .unwrap(),
     );
-    let mut settings = parlour::content::category_by_id(db, &viewer, notices)
+    let mut settings = parlour::content::space_by_id(db, &viewer, notices)
         .await
         .unwrap()
         .unwrap()
         .settings();
     settings.write_level = "groups".into();
     settings.write_groups = vec![club.organisers];
-    parlour::store::update_category(db, notices, &settings.clean().unwrap())
+    parlour::store::update_space(db, notices, &settings.clean().unwrap())
         .await
         .unwrap()
         .unwrap();
@@ -261,7 +261,7 @@ async fn group_members_post_where_their_group_may_write(pool: PgPool) {
         post(&club.f, &club.staff_cookie).await,
         StatusCode::SEE_OTHER
     );
-    // Group members also post in a group category their group may read.
+    // Group members also post in a group space their group may read.
     let response = club
         .f
         .submit(
@@ -277,13 +277,13 @@ async fn group_members_post_where_their_group_may_write(pool: PgPool) {
 async fn group_posts_can_only_be_quoted_somewhere_as_private(pool: PgPool) {
     let club = club(pool).await;
     let board = club.f.group("board", "Board").await;
-    let both = club.f.category("both", "public", None, 4).await;
+    let both = club.f.space("both", "public", None, 4).await;
     club.f.restrict(both, &[club.organisers, board], None).await;
-    let minutes = club.f.category("minutes", "public", None, 5).await;
+    let minutes = club.f.space("minutes", "public", None, 5).await;
     club.f.restrict(minutes, &[club.organisers], None).await;
     let path = format!("/p/{}/fork", club.thread.first_post_id);
     let form = club.f.page_as(&path, &club.ruth_cookie).await;
-    // Only categories read by no one outside the organisers.
+    // Only spaces read by no one outside the organisers.
     assert!(form.contains("value=\"minutes\""), "{form}");
     assert!(form.contains("Minutes (Organisers group)"), "{form}");
     for slug in ["games", "lounge", "both"] {
@@ -292,7 +292,7 @@ async fn group_posts_can_only_be_quoted_somewhere_as_private(pool: PgPool) {
             .f
             .submit(
                 &path,
-                &[("title", "Leak"), ("category", slug), ("body", "x")],
+                &[("title", "Leak"), ("space", slug), ("body", "x")],
                 Some(&club.ruth_cookie),
             )
             .await;
@@ -302,7 +302,7 @@ async fn group_posts_can_only_be_quoted_somewhere_as_private(pool: PgPool) {
         .f
         .submit(
             &path,
-            &[("title", "Minuted"), ("category", "minutes"), ("body", "x")],
+            &[("title", "Minuted"), ("space", "minutes"), ("body", "x")],
             Some(&club.ruth_cookie),
         )
         .await;

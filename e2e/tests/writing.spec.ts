@@ -1,7 +1,7 @@
 // Writing in a real browser, with and without JavaScript, at 320px and
 // 1280px: starting a thread with a preview, the quick reply, quoting,
 // editing, reactions, quote-forks, deleting, edit history and marking a
-// category read. Every page must fit the screen and need no JavaScript.
+// space read. Every page must fit the screen and need no JavaScript.
 
 import { expect, test, type Page } from "@playwright/test";
 import { expectFits, expectOnScreen, logIn, member, ownAddress, preview, withJs } from "./helpers.js";
@@ -37,7 +37,7 @@ test("a member starts a thread, replies, quotes, edits, reacts and deletes", asy
   await expect(lastPost(page).locator(".post-body strong")).toHaveText("Heat");
   await expectFits(page);
   const threadUrl = page.url();
-  // The new thread's long title, as the category's last post on the index
+  // The new thread's long title, as the space's last post on the index
   // and in the thread lists, still fits a narrow screen.
   for (const path of ["/", "/latest", "/c/board-games"]) {
     await page.goto(path);
@@ -114,7 +114,7 @@ test("a member quotes a post into a new thread", async ({ page }) => {
   }
   await expect(form.locator(".embed .post-body")).toContainText(sourceText);
   await page.fill(`${prefix}title`, title);
-  await page.selectOption(`${prefix}category`, "board-games");
+  await page.selectOption(`${prefix}space`, "board-games");
   await page.fill(`${prefix}body`, "This deserves its own thread.");
   await form.locator(".composer button[type=submit]:not([name])").click();
   await expect(page.locator("h1")).toHaveText(title);
@@ -140,7 +140,7 @@ test("edit history shows what changed", async ({ page }) => {
   await expectFits(page);
 });
 
-test("unread counts lead to the first unread post, and categories can be marked read", async ({ page }) => {
+test("unread counts lead to the first unread post, and spaces can be marked read", async ({ page }) => {
   await logIn(page, member());
   await page.goto("/c/books");
   await expectFits(page);

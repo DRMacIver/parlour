@@ -47,7 +47,7 @@ pub async fn members_named(db: &Db, usernames: &[String]) -> sqlx::Result<Vec<Re
 }
 
 /// How long a member has been here and how much they have written in
-/// categories, for the new-member limits (DESIGN.md §7).
+/// spaces, for the new-member limits (DESIGN.md §7).
 pub struct Standing {
     pub days: i64,
     pub posts: i64,
@@ -57,7 +57,7 @@ pub async fn standing(db: &Db, user_id: i64) -> sqlx::Result<Standing> {
     let row = sqlx::query!(
         r#"SELECT extract(epoch FROM now() - u.created_at)::bigint / 86400 AS "days!",
                   (SELECT count(*) FROM posts p JOIN threads t ON t.id = p.thread_id
-                   WHERE p.author_id = u.id AND t.category_id IS NOT NULL
+                   WHERE p.author_id = u.id AND t.space_id IS NOT NULL
                      AND p.deleted_at IS NULL AND p.hidden_at IS NULL) AS "posts!"
            FROM users u WHERE u.id = $1"#,
         user_id
@@ -247,7 +247,7 @@ pub async fn blocked_members(db: &Db, user_id: i64) -> sqlx::Result<Vec<UserRef>
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WatchLevel {
-    /// Notify about every new post (in a thread) or thread (in a category).
+    /// Notify about every new post (in a thread) or thread (in a space).
     Watching,
     /// Notify about replies and mentions only.
     #[default]
@@ -284,7 +284,7 @@ impl WatchLevel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Watched {
     Thread(i64),
-    Category(i64),
+    Space(i64),
 }
 
 pub async fn set_watch<'c>(
@@ -294,25 +294,25 @@ pub async fn set_watch<'c>(
     level: WatchLevel,
 ) -> sqlx::Result<()> {
     let mut tx = db.open(KEY).begin().await?;
-    let (thread_id, category_id) = match on {
+    let (thread_id, space_id) = match on {
         Watched::Thread(id) => (Some(id), None),
-        Watched::Category(id) => (None, Some(id)),
+        Watched::Space(id) => (None, Some(id)),
     };
     sqlx::query!(
         "DELETE FROM watches WHERE user_id = $1 AND thread_id IS NOT DISTINCT FROM $2
-         AND category_id IS NOT DISTINCT FROM $3",
+         AND space_id IS NOT DISTINCT FROM $3",
         user_id,
         thread_id,
-        category_id
+        space_id
     )
     .execute(&mut *tx)
     .await?;
     if level != WatchLevel::Normal {
         sqlx::query!(
-            "INSERT INTO watches (user_id, thread_id, category_id, level) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO watches (user_id, thread_id, space_id, level) VALUES ($1, $2, $3, $4)",
             user_id,
             thread_id,
-            category_id,
+            space_id,
             level.as_str()
         )
         .execute(&mut *tx)
@@ -322,16 +322,16 @@ pub async fn set_watch<'c>(
 }
 
 pub async fn watch_level(db: &Db, user_id: i64, on: Watched) -> sqlx::Result<WatchLevel> {
-    let (thread_id, category_id) = match on {
+    let (thread_id, space_id) = match on {
         Watched::Thread(id) => (Some(id), None),
-        Watched::Category(id) => (None, Some(id)),
+        Watched::Space(id) => (None, Some(id)),
     };
     let level = sqlx::query_scalar!(
         "SELECT level FROM watches WHERE user_id = $1 AND thread_id IS NOT DISTINCT FROM $2
-         AND category_id IS NOT DISTINCT FROM $3",
+         AND space_id IS NOT DISTINCT FROM $3",
         user_id,
         thread_id,
-        category_id
+        space_id
     )
     .fetch_optional(db.pool())
     .await?;
@@ -349,7 +349,7 @@ pub struct EmailPrefs {
     pub replies: bool,
     pub mentions: bool,
     pub messages: bool,
-    /// New posts in watched threads, and new threads in watched categories.
+    /// New posts in watched threads, and new threads in watched spaces.
     pub watching: bool,
     pub moderation: bool,
 }
@@ -409,7 +409,7 @@ impl EmailTopic {
             EmailTopic::Replies => "replies to your posts",
             EmailTopic::Mentions => "mentions of you",
             EmailTopic::Messages => "new messages",
-            EmailTopic::Watching => "threads and categories you watch",
+            EmailTopic::Watching => "threads and spaces you watch",
             EmailTopic::Moderation => "notes from the moderators",
             EmailTopic::All => "anything",
         }

@@ -19,7 +19,7 @@ struct Setup {
 async fn setup(pool: PgPool) -> Setup {
     let f = Forum::new(pool);
     f.no_new_members().await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let ruth = f.member("ruth", "user", None).await;
     let cookie = f.session(ruth).await;
     let thread = f.thread(games, ruth, "Heat", "We played Heat.").await;

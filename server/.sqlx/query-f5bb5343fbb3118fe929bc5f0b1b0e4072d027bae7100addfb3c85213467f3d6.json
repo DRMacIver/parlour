@@ -1,0 +1,175 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.id AS \"id!\", c.slug AS \"slug!\", c.name AS \"name!\", c.description AS \"description!\",\n               c.position AS \"position!\", c.section_id AS \"section_id?\", c.section_name AS \"section_name?\",\n               c.read_level AS \"read_level!\", c.write_level AS \"write_level!\",\n               c.read_groups AS \"read_groups!\", c.write_groups AS \"write_groups!\",\n               c.group_names AS \"group_names!\", c.write_group_names AS \"write_group_names!\"\n        FROM space_targets c\n        WHERE space_readable(c.read_level, c.id, $1, $2)\n          AND ($3::bigint IS NULL OR c.id = $3)\n          AND ($4::text IS NULL OR c.slug = $4)\n        ORDER BY c.section_position NULLS FIRST, c.section_id NULLS FIRST, c.position, c.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "slug!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "description!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "position!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "section_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "section_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "section_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "section_name"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "read_level!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "read_level"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "write_level!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "write_level"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "read_groups!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "read_groups"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "write_groups!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "write_groups"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "group_names!",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "group_names"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "write_group_names!",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "write_group_names"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "f5bb5343fbb3118fe929bc5f0b1b0e4072d027bae7100addfb3c85213467f3d6"
+}

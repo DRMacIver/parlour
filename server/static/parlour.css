@@ -235,7 +235,7 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
 .site-footer { border-top: 1px solid var(--ink); background: var(--panel); font-size: var(--font-size-small); color: var(--ink-muted); }
 .site-footer .wrap { padding-top: 12px; padding-bottom: 12px; }
 
-/* --------------------------------------------- Category and thread lists */
+/* --------------------------------------------- Space and thread lists */
 
 .list {
   width: 100%;
@@ -581,7 +581,7 @@ img.avatar { object-fit: cover; background: var(--rule); filter: none; }
 .role-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .role-form select { min-height: 28px; }
 
-/* Who can read a category, beside its name: a ruled label, not a pill. */
+/* Who can read a space, beside its name: a ruled label, not a pill. */
 .flag-access {
   display: inline-block;
   padding: 0 5px;
@@ -597,7 +597,7 @@ img.avatar { object-fit: cover; background: var(--rule); filter: none; }
 .page-title .flag-access { font-size: 15px; vertical-align: middle; }
 .flag-icon { margin-right: 4px; vertical-align: -1px; }
 
-/* The admin pages for categories and groups. */
+/* The admin pages for spaces and groups. */
 .admin-section-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .admin-section-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .admin-section-bar input {
@@ -614,7 +614,7 @@ img.avatar { object-fit: cover; background: var(--rule); filter: none; }
 }
 .admin-section-bar input[type="number"] { width: 5em; }
 .admin-section-bar .button-quiet { color: var(--on-ink); border-color: var(--on-ink); }
-.admin-category-name { display: grid; flex: 1 1 220px; min-width: 0; }
+.admin-space-name { display: grid; flex: 1 1 220px; min-width: 0; }
 .choice-group { display: grid; gap: 2px; margin: 2px 0 0 24px; }
 .with-sidebar > div > .panel { margin-bottom: 16px; }
 
@@ -1001,7 +1001,7 @@ p.quick-reply { font-style: italic; }
 .panel-list { margin: 0 0 12px; padding-left: 1.2em; }
 .panel-list li { margin-bottom: 4px; }
 
-/* Watching a thread, conversation or category. */
+/* Watching a thread, conversation or space. */
 .watch-form { gap: 6px; font-size: 15px; color: var(--ink-muted); }
 .watch-form label { font-variant: small-caps; letter-spacing: 0.08em; }
 .watch-form select {

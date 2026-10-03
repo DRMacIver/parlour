@@ -171,7 +171,7 @@ test("visitors can write to the moderators", async ({ page }) => {
   await page.locator("footer a", { hasText: "Contact the moderators" }).click();
   await expectFits(page);
   await page.fill("#email", "worried@example.org");
-  await page.fill("#message", `Someone is spamming the Games category (${test.info().project.name})`);
+  await page.fill("#message", `Someone is spamming the Games space (${test.info().project.name})`);
   await page.locator("button", { hasText: "Send to the moderators" }).click();
   await expect(page.getByText("Your message has gone to the moderators")).toBeVisible();
   await expectFits(page);

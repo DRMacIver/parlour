@@ -1,6 +1,6 @@
 // A new forum, from the first run to its first conversation, in a real
 // browser: the setup wizard (admin account, email with a test send through
-// Mailpit, the first invitations), a category, a newcomer joining with the
+// Mailpit, the first invitations), a space, a newcomer joining with the
 // invitation link, posting, a reply quoting them, and reactions. It runs
 // twice, without JavaScript at 320px and with it at 1280px, each against
 // an empty forum of its own (see server.mjs).
@@ -82,11 +82,11 @@ test("a new forum is set up, and its first members talk", async ({ page, browser
   await expect(page.locator(".site-name")).toHaveText("The Thursday Club");
   await expect(page.locator(".nav-user")).toHaveText("founder");
 
-  // A category to talk in.
-  await page.goto("/admin/categories/new");
+  // A space to talk in.
+  await page.goto("/admin/spaces/new");
   await page.fill("#name", "General");
   await page.fill("#slug", "general");
-  await page.locator("form[action='/admin/categories/new'] button[type=submit]").click();
+  await page.locator("form[action='/admin/spaces/new'] button[type=submit]").click();
   await expect(page.locator(".notice-success")).toHaveText("Saved.");
 
   // A newcomer joins with the link, in a browser of their own.

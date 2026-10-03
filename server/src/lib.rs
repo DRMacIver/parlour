@@ -223,7 +223,7 @@ pub fn app(state: AppState) -> Router {
     let pages = Router::new()
         .route("/", get(pages::index))
         .route("/latest", get(pages::latest))
-        .route("/c/{slug}", get(pages::category))
+        .route("/c/{slug}", get(pages::space))
         .route("/t/{id}", get(pages::thread_without_slug))
         .route("/t/{id}/unread", get(pages::thread_unread))
         .route("/t/{id}/{slug}", get(pages::thread))
@@ -269,8 +269,8 @@ pub fn app(state: AppState) -> Router {
             "/c/{slug}/new",
             get(write_pages::new_thread_page).post(write_pages::new_thread),
         )
-        .route("/c/{slug}/read", post(write_pages::mark_category_read))
-        .route("/c/{slug}/watch", post(notification_pages::watch_category))
+        .route("/c/{slug}/read", post(write_pages::mark_space_read))
+        .route("/c/{slug}/watch", post(notification_pages::watch_space))
         .route("/t/{id}/watch", post(notification_pages::watch_thread))
         .route(
             "/t/{id}/reply",
@@ -452,19 +452,16 @@ pub fn app(state: AppState) -> Router {
             get(write_pages::admin_reactions_page).post(write_pages::admin_reactions),
         )
         .route("/admin/users/{id}/role", post(admin_pages::change_role))
-        .route("/admin/categories", get(admin_forum::categories_page))
+        .route("/admin/spaces", get(admin_forum::spaces_page))
         .route(
-            "/admin/categories/new",
-            get(admin_forum::new_category_page).post(admin_forum::create_category),
+            "/admin/spaces/new",
+            get(admin_forum::new_space_page).post(admin_forum::create_space),
         )
         .route(
-            "/admin/categories/{id}",
-            get(admin_forum::category_page).post(admin_forum::update_category),
+            "/admin/spaces/{id}",
+            get(admin_forum::space_page).post(admin_forum::update_space),
         )
-        .route(
-            "/admin/categories/{id}/delete",
-            post(admin_forum::delete_category),
-        )
+        .route("/admin/spaces/{id}/delete", post(admin_forum::delete_space))
         .route("/admin/sections", post(admin_forum::create_section))
         .route("/admin/sections/{id}", post(admin_forum::update_section))
         .route(

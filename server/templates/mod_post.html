@@ -36,7 +36,7 @@
   <ul class="mod-links">
     <li><a href="/p/{{ post.post_id }}/edit">Edit the post</a> (you’ll be asked for a reason)</li>
     {% if post.edited_at.is_some() %}<li><a href="/p/{{ post.post_id }}/revisions">See its history</a>, where earlier versions can be redacted{% if !revisions.is_empty() %} ({{ crate::format::plural(revisions.len() as i64, "version", "versions") }} not redacted){% endif %}</li>{% endif %}
-    {% if post.thread.category().is_some() %}<li><a href="/mod/t/{{ post.thread.thread.id }}">Moderate the thread</a>, or move this post elsewhere</li>{% endif %}
+    {% if post.thread.space().is_some() %}<li><a href="/mod/t/{{ post.thread.thread.id }}">Moderate the thread</a>, or move this post elsewhere</li>{% endif %}
     <li><a href="/mod/users/{{ post.author.username }}">The author’s record</a></li>
     {% for url in images %}<li><a href="/mod{{ url }}">Image {{ loop.index }}</a> in the post: see where else it is shown, or remove it everywhere</li>{% endfor %}
   </ul>

@@ -10,7 +10,7 @@
 <section class="panel" aria-labelledby="notifications-heading">
   <h2 class="panel-bar" id="notifications-heading">{% if unread > 0 %}{{ crate::format::count(unread) }} unread{% else %}All read{% endif %}</h2>
   {% if list.rows.is_empty() %}
-  <p class="empty">Nothing yet. You’ll hear here when someone replies to you, mentions you or sends you a message, and about threads and categories you watch.</p>
+  <p class="empty">Nothing yet. You’ll hear here when someone replies to you, mentions you or sends you a message, and about threads and spaces you watch.</p>
   {% else %}
   <ul class="notification-list">
     {% for n in list.rows %}
@@ -32,5 +32,5 @@
   {% endif %}
 </section>
 {% call m::pagination(pagination, "Pages of notifications") %}{% endcall %}
-<p class="panel-foot">Choose which notifications are emailed to you in <a href="/settings#email">your settings</a>. Watch or mute a thread or category from its page.</p>
+<p class="panel-foot">Choose which notifications are emailed to you in <a href="/settings#email">your settings</a>. Watch or mute a thread or space from its page.</p>
 {% endblock %}

@@ -92,7 +92,7 @@ struct MemberRow {
     silenced_until: Option<chrono::DateTime<chrono::Utc>>,
     suspended_until: Option<chrono::DateTime<chrono::Utc>>,
     group_ids: Vec<i64>,
-    group_category_ids: Vec<i64>,
+    group_space_ids: Vec<i64>,
     blocked_user_ids: Vec<i64>,
 }
 
@@ -107,7 +107,7 @@ impl From<MemberRow> for UserCtx {
             role: Role::parse(&row.role).unwrap_or(Role::User),
             created_at: row.created_at,
             group_ids: row.group_ids,
-            group_category_ids: row.group_category_ids,
+            group_space_ids: row.group_space_ids,
             silenced_until: row.silenced_until,
             suspended_until: row.suspended_until,
             blocked_user_ids: row.blocked_user_ids,
@@ -132,7 +132,7 @@ async fn session(db: &Db, token: &str) -> sqlx::Result<Option<SessionRow>> {
                   m.id AS "id!", m.username::text AS "username!", m.display_name AS "display_name!",
                   m.email::text AS "email!", m.verified AS "verified!", m.role AS "role!",
                   m.created_at AS "created_at!", m.silenced_until, m.suspended_until,
-                  m.group_ids AS "group_ids!", m.group_category_ids AS "group_category_ids!",
+                  m.group_ids AS "group_ids!", m.group_space_ids AS "group_space_ids!",
                   m.blocked_user_ids AS "blocked_user_ids!"
            FROM sessions s JOIN member_contexts m ON m.id = s.user_id
            WHERE s.token_hash = $1 AND s.last_seen_at > now() - make_interval(days => $2)"#,
@@ -154,7 +154,7 @@ async fn session(db: &Db, token: &str) -> sqlx::Result<Option<SessionRow>> {
             silenced_until: row.silenced_until,
             suspended_until: row.suspended_until,
             group_ids: row.group_ids,
-            group_category_ids: row.group_category_ids,
+            group_space_ids: row.group_space_ids,
             blocked_user_ids: row.blocked_user_ids,
         },
     }))
@@ -194,7 +194,7 @@ pub async fn still_current(db: &Db, token: &str) -> sqlx::Result<Option<UserCtx>
 }
 
 /// Everything about a member that decides what they may see and do, as
-/// it is now: their role, their groups and the categories those groups may
+/// it is now: their role, their groups and the spaces those groups may
 /// read, and whom they've blocked. `None` if the account doesn't exist or
 /// was deleted.
 pub async fn user_ctx(db: &Db, user_id: i64) -> sqlx::Result<Option<UserCtx>> {
@@ -203,7 +203,7 @@ pub async fn user_ctx(db: &Db, user_id: i64) -> sqlx::Result<Option<UserCtx>> {
         r#"SELECT m.id AS "id!", m.username::text AS "username!", m.display_name AS "display_name!",
                   m.email::text AS "email!", m.verified AS "verified!", m.role AS "role!",
                   m.created_at AS "created_at!", m.silenced_until, m.suspended_until,
-                  m.group_ids AS "group_ids!", m.group_category_ids AS "group_category_ids!",
+                  m.group_ids AS "group_ids!", m.group_space_ids AS "group_space_ids!",
                   m.blocked_user_ids AS "blocked_user_ids!"
            FROM member_contexts m WHERE m.id = $1"#,
         user_id,

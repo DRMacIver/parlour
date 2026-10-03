@@ -1,6 +1,6 @@
 //! Pages for writing (DESIGN.md §3.2–3.5): the composer for new threads,
 //! replies, edits and quote-forks, with a server-rendered preview; deleting
-//! a post; reactions; edit history; marking a category read; and the
+//! a post; reactions; edit history; marking a space read; and the
 //! admin's list of reactions.
 //!
 //! Every form is a plain HTML form that works without JavaScript. The
@@ -15,7 +15,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use crate::AppState;
 use crate::changes::Change;
 use crate::content::{
-    self, CategoryTarget, Deps, PostHistory, PostReactions, PostTarget, ReactionType, ThreadTarget,
+    self, Deps, PostHistory, PostReactions, PostTarget, ReactionType, SpaceTarget, ThreadTarget,
 };
 use crate::diff::{self, Segment};
 use crate::error::AppError;
@@ -72,10 +72,10 @@ const TOO_FAST_PREVIEW: &str =
 
 /// What the composer is for.
 enum Compose {
-    NewThread(CategoryTarget),
+    NewThread(SpaceTarget),
     Reply(ThreadTarget),
     Edit(PostTarget),
-    Fork(PostTarget, Vec<CategoryTarget>),
+    Fork(PostTarget, Vec<SpaceTarget>),
 }
 
 /// What has been typed so far.
@@ -84,7 +84,7 @@ struct Draft {
     title: String,
     body: String,
     reply_to: Option<i64>,
-    category: String,
+    space: String,
     /// A moderator's reason for editing someone else's post.
     reason: String,
 }
@@ -96,7 +96,7 @@ impl Draft {
             title: field(fields, "title").unwrap_or_default().to_owned(),
             body: field(fields, "body").unwrap_or_default().to_owned(),
             reply_to: field(fields, "reply_to").and_then(|v| v.trim().parse().ok()),
-            category: field(fields, "category").unwrap_or_default().to_owned(),
+            space: field(fields, "space").unwrap_or_default().to_owned(),
         }
     }
 }
@@ -112,7 +112,7 @@ struct ReplyChoice {
     username: String,
 }
 
-struct CategoryOption {
+struct SpaceOption {
     slug: String,
     label: String,
     selected: bool,
@@ -127,7 +127,7 @@ struct ComposeTemplate {
     form_label: &'static str,
     action: String,
     title: Option<String>,
-    categories: Vec<CategoryOption>,
+    spaces: Vec<SpaceOption>,
     reply_to: Option<ReplyChoice>,
     body: String,
     body_label: &'static str,
@@ -140,16 +140,16 @@ struct ComposeTemplate {
     mod_reason: Option<String>,
 }
 
-fn category_crumbs(category: &CategoryTarget) -> Vec<Crumb> {
+fn space_crumbs(space: &SpaceTarget) -> Vec<Crumb> {
     vec![Crumb {
-        href: format!("/c/{}", category.category.slug),
-        label: category.category.name.clone(),
+        href: format!("/c/{}", space.space.slug),
+        label: space.space.name.clone(),
     }]
 }
 
 fn thread_crumbs(thread: &ThreadTarget) -> Vec<Crumb> {
-    let mut crumbs = match thread.category() {
-        Some(category) => category_crumbs(category),
+    let mut crumbs = match thread.space() {
+        Some(space) => space_crumbs(space),
         None => vec![Crumb {
             href: "/messages".to_owned(),
             label: "Messages".to_owned(),
@@ -162,16 +162,16 @@ fn thread_crumbs(thread: &ThreadTarget) -> Vec<Crumb> {
     crumbs
 }
 
-/// A category's name with who can read it, as in "Lounge (members only)"
+/// A space's name with who can read it, as in "Lounge (members only)"
 /// or "Planning (Organisers group)".
-pub(crate) fn category_label(category: &CategoryTarget) -> String {
-    match format::access_label(&category.read_level, &category.group_names) {
-        None => category.category.name.clone(),
+pub(crate) fn space_label(space: &SpaceTarget) -> String {
+    match format::access_label(&space.read_level, &space.group_names) {
+        None => space.space.name.clone(),
         // Group names keep their capitals.
-        Some(access) if !category.group_names.is_empty() => {
-            format!("{} ({access})", category.category.name)
+        Some(access) if !space.group_names.is_empty() => {
+            format!("{} ({access})", space.space.name)
         }
-        Some(access) => format!("{} ({})", category.category.name, access.to_lowercase()),
+        Some(access) => format!("{} ({})", space.space.name, access.to_lowercase()),
     }
 }
 
@@ -207,20 +207,20 @@ async fn render_compose(
         None
     };
     let template = match compose {
-        Compose::NewThread(category) => ComposeTemplate {
+        Compose::NewThread(space) => ComposeTemplate {
             mod_reason: None,
-            heading: format!("New thread in {}", category.category.name),
+            heading: format!("New thread in {}", space.space.name),
             form_label: "New thread",
-            action: format!("/c/{}/new", category.category.slug),
+            action: format!("/c/{}/new", space.space.slug),
             title: Some(draft.title),
-            categories: Vec::new(),
+            spaces: Vec::new(),
             reply_to: None,
             body: draft.body,
             body_label: "Opening post",
             submit: "Post thread",
-            cancel: format!("/c/{}", category.category.slug),
+            cancel: format!("/c/{}", space.space.slug),
             source: None,
-            crumbs: category_crumbs(&category),
+            crumbs: space_crumbs(&space),
             layout: Layout::load(state, viewer, Nav::None).await?,
             preview,
             errors,
@@ -243,7 +243,7 @@ async fn render_compose(
                 form_label: "Reply",
                 action: format!("/t/{}/reply", thread.thread.id),
                 title: None,
-                categories: Vec::new(),
+                spaces: Vec::new(),
                 reply_to,
                 body: draft.body,
                 body_label: "Your reply",
@@ -262,7 +262,7 @@ async fn render_compose(
             form_label: "Edit post",
             action: format!("/p/{}/edit", post.post_id),
             title: None,
-            categories: Vec::new(),
+            spaces: Vec::new(),
             reply_to: None,
             body: draft.body,
             body_label: "Post",
@@ -275,14 +275,14 @@ async fn render_compose(
             errors,
         },
         Compose::Fork(source, destinations) => {
-            let wanted = if draft.category.is_empty() {
+            let wanted = if draft.space.is_empty() {
                 source
                     .thread
-                    .category()
-                    .map(|c| c.category.slug.clone())
+                    .space()
+                    .map(|c| c.space.slug.clone())
                     .unwrap_or_default()
             } else {
-                draft.category.clone()
+                draft.space.clone()
             };
             ComposeTemplate {
                 mod_reason: None,
@@ -290,12 +290,12 @@ async fn render_compose(
                 form_label: "New thread",
                 action: format!("/p/{}/fork", source.post_id),
                 title: Some(draft.title),
-                categories: destinations
+                spaces: destinations
                     .iter()
-                    .map(|c| CategoryOption {
-                        slug: c.category.slug.clone(),
-                        label: category_label(c),
-                        selected: c.category.slug == wanted,
+                    .map(|c| SpaceOption {
+                        slug: c.space.slug.clone(),
+                        label: space_label(c),
+                        selected: c.space.slug == wanted,
                     })
                     .collect(),
                 reply_to: None,
@@ -458,14 +458,14 @@ async fn new_thread_target(
     state: &AppState,
     viewer: &Viewer,
     slug: &str,
-) -> Result<Result<CategoryTarget, Refused>, AppError> {
-    let Some(category) = content::category_target(state.db(), viewer, slug).await? else {
+) -> Result<Result<SpaceTarget, Refused>, AppError> {
+    let Some(space) = content::space_target(state.db(), viewer, slug).await? else {
         return Ok(Err(Refused::NotFound));
     };
-    if !writing::may_post_in(viewer, &category) {
-        return Ok(Err(Refused::NotAllowed("You can’t post in this category.")));
+    if !writing::may_post_in(viewer, &space) {
+        return Ok(Err(Refused::NotAllowed("You can’t post in this space.")));
     }
-    Ok(Ok(category))
+    Ok(Ok(space))
 }
 
 pub async fn new_thread_page(
@@ -478,12 +478,12 @@ pub async fn new_thread_page(
         return Ok(web::login_first(&back));
     }
     match new_thread_target(&state, &viewer, &slug).await? {
-        Ok(category) => {
+        Ok(space) => {
             render_compose(
                 &state,
                 &viewer,
                 StatusCode::OK,
-                Compose::NewThread(category),
+                Compose::NewThread(space),
                 Draft::default(),
                 Vec::new(),
                 false,
@@ -507,12 +507,12 @@ pub async fn new_thread(
     let draft = Draft::from_fields(&fields);
     if field(&fields, "preview").is_some() {
         return match new_thread_target(&state, &viewer, &slug).await? {
-            Ok(category) => {
+            Ok(space) => {
                 render_compose(
                     &state,
                     &viewer,
                     StatusCode::OK,
-                    Compose::NewThread(category),
+                    Compose::NewThread(space),
                     draft,
                     Vec::new(),
                     true,
@@ -526,7 +526,7 @@ pub async fn new_thread(
         Ok(done) => written(&state, &viewer, done).await,
         Err(refusal) => {
             let compose = match new_thread_target(&state, &viewer, &slug).await? {
-                Ok(category) => Typed::Form(Box::new(Compose::NewThread(category)), draft),
+                Ok(space) => Typed::Form(Box::new(Compose::NewThread(space)), draft),
                 Err(_) => Typed::Text(draft),
             };
             refused(&state, &viewer, refusal, &back, compose).await
@@ -1031,7 +1031,7 @@ async fn fork_target(
     state: &AppState,
     viewer: &Viewer,
     post_id: i64,
-) -> Result<Option<(PostTarget, Vec<CategoryTarget>)>, AppError> {
+) -> Result<Option<(PostTarget, Vec<SpaceTarget>)>, AppError> {
     let Some(source) = content::post_target(state.db(), viewer, post_id)
         .await?
         .filter(PostTarget::is_live)
@@ -1061,7 +1061,7 @@ pub async fn fork_page(
         return not_allowed(
             &state,
             &viewer,
-            "There’s no category you can post in that is at least as private as this post’s.",
+            "There’s no space you can post in that is at least as private as this post’s.",
         )
         .await;
     }
@@ -1117,7 +1117,7 @@ pub async fn fork(
         &state,
         &viewer,
         post_id,
-        &draft.category,
+        &draft.space,
         &draft.title,
         &draft.body,
     )
@@ -1138,14 +1138,14 @@ pub async fn fork(
 
 // -- Read markers
 
-pub async fn mark_category_read(
+pub async fn mark_space_read(
     State(state): State<AppState>,
     viewer: Viewer,
     Path(slug): Path<String>,
 ) -> Result<Response, AppError> {
     let back = format!("/c/{slug}");
-    match writing::mark_category_read(&state, &viewer, &slug).await? {
-        Ok(category) => Ok(see_other(&format!("/c/{}", category.category.slug))),
+    match writing::mark_space_read(&state, &viewer, &slug).await? {
+        Ok(space) => Ok(see_other(&format!("/c/{}", space.space.slug))),
         Err(refusal) => refused(&state, &viewer, refusal, &back, Typed::Nothing).await,
     }
 }

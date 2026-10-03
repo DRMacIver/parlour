@@ -1,4 +1,4 @@
-//! The reading path: index, latest, category and thread pages, permalinks.
+//! The reading path: index, latest, space and thread pages, permalinks.
 
 mod common;
 
@@ -25,14 +25,14 @@ fn assert_in_order(page: &str, needles: &[&str]) {
 // Index
 
 #[sqlx::test]
-async fn index_shows_sections_and_categories_in_order(pool: PgPool) {
+async fn index_shows_sections_and_spaces_in_order(pool: PgPool) {
     let f = Forum::new(pool);
     let hobbies = f.section("Hobbies", 2).await;
     let community = f.section("Community", 1).await;
-    f.category("board-games", "public", Some(hobbies), 1).await;
-    f.category("books", "public", Some(hobbies), 0).await;
-    f.category("general", "public", Some(community), 0).await;
-    f.category("meta", "public", None, 0).await;
+    f.space("board-games", "public", Some(hobbies), 1).await;
+    f.space("books", "public", Some(hobbies), 0).await;
+    f.space("general", "public", Some(community), 0).await;
+    f.space("meta", "public", None, 0).await;
 
     let page = f.page("/").await;
     assert_in_order(
@@ -54,7 +54,7 @@ async fn index_shows_counts_and_last_post(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
     let jonah = f.user("jonah").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t1 = f.thread(games, ruth, "Spirit Island", "First").await;
     f.post(t1.thread_id, jonah, "Second").await;
     f.post(t1.thread_id, ruth, "Third").await;
@@ -75,7 +75,7 @@ async fn index_shows_counts_and_last_post(pool: PgPool) {
 async fn index_latest_list_shows_recent_threads(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let old = f.thread(games, ruth, "Older thread", "x").await;
     f.thread(games, ruth, "Newer thread", "x").await;
     f.post(old.thread_id, ruth, "bump").await;
@@ -87,28 +87,28 @@ async fn index_latest_list_shows_recent_threads(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn index_with_no_categories_says_so(pool: PgPool) {
+async fn index_with_no_spaces_says_so(pool: PgPool) {
     let f = Forum::new(pool);
     let page = f.page("/").await;
-    assert!(page.contains("There are no categories yet."));
-    assert!(!page.contains("/admin/categories"));
+    assert!(page.contains("There are no spaces yet."));
+    assert!(!page.contains("/admin/spaces"));
     // A new admin is shown where to make them; nobody else is.
     let sam = f.member("sam", "admin", None).await;
     let page = f.page_as("/", &f.session(sam).await).await;
-    assert!(page.contains("href=\"/admin/categories\""), "{page}");
+    assert!(page.contains("href=\"/admin/spaces\""), "{page}");
     let jonah = f.member("jonah", "user", None).await;
     let page = f.page_as("/", &f.session(jonah).await).await;
-    assert!(page.contains("There are no categories yet."));
-    assert!(!page.contains("/admin/categories"));
+    assert!(page.contains("There are no spaces yet."));
+    assert!(!page.contains("/admin/spaces"));
 }
 
 #[sqlx::test]
-async fn anonymous_visitors_dont_see_private_categories(pool: PgPool) {
+async fn anonymous_visitors_dont_see_private_spaces(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let lounge = f.category("lounge", "members", None, 0).await;
-    let organisers = f.category("organisers", "groups", None, 1).await;
-    let public = f.category("general", "public", None, 2).await;
+    let lounge = f.space("lounge", "members", None, 0).await;
+    let organisers = f.space("organisers", "groups", None, 1).await;
+    let public = f.space("general", "public", None, 2).await;
     f.thread(lounge, ruth, "Secret lounge thread", "lounge body")
         .await;
     f.thread(
@@ -135,15 +135,15 @@ async fn anonymous_visitors_dont_see_private_categories(pool: PgPool) {
 // Latest
 
 #[sqlx::test]
-async fn latest_lists_threads_by_activity_with_categories(pool: PgPool) {
+async fn latest_lists_threads_by_activity_with_spaces(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
-    let books = f.category("books", "public", None, 1).await;
+    let games = f.space("games", "public", None, 0).await;
+    let books = f.space("books", "public", None, 1).await;
     let a = f.thread(games, ruth, "Thread A", "x").await;
     f.thread(books, ruth, "Thread B", "x").await;
     f.new_thread(NewThread {
-        category_id: games,
+        space_id: games,
         title: "Pinned C".into(),
         author_id: ruth,
         body_md: "x".into(),
@@ -165,7 +165,7 @@ async fn latest_lists_threads_by_activity_with_categories(pool: PgPool) {
 async fn latest_paginates(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     for i in 0..31 {
         f.thread(games, ruth, &format!("Thread number {i:02}"), "x")
             .await;
@@ -182,18 +182,18 @@ async fn latest_paginates(pool: PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Category
+// Space
 
 #[sqlx::test]
-async fn category_lists_pinned_threads_first_then_by_activity(pool: PgPool) {
+async fn space_lists_pinned_threads_first_then_by_activity(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
     let section = f.section("Hobbies", 0).await;
-    let games = f.category("games", "public", Some(section), 0).await;
+    let games = f.space("games", "public", Some(section), 0).await;
     let old = f.thread(games, ruth, "Old but bumped", "x").await;
     f.thread(games, ruth, "Newer thread", "x").await;
     f.new_thread(NewThread {
-        category_id: games,
+        space_id: games,
         title: "Read me first".into(),
         author_id: ruth,
         body_md: "x".into(),
@@ -215,10 +215,10 @@ async fn category_lists_pinned_threads_first_then_by_activity(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn category_paginates_thirty_threads_per_page(pool: PgPool) {
+async fn space_paginates_thirty_threads_per_page(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     for i in 0..65 {
         f.thread(games, ruth, &format!("Thread number {i:02}"), "x")
             .await;
@@ -246,11 +246,11 @@ async fn category_paginates_thirty_threads_per_page(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn category_rows_show_reply_counts_last_poster_and_page_links(pool: PgPool) {
+async fn space_rows_show_reply_counts_last_poster_and_page_links(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
     let jonah = f.user("jonah").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t = f.thread(games, ruth, "Long thread", "x").await;
     let mut last = 0;
     for _ in 0..120 {
@@ -269,9 +269,9 @@ async fn category_rows_show_reply_counts_last_poster_and_page_links(pool: PgPool
 }
 
 #[sqlx::test]
-async fn empty_category_says_so(pool: PgPool) {
+async fn empty_space_says_so(pool: PgPool) {
     let f = Forum::new(pool);
-    f.category("games", "public", None, 0).await;
+    f.space("games", "public", None, 0).await;
     let page = f.page("/c/games").await;
     assert!(page.contains("No threads yet."));
 }
@@ -290,7 +290,7 @@ async fn thread_shows_posts_with_author_column(pool: PgPool) {
     .execute(&f.db)
     .await
     .unwrap();
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t = f
         .thread(games, ruth, "Spirit Island", "We **lost** on turn six.")
         .await;
@@ -323,7 +323,7 @@ async fn thread_shows_posts_with_author_column(pool: PgPool) {
 async fn thread_pages_hold_fifty_posts(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t = f.thread(games, ruth, "Long", "post 1 body").await;
     let mut ids = vec![t.first_post_id];
     for i in 2..=107 {
@@ -352,7 +352,7 @@ async fn thread_pages_hold_fifty_posts(pool: PgPool) {
 async fn deleted_and_hidden_posts_are_tombstones(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t = f.thread(games, ruth, "Thread", "first").await;
     let deleted = f.post(t.thread_id, ruth, "regrettable words").await;
     let hidden = f.post(t.thread_id, ruth, "rule-breaking words").await;
@@ -389,7 +389,7 @@ async fn replies_link_to_the_post_they_reply_to(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
     let jonah = f.user("jonah").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t = f
         .thread(games, jonah, "Thread", "We lost on turn six")
         .await;
@@ -454,7 +454,7 @@ async fn quote_forks_embed_their_source_and_the_source_links_back(pool: PgPool) 
     let f = Forum::new(pool);
     let maya = f.user("maya").await;
     let ollie = f.user("ollie").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let source = f
         .thread(
             games,
@@ -465,7 +465,7 @@ async fn quote_forks_embed_their_source_and_the_source_links_back(pool: PgPool) 
         .await;
     let fork = f
         .new_thread(NewThread {
-            category_id: games,
+            space_id: games,
             title: "Do solo modes count?".into(),
             author_id: ollie,
             body_md: "Strong disagree.".into(),
@@ -499,10 +499,10 @@ async fn quote_forks_embed_their_source_and_the_source_links_back(pool: PgPool) 
         "{post}"
     );
 
-    let category = f.page("/c/games").await;
+    let space = f.page("/c/games").await;
     assert!(
-        category.contains("from <a href=\"/t/"),
-        "fork origin on category page"
+        space.contains("from <a href=\"/t/"),
+        "fork origin on space page"
     );
 }
 
@@ -510,16 +510,16 @@ async fn quote_forks_embed_their_source_and_the_source_links_back(pool: PgPool) 
 async fn embeds_and_backlinks_respect_visibility(pool: PgPool) {
     let f = Forum::new(pool);
     let maya = f.user("maya").await;
-    let public = f.category("games", "public", None, 0).await;
-    let lounge = f.category("lounge", "members", None, 1).await;
+    let public = f.space("games", "public", None, 0).await;
+    let lounge = f.space("lounge", "members", None, 1).await;
     let source = f
         .thread(public, maya, "Public source", "Public words")
         .await;
-    // A fork into a members-only category: legal, but anonymous visitors
+    // A fork into a members-only space: legal, but anonymous visitors
     // mustn't learn it exists.
     let hidden_fork = f
         .new_thread(NewThread {
-            category_id: lounge,
+            space_id: lounge,
             title: "Members-only fork".into(),
             author_id: maya,
             body_md: "Private discussion".into(),
@@ -539,7 +539,7 @@ async fn embeds_and_backlinks_respect_visibility(pool: PgPool) {
     // embed as unavailable.
     let fork = f
         .new_thread(NewThread {
-            category_id: public,
+            space_id: public,
             title: "Public fork".into(),
             author_id: maya,
             body_md: "Fork words".into(),
@@ -550,7 +550,7 @@ async fn embeds_and_backlinks_respect_visibility(pool: PgPool) {
         })
         .await;
     f.exec(&format!(
-        "UPDATE threads SET category_id = {lounge} WHERE id = {}",
+        "UPDATE threads SET space_id = {lounge} WHERE id = {}",
         source.thread_id
     ))
     .await;
@@ -565,7 +565,7 @@ async fn embeds_and_backlinks_respect_visibility(pool: PgPool) {
 async fn thread_urls_are_canonicalised(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t = f.thread(games, ruth, "Spirit Island", "x").await;
     for _ in 0..60 {
         f.post(t.thread_id, ruth, "x").await;
@@ -585,8 +585,8 @@ async fn thread_urls_are_canonicalised(pool: PgPool) {
 async fn private_and_deleted_threads_are_not_found(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let lounge = f.category("lounge", "members", None, 0).await;
-    let games = f.category("games", "public", None, 1).await;
+    let lounge = f.space("lounge", "members", None, 0).await;
+    let games = f.space("games", "public", None, 1).await;
     let private = f.thread(lounge, ruth, "Secret", "secret body").await;
     let deleted = f.thread(games, ruth, "Deleted", "deleted body").await;
     f.exec(&format!(
@@ -617,7 +617,7 @@ async fn private_and_deleted_threads_are_not_found(pool: PgPool) {
 async fn post_permalinks_redirect_to_the_right_page(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t = f.thread(games, ruth, "Long", "x").await;
     let mut ids = vec![t.first_post_id];
     for _ in 2..=101 {
@@ -643,7 +643,7 @@ async fn post_permalinks_redirect_to_the_right_page(pool: PgPool) {
 async fn unread_redirects_to_the_first_page_for_now(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t = f.thread(games, ruth, "Spirit Island", "x").await;
     let response = f.get(&format!("/t/{}/unread", t.thread_id)).await;
     assert_eq!(response.status, StatusCode::TEMPORARY_REDIRECT);
@@ -657,7 +657,7 @@ async fn unread_redirects_to_the_first_page_for_now(pool: PgPool) {
 async fn a_thread_called_unread_still_works(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t = f.thread(games, ruth, "Unread", "the body").await;
     let response = f.get(&format!("/t/{}/unread", t.thread_id)).await;
     assert_eq!(response.status, StatusCode::TEMPORARY_REDIRECT);
@@ -673,7 +673,7 @@ async fn pages_have_no_inline_styles_or_scripts_and_set_no_cookies(pool: PgPool)
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
     let section = f.section("Hobbies", 0).await;
-    let games = f.category("games", "public", Some(section), 0).await;
+    let games = f.space("games", "public", Some(section), 0).await;
     let t = f.thread(games, ruth, "Spirit Island", "x").await;
     let reply = f.reply(t.thread_id, ruth, "y", Some(t.first_post_id)).await;
     f.exec(&format!(
@@ -704,7 +704,7 @@ async fn pages_have_no_inline_styles_or_scripts_and_set_no_cookies(pool: PgPool)
 async fn huge_page_numbers_are_not_found(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t = f.thread(games, ruth, "Spirit Island", "x").await;
     let id = t.thread_id;
     for page in [
@@ -732,8 +732,8 @@ async fn reply_links_never_reveal_posts_in_other_threads(pool: PgPool) {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
     let maya = f.user("maya").await;
-    let games = f.category("games", "public", None, 0).await;
-    let lounge = f.category("lounge", "groups", None, 1).await;
+    let games = f.space("games", "public", None, 0).await;
+    let lounge = f.space("lounge", "groups", None, 1).await;
     let public = f.thread(games, ruth, "Public", "x").await;
     let secret = f.thread(lounge, maya, "Secret", "x").await;
     let target = f.post(public.thread_id, maya, "target").await;
@@ -768,7 +768,7 @@ struct Canonical {
 async fn canonical_setup(pool: PgPool) -> Canonical {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let t = f.thread(games, ruth, "Spirit Island", "x").await;
     for _ in 0..60 {
         f.post(t.thread_id, ruth, "x").await;
@@ -969,11 +969,11 @@ async fn last_post_time_and_author_come_from_the_same_post(pool: PgPool) {
     let ruth = f.user("ruth").await;
     let jonah = f.user("jonah").await;
     let maya = f.user("maya").await;
-    let games = f.category("games", "public", None, 0).await;
+    let games = f.space("games", "public", None, 0).await;
     let start = Utc.with_ymd_and_hms(2026, 9, 1, 20, 0, 0).unwrap();
     let t = f
         .new_thread(NewThread {
-            category_id: games,
+            space_id: games,
             title: "Spirit Island".into(),
             author_id: ruth,
             body_md: "x".into(),

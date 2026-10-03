@@ -25,8 +25,8 @@ async fn setup(pool: PgPool) -> Setup {
     let f = Forum::new(pool);
     let ruth = f.user("ruth").await;
     let jonah = f.user("jonah").await;
-    let games = f.category("games", "public", None, 0).await;
-    let books = f.category("books", "public", None, 1).await;
+    let games = f.space("games", "public", None, 0).await;
+    let books = f.space("books", "public", None, 1).await;
     let thread = f
         .thread(games, ruth, "Spirit Island", "Original words")
         .await;
@@ -390,7 +390,7 @@ impl Setup {
 }
 
 #[sqlx::test]
-async fn new_post_clears_its_thread_category_and_lists(pool: PgPool) {
+async fn new_post_clears_its_thread_space_and_lists(pool: PgPool) {
     let s = setup(pool).await;
     s.f.thread(s.books, s.ruth, "Unrelated", "x").await;
     s.warm(&[]).await;
@@ -408,7 +408,7 @@ async fn new_post_clears_its_thread_category_and_lists(pool: PgPool) {
     s.assert_shown("A brand new reply", &[], &["THREAD"]).await;
     s.f.changed(Change::PostCreated { post_id: post }).await;
     s.assert_shown("A brand new reply", &["THREAD"], &[]).await;
-    // The last poster shows up in lists of the thread's category.
+    // The last poster shows up in lists of the thread's space.
     s.assert_shown(
         "Jonah the Bold",
         &["/", "/latest", "/c/games", "THREAD"],
@@ -450,7 +450,7 @@ async fn edit_clears_the_thread_and_threads_that_embed_the_post(pool: PgPool) {
     let s = setup(pool).await;
     let fork =
         s.f.new_thread(NewThread {
-            category_id: s.books,
+            space_id: s.books,
             title: "A fork".into(),
             author_id: s.jonah,
             body_md: "Forking".into(),
@@ -481,7 +481,7 @@ async fn creating_a_fork_adds_a_backlink_to_the_source(pool: PgPool) {
     s.warm(&[]).await;
     let fork =
         s.f.new_thread(NewThread {
-            category_id: s.books,
+            space_id: s.books,
             title: "A fork".into(),
             author_id: s.jonah,
             body_md: "Forking".into(),
@@ -509,7 +509,7 @@ async fn removing_a_post_clears_pages_that_show_it(pool: PgPool) {
     let reply = s.f.post(s.thread.thread_id, s.jonah, "Regrettable").await;
     let fork =
         s.f.new_thread(NewThread {
-            category_id: s.books,
+            space_id: s.books,
             title: "A fork".into(),
             author_id: s.ruth,
             body_md: "Forking".into(),
@@ -535,17 +535,17 @@ async fn removing_a_post_clears_pages_that_show_it(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn moving_a_thread_clears_both_categories(pool: PgPool) {
+async fn moving_a_thread_clears_both_spaces(pool: PgPool) {
     let s = setup(pool).await;
     s.warm(&[]).await;
     s.f.exec(&format!(
-        "UPDATE threads SET category_id = {} WHERE id = {}",
+        "UPDATE threads SET space_id = {} WHERE id = {}",
         s.books, s.thread.thread_id
     ))
     .await;
     s.f.changed(Change::ThreadChanged {
         thread_id: s.thread.thread_id,
-        previous_category_id: Some(s.games),
+        previous_space_id: Some(s.games),
     })
     .await;
     s.assert_shown(
@@ -560,19 +560,19 @@ async fn moving_a_thread_clears_both_categories(pool: PgPool) {
 #[sqlx::test]
 async fn moving_a_thread_somewhere_private_hides_it_everywhere(pool: PgPool) {
     let s = setup(pool).await;
-    let lounge = s.f.category("lounge", "members", None, 2).await;
+    let lounge = s.f.space("lounge", "members", None, 2).await;
     let other = s.f.thread(s.books, s.ruth, "Other", "x").await;
     let other_path = format!("/t/{}/other", other.thread_id);
     s.warm(&[&other_path]).await;
     assert!(s.f.page(&other_path).await.contains("2 posts"));
     s.f.exec(&format!(
-        "UPDATE threads SET category_id = {lounge} WHERE id = {}",
+        "UPDATE threads SET space_id = {lounge} WHERE id = {}",
         s.thread.thread_id
     ))
     .await;
     s.f.changed(Change::ThreadChanged {
         thread_id: s.thread.thread_id,
-        previous_category_id: Some(s.games),
+        previous_space_id: Some(s.games),
     })
     .await;
     s.assert_shown(
@@ -592,7 +592,7 @@ async fn renaming_pinning_and_deleting_a_thread(pool: PgPool) {
     s.warm(&[]).await;
     let change = Change::ThreadChanged {
         thread_id: s.thread.thread_id,
-        previous_category_id: None,
+        previous_space_id: None,
     };
     s.f.exec(&format!(
         "UPDATE threads SET title = 'Spirit Island, renamed' WHERE id = {}",
@@ -626,18 +626,16 @@ async fn renaming_pinning_and_deleting_a_thread(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn category_changes_clear_the_site(pool: PgPool) {
+async fn space_changes_clear_the_site(pool: PgPool) {
     let s = setup(pool).await;
     s.warm(&[]).await;
     s.f.exec(&format!(
-        "UPDATE categories SET name = 'Tabletop' WHERE id = {}",
+        "UPDATE spaces SET name = 'Tabletop' WHERE id = {}",
         s.games
     ))
     .await;
-    s.f.changed(Change::CategoryChanged {
-        category_id: s.games,
-    })
-    .await;
+    s.f.changed(Change::SpaceChanged { space_id: s.games })
+        .await;
     s.assert_shown(
         "Tabletop",
         &["/", "/latest", "/c/games", "THREAD"],
@@ -645,25 +643,22 @@ async fn category_changes_clear_the_site(pool: PgPool) {
     )
     .await;
 
-    // Making a category members-only hides it and its threads.
+    // Making a space members-only hides it and its threads.
     s.f.exec(&format!(
-        "UPDATE categories SET read_level = 'members' WHERE id = {}",
+        "UPDATE spaces SET read_level = 'members' WHERE id = {}",
         s.games
     ))
     .await;
-    s.f.changed(Change::CategoryChanged {
-        category_id: s.games,
-    })
-    .await;
+    s.f.changed(Change::SpaceChanged { space_id: s.games })
+        .await;
     s.assert_shown("Spirit Island", &[], &["/", "/latest"])
         .await;
     assert_eq!(s.f.get(&s.path).await.status, StatusCode::NOT_FOUND);
     assert_eq!(s.f.get("/c/games").await.status, StatusCode::NOT_FOUND);
 
-    // New categories appear on the index.
-    let new = s.f.category("making-things", "public", None, 3).await;
-    s.f.changed(Change::CategoryChanged { category_id: new })
-        .await;
+    // New spaces appear on the index.
+    let new = s.f.space("making-things", "public", None, 3).await;
+    s.f.changed(Change::SpaceChanged { space_id: new }).await;
     s.assert_shown("Making things", &["/"], &[]).await;
 }
 

@@ -59,14 +59,14 @@
         <div class="form-actions"><button class="button" type="submit">Save</button></div>
       </div>
     </form>
-    <section class="panel" aria-labelledby="categories-heading">
-      <h2 class="panel-bar" id="categories-heading">Categories</h2>
-      {% if detail.categories.is_empty() %}
-      <p class="empty">No category names this group.</p>
+    <section class="panel" aria-labelledby="spaces-heading">
+      <h2 class="panel-bar" id="spaces-heading">Spaces</h2>
+      {% if detail.spaces.is_empty() %}
+      <p class="empty">No space names this group.</p>
       {% else %}
       <ul class="member-list">
-      {% for category in detail.categories %}
-        <li><a href="/c/{{ category.slug }}">{{ category.name }}</a> <span class="row-meta">{% if category.read %}reads{% endif %}{% if category.read && category.write %} and {% endif %}{% if category.write %}posts{% endif %}</span></li>
+      {% for space in detail.spaces %}
+        <li><a href="/c/{{ space.slug }}">{{ space.name }}</a> <span class="row-meta">{% if space.read %}reads{% endif %}{% if space.read && space.write %} and {% endif %}{% if space.write %}posts{% endif %}</span></li>
       {% endfor %}
       </ul>
       {% endif %}
@@ -74,7 +74,7 @@
     <section class="panel" aria-labelledby="delete-heading">
       <h2 class="panel-bar" id="delete-heading">Delete</h2>
       <div class="form">
-        <p class="form-note">Deleting the group takes its members out of it and takes it off every category and invite.</p>
+        <p class="form-note">Deleting the group takes its members out of it and takes it off every space and invite.</p>
         <p><a class="button button-quiet" href="/admin/groups/{{ detail.group.id }}/delete">Delete this group…</a></p>
       </div>
     </section>

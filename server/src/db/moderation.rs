@@ -29,9 +29,9 @@ fn user_ref(id: Option<i64>, username: Option<String>, name: Option<String>) -> 
 /// Where a held post goes once approved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HeldPlace {
-    /// A new thread in a category, perhaps quote-forking a post.
+    /// A new thread in a space, perhaps quote-forking a post.
     Thread {
-        category_id: i64,
+        space_id: i64,
         title: String,
         forked_from_post_id: Option<i64>,
     },
@@ -63,13 +63,13 @@ pub async fn hold<'c>(
     body_md: &str,
 ) -> sqlx::Result<i64> {
     let mut conn = db.open(KEY).acquire().await?;
-    let (category_id, title, forked_from, thread_id, reply_to) = match place {
+    let (space_id, title, forked_from, thread_id, reply_to) = match place {
         HeldPlace::Thread {
-            category_id,
+            space_id,
             title,
             forked_from_post_id,
         } => (
-            Some(*category_id),
+            Some(*space_id),
             Some(title.as_str()),
             *forked_from_post_id,
             None,
@@ -81,11 +81,11 @@ pub async fn hold<'c>(
         } => (None, None, None, Some(*thread_id), *reply_to_post_id),
     };
     sqlx::query_scalar!(
-        r#"INSERT INTO held_posts (author_id, category_id, title, forked_from_post_id, thread_id,
+        r#"INSERT INTO held_posts (author_id, space_id, title, forked_from_post_id, thread_id,
                                    reply_to_post_id, body_md)
            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"#,
         author_id,
-        category_id,
+        space_id,
         title,
         forked_from,
         thread_id,
@@ -101,7 +101,7 @@ struct HeldRow {
     author_id: i64,
     username: String,
     display_name: String,
-    category_id: Option<i64>,
+    space_id: Option<i64>,
     title: Option<String>,
     forked_from_post_id: Option<i64>,
     thread_id: Option<i64>,
@@ -114,9 +114,9 @@ struct HeldRow {
 
 impl HeldRow {
     fn into_held(self) -> HeldPost {
-        let place = match (self.category_id, self.title, self.thread_id) {
-            (Some(category_id), Some(title), _) => HeldPlace::Thread {
-                category_id,
+        let place = match (self.space_id, self.title, self.thread_id) {
+            (Some(space_id), Some(title), _) => HeldPlace::Thread {
+                space_id,
                 title,
                 forked_from_post_id: self.forked_from_post_id,
             },
@@ -144,7 +144,7 @@ impl HeldRow {
 pub async fn held_post(db: &Db, id: i64) -> sqlx::Result<Option<HeldPost>> {
     let row = sqlx::query_as!(
         HeldRow,
-        r#"SELECT h.id, h.author_id, u.username AS "username!: String", u.display_name, h.category_id,
+        r#"SELECT h.id, h.author_id, u.username AS "username!: String", u.display_name, h.space_id,
                   h.title, h.forked_from_post_id, h.thread_id, h.reply_to_post_id, h.body_md, h.status,
                   h.post_id, h.created_at
            FROM held_posts h JOIN users u ON u.id = h.author_id WHERE h.id = $1"#,
@@ -160,7 +160,7 @@ pub async fn held_post(db: &Db, id: i64) -> sqlx::Result<Option<HeldPost>> {
 pub async fn waiting_held(db: &Db) -> sqlx::Result<Vec<HeldPost>> {
     let rows = sqlx::query_as!(
         HeldRow,
-        r#"SELECT h.id, h.author_id, u.username AS "username!: String", u.display_name, h.category_id,
+        r#"SELECT h.id, h.author_id, u.username AS "username!: String", u.display_name, h.space_id,
                   h.title, h.forked_from_post_id, h.thread_id, h.reply_to_post_id, h.body_md, h.status,
                   h.post_id, h.created_at
            FROM held_posts h JOIN users u ON u.id = h.author_id
@@ -184,7 +184,7 @@ pub async fn claim_held<'c>(
     let mut conn = db.open(KEY).acquire().await?;
     let row = sqlx::query_as!(
         HeldRow,
-        r#"SELECT h.id, h.author_id, u.username AS "username!: String", u.display_name, h.category_id,
+        r#"SELECT h.id, h.author_id, u.username AS "username!: String", u.display_name, h.space_id,
                   h.title, h.forked_from_post_id, h.thread_id, h.reply_to_post_id, h.body_md, h.status,
                   h.post_id, h.created_at
            FROM held_posts h JOIN users u ON u.id = h.author_id
@@ -874,9 +874,9 @@ pub async fn revoke_invites_of<'c>(db: impl Handle<'c>, user_ids: &[i64]) -> sql
 pub async fn spammer_reach(db: &Db, user_id: i64) -> sqlx::Result<(i64, i64)> {
     let row = sqlx::query!(
         r#"SELECT (SELECT count(*) FROM threads
-                   WHERE author_id = $1 AND deleted_at IS NULL AND category_id IS NOT NULL) AS "threads!",
+                   WHERE author_id = $1 AND deleted_at IS NULL AND space_id IS NOT NULL) AS "threads!",
                   (SELECT count(*) FROM posts p JOIN threads t ON t.id = p.thread_id
-                   WHERE t.author_id = $1 AND t.deleted_at IS NULL AND t.category_id IS NOT NULL
+                   WHERE t.author_id = $1 AND t.deleted_at IS NULL AND t.space_id IS NOT NULL
                      AND p.author_id <> $1 AND p.deleted_at IS NULL) AS "replies!""#,
         user_id
     )
@@ -925,7 +925,7 @@ pub async fn delete_spammer<'c>(
     .await?;
     let thread_ids = sqlx::query_scalar!(
         "UPDATE threads SET deleted_at = now(), version = version + 1
-         WHERE author_id = $1 AND deleted_at IS NULL AND category_id IS NOT NULL RETURNING id",
+         WHERE author_id = $1 AND deleted_at IS NULL AND space_id IS NOT NULL RETURNING id",
         user_id
     )
     .fetch_all(&mut *tx)
@@ -1193,7 +1193,7 @@ pub async fn rename_thread<'c>(
     .await
 }
 
-/// Deletes a category thread, or (with `restore`) brings it back. Returns
+/// Deletes a space thread, or (with `restore`) brings it back. Returns
 /// whether it changed.
 pub async fn set_thread_deleted<'c>(
     db: impl Handle<'c>,
@@ -1204,7 +1204,7 @@ pub async fn set_thread_deleted<'c>(
     let done = sqlx::query!(
         "UPDATE threads SET deleted_at = CASE WHEN $2 THEN NULL ELSE now() END,
                             merged_into_thread_id = NULL, version = version + 1
-         WHERE id = $1 AND category_id IS NOT NULL AND (deleted_at IS NULL) <> $2",
+         WHERE id = $1 AND space_id IS NOT NULL AND (deleted_at IS NULL) <> $2",
         thread_id,
         restore
     )
@@ -1213,20 +1213,20 @@ pub async fn set_thread_deleted<'c>(
     Ok(done.rows_affected() == 1)
 }
 
-/// Makes an empty thread in a category, for posts moved out of another
+/// Makes an empty thread in a space, for posts moved out of another
 /// one to start. Its author is the author of the first post moved into it.
 pub async fn empty_thread<'c>(
     db: impl Handle<'c>,
-    category_id: i64,
+    space_id: i64,
     title: &str,
     author_id: i64,
     created_at: DateTime<Utc>,
 ) -> sqlx::Result<i64> {
     let mut conn = db.open(KEY).acquire().await?;
     sqlx::query_scalar!(
-        r#"INSERT INTO threads (category_id, visibility, title, slug, author_id, created_at, last_post_at)
+        r#"INSERT INTO threads (space_id, visibility, title, slug, author_id, created_at, last_post_at)
            VALUES ($1, 'public', $2, $3, $4, $5, $5) RETURNING id"#,
-        category_id,
+        space_id,
         title,
         crate::store::slugify(title),
         author_id,
