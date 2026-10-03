@@ -27,10 +27,13 @@ async function discover(page: Page): Promise<Record<string, string>> {
   expect(longSpace, "the seed has a space with several pages").not.toBe("");
   await page.goto("/latest");
   const fork = (await page.locator(".row-title a", { hasText: "Do solo modes count" }).first().getAttribute("href"))!;
+  // A section's tab of /latest: the first tab that isn't All.
+  const sectionTab = (await page.locator(".tabs a:not([aria-current])").first().getAttribute("href"))!;
   return {
     index: "/",
     latest: "/latest",
     "latest page 2": "/latest?page=2",
+    "section tab": sectionTab,
     space: "/c/board-games",
     "space page 2": `${longSpace}?page=2`,
     thread: firstThread,
@@ -79,6 +82,7 @@ const names = [
   "index",
   "latest",
   "latest page 2",
+  "section tab",
   "space",
   "space page 2",
   "thread",

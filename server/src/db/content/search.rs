@@ -7,7 +7,8 @@
 //! `thread_readable` for space threads and, for conversations,
 //! `dm_searchable`, which only their current participants pass. Deleted
 //! posts and threads are never found, and hidden posts only by staff, as
-//! with reading them where they are.
+//! with reading them where they are. Spaces the viewer has muted are left
+//! out (DESIGN.md §3.5), unless the search is within one space.
 
 use chrono::{DateTime, Utc};
 
@@ -124,6 +125,8 @@ pub async fn search(
                    OR dm_searchable(t.id, t.visibility, $4))
               AND ($6::text IS NULL OR c.slug = $6)
               AND ($7::text IS NULL OR a.username = $7::citext)
+              AND ($6::text IS NOT NULL OR $11::bigint IS NULL
+                   OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $11 AND m.space_id = t.space_id))
             ORDER BY CASE WHEN $8 THEN p.created_at END DESC,
                      rank DESC, p.created_at DESC, p.id DESC
             LIMIT $9 OFFSET $10
@@ -148,6 +151,7 @@ pub async fn search(
         query.newest_first,
         per_page + 1,
         offset,
+        viewer.user_id(),
     )
     .fetch_all(db.pool())
     .await?;

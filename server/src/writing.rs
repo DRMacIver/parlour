@@ -9,7 +9,9 @@
 
 use crate::AppState;
 use crate::changes::Change;
-use crate::content::{self, Place, PostTarget, SpaceTarget, ThreadTarget};
+use crate::content::{
+    self, Deps, LatestScope, Place, PostTarget, SectionTab, SpaceTarget, ThreadTarget,
+};
 use crate::error::AppError;
 use crate::markdown;
 use crate::mod_records::{self, HeldPlace};
@@ -663,9 +665,31 @@ pub async fn mark_space_read(
     let Some(space) = content::space_target(state.db(), viewer, space_slug).await? else {
         return Ok(Err(Refused::NotFound));
     };
-    let threads = content::visible_thread_ids(state.db(), viewer, space.space.id).await?;
+    let threads = content::visible_thread_ids(state.db(), viewer, &[space.space.id]).await?;
     store::mark_threads_read(state.db(), user.id, &threads).await?;
     Ok(Ok(space))
+}
+
+/// Marks every thread the viewer can see in the spaces of one section of
+/// their layout as read (DESIGN.md §3.5). Not found if the section isn't
+/// theirs.
+pub async fn mark_section_read(
+    state: &AppState,
+    viewer: &Viewer,
+    section_id: i64,
+) -> Outcome<SectionTab> {
+    let Some(user) = viewer.user() else {
+        return Ok(Err(Refused::LogIn));
+    };
+    let mut deps = Deps::new();
+    let layout = content::layout_sections(state.db(), viewer, &mut deps).await?;
+    let Some(section) = layout.sections.into_iter().find(|s| s.id == section_id) else {
+        return Ok(Err(Refused::NotFound));
+    };
+    let threads =
+        content::scope_thread_ids(state.db(), viewer, LatestScope::Section(section_id)).await?;
+    store::mark_threads_read(state.db(), user.id, &threads).await?;
+    Ok(Ok(section))
 }
 
 #[cfg(test)]

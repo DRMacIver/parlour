@@ -52,7 +52,8 @@ use parlour::cache::PageCache;
 use parlour::changes::Change;
 use parlour::content::uploads::UploadAccess;
 use parlour::content::{
-    self, Deps, Embed, POSTS_PER_PAGE, PostBody, THREADS_PER_PAGE, page_count, page_of_seq,
+    self, Deps, Embed, LatestScope, POSTS_PER_PAGE, PostBody, THREADS_PER_PAGE, page_count,
+    page_of_seq,
 };
 use parlour::db::Db;
 use parlour::groups::{self, GroupFields};
@@ -767,6 +768,29 @@ impl World {
         for page in 1..=page_count(visible_threads, THREADS_PER_PAGE) + 1 {
             paths.push(page_href("/latest", page));
         }
+        // The front page's tabs: the viewer's sections (the default
+        // layout's for a visitor), and for a member the front page itself.
+        // Each has at most as many pages as All; the page past the end is
+        // visited too.
+        let layout = match who {
+            Who::Anonymous => self.default_layout,
+            Who::Member => self.layout_of(self.member_id),
+            Who::Staff => self.layout_of(self.staff_id),
+        };
+        let sections = self
+            .block(layouts::read(self.db(), layout))
+            .unwrap()
+            .expect("the layout exists")
+            .sections;
+        for page in 1..=page_count(visible_threads, THREADS_PER_PAGE) + 1 {
+            if who != Who::Anonymous {
+                paths.push(page_href("/latest/front", page));
+            }
+            for section in &sections {
+                paths.push(page_href(&format!("/latest/s/{}", section.id), page));
+            }
+        }
+        paths.push("/latest/front".to_owned());
         for (i, c) in self.spaces.iter().enumerate() {
             let threads = self
                 .threads
@@ -921,6 +945,13 @@ impl World {
 
     fn slug_of(&self, t: &ThreadModel) -> String {
         store::slugify(&format!("Thread {}", t.title_token))
+    }
+
+    /// A member's own layout.
+    fn layout_of(&self, user_id: i64) -> i64 {
+        self.block(layouts::member_id(self.db(), user_id))
+            .unwrap()
+            .expect("every member has a layout")
     }
 
     fn get(&self, forum: &Forum, path: &str) -> Response {
@@ -2475,7 +2506,7 @@ impl Access {
         // Messages are found by searching only by the people in the
         // conversation now: not by staff it was reported to, nor by
         // anyone suspended.
-        let found = self.search(viewer, "psst or message");
+        let found = self.search(viewer, "psst or message", None);
         let expected = Self::ids(
             &self.messages,
             |m| {
@@ -2646,7 +2677,6 @@ impl Access {
         let db = &self.db;
         let mut deps = Deps::new();
         let readable_spaces = Self::ids(&self.spaces, |c| self.reads_space(who, c), |c| c.id);
-        let readable_threads = Self::ids(&self.threads, |t| self.reads_thread(who, t), |t| t.id);
         let thread_index: HashMap<i64, usize> = self
             .threads
             .iter()
@@ -2725,12 +2755,30 @@ impl Access {
         );
         assert_eq!(front.any_spaces, !readable_spaces.is_empty());
 
+        // The /latest tabs (DESIGN.md §3.5). All: every thread the viewer
+        // can read, less those in spaces they have muted. Front page: those
+        // in the essential spaces and the spaces in their sections. Each
+        // section: those in its spaces. The sections are the viewer's own
+        // layout's (the default's for a visitor), and together hold exactly
+        // the spaces the model says the viewer follows.
+        let unmuted_threads = Self::ids(
+            &self.threads,
+            |t| self.reads_thread(who, t) && !self.muted(who, self.threads[t].space),
+            |t| t.id,
+        );
         let latest = self
-            .block(content::latest(db, &viewer, 1, 10_000, &mut deps))
+            .block(content::latest(
+                db,
+                &viewer,
+                LatestScope::All,
+                1,
+                10_000,
+                &mut deps,
+            ))
             .unwrap();
         let rows: BTreeSet<i64> = latest.threads.iter().map(|r| r.thread.id).collect();
-        assert_eq!(rows, readable_threads, "{who:?}: latest");
-        assert_eq!(latest.thread_count, readable_threads.len() as i64);
+        assert_eq!(rows, unmuted_threads, "{who:?}: latest");
+        assert_eq!(latest.thread_count, unmuted_threads.len() as i64);
         for row in &latest.threads {
             let t = thread_index[&row.thread.id];
             let source = self.threads[t].fork_of.map(|p| self.posts[p].thread);
@@ -2738,6 +2786,120 @@ impl Access {
                 .filter(|&s| self.reads_thread(who, s))
                 .map(|s| self.threads[s].id);
             assert_eq!(row.forked_from.as_ref().map(|f| f.id), expected);
+        }
+        let front = self
+            .block(content::latest(
+                db,
+                &viewer,
+                LatestScope::Front,
+                1,
+                10_000,
+                &mut deps,
+            ))
+            .unwrap();
+        let rows: BTreeSet<i64> = front.threads.iter().map(|r| r.thread.id).collect();
+        let expected = Self::ids(
+            &self.threads,
+            |t| {
+                let c = self.threads[t].space;
+                self.reads_thread(who, t)
+                    && !self.muted(who, c)
+                    && (self.spaces[c].essential || following.contains(&c))
+            },
+            |t| t.id,
+        );
+        assert_eq!(rows, expected, "{who:?}: front page tab");
+        assert_eq!(front.thread_count, expected.len() as i64);
+        let layout_id = match who {
+            None => self.default_layout,
+            Some(u) => self.users[u].layout,
+        };
+        let layout = self
+            .block(layouts::read(db, layout_id))
+            .unwrap()
+            .expect("the layout exists");
+        let tabs = self
+            .block(content::layout_sections(db, &viewer, &mut deps))
+            .unwrap();
+        let any_muted = who.is_some_and(|u| !self.users[u].muted.is_empty());
+        assert_eq!(tabs.has_mutes, any_muted, "{who:?}: has mutes");
+        let tabs = tabs.sections;
+        assert_eq!(
+            tabs.iter().map(|s| s.id).collect::<Vec<_>>(),
+            layout.sections.iter().map(|s| s.id).collect::<Vec<_>>(),
+            "{who:?}: section tabs"
+        );
+        let mut in_sections = BTreeSet::new();
+        for (section, tab) in layout.sections.iter().zip(&tabs) {
+            let spaces: BTreeSet<usize> = section
+                .spaces
+                .iter()
+                .map(|c| self.spaces.iter().position(|s| s.id == c.id).unwrap())
+                .collect();
+            for &c in &spaces {
+                assert!(in_sections.insert(c), "{who:?}: space {c} in two sections");
+            }
+            let visible = spaces
+                .iter()
+                .filter(|&&c| self.reads_space(who, c) && !self.muted(who, c))
+                .count() as i64;
+            assert_eq!(
+                tab.spaces, visible,
+                "{who:?}: spaces on tab {}",
+                section.name
+            );
+            let page = self
+                .block(content::latest(
+                    db,
+                    &viewer,
+                    LatestScope::Section(section.id),
+                    1,
+                    10_000,
+                    &mut deps,
+                ))
+                .unwrap();
+            let rows: BTreeSet<i64> = page.threads.iter().map(|r| r.thread.id).collect();
+            let expected = Self::ids(
+                &self.threads,
+                |t| {
+                    let c = self.threads[t].space;
+                    self.reads_thread(who, t) && !self.muted(who, c) && spaces.contains(&c)
+                },
+                |t| t.id,
+            );
+            assert_eq!(rows, expected, "{who:?}: tab {}", section.name);
+            assert_eq!(page.thread_count, expected.len() as i64);
+        }
+        assert_eq!(in_sections, following, "{who:?}: the layout's spaces");
+        // Nobody else's sections are theirs to list.
+        for other in self
+            .users
+            .iter()
+            .map(|u| u.layout)
+            .chain([self.default_layout])
+        {
+            if other == layout_id {
+                continue;
+            }
+            for section in self
+                .block(layouts::read(db, other))
+                .unwrap()
+                .expect("the layout exists")
+                .sections
+            {
+                let page = self
+                    .block(content::latest(
+                        db,
+                        &viewer,
+                        LatestScope::Section(section.id),
+                        1,
+                        10_000,
+                        &mut deps,
+                    ))
+                    .unwrap();
+                assert!(page.threads.is_empty(), "{who:?}: someone else's section");
+                assert_eq!(page.thread_count, 0);
+            }
         }
 
         for (c, space) in self.spaces.iter().enumerate() {
@@ -2882,15 +3044,35 @@ impl Access {
         }
 
         // Search finds exactly the posts the viewer is shown where they
-        // are: every post's text is "Text", or "Opening" for a thread's
-        // first post.
-        let found = self.search(&viewer, "text or opening");
+        // are, less those in spaces they have muted: every post's text is
+        // "Text", or "Opening" for a thread's first post. A search within
+        // one space finds its posts whether or not it is muted.
+        let found = self.search(&viewer, "text or opening", None);
         let expected = Self::ids(
             &self.posts,
-            |p| self.reads_thread(who, self.posts[p].thread) && self.shown_post(who, p),
+            |p| {
+                let t = self.posts[p].thread;
+                self.reads_thread(who, t)
+                    && self.shown_post(who, p)
+                    && !self.muted(who, self.threads[t].space)
+            },
             |p| p.id,
         );
         assert_eq!(found, expected, "{who:?}: search");
+        for (c, space) in self.spaces.iter().enumerate() {
+            let found = self.search(&viewer, "text or opening", Some(&space.slug));
+            let expected = Self::ids(
+                &self.posts,
+                |p| {
+                    let t = self.posts[p].thread;
+                    self.threads[t].space == c
+                        && self.reads_thread(who, t)
+                        && self.shown_post(who, p)
+                },
+                |p| p.id,
+            );
+            assert_eq!(found, expected, "{who:?}: search in space {c}");
+        }
 
         // Each post's image may be fetched by those who are shown the
         // post, and by everyone (and so by shared caches) only if every
@@ -2940,10 +3122,12 @@ impl Access {
         self.check_conversations(who, &viewer);
     }
 
-    /// The ids of every post a search finds for the viewer.
-    fn search(&self, viewer: &Viewer, words: &str) -> BTreeSet<i64> {
+    /// The ids of every post a search finds for the viewer, everywhere or
+    /// in one space.
+    fn search(&self, viewer: &Viewer, words: &str, space: Option<&str>) -> BTreeSet<i64> {
         let query = content::search::SearchQuery {
             text: words.into(),
+            space: space.map(str::to_owned),
             ..Default::default()
         };
         match self

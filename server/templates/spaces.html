@@ -8,6 +8,7 @@
   {% if can_create %}<a class="button" href="/spaces/new">New space</a>{% endif %}
   <span class="toolbar-note">Sorted by {% if self.sort_is("created") %}newest first{% else %}<a href="{{ self.sort_href("created") }}">newest first</a>{% endif %} · {% if self.sort_is("activity") %}latest post{% else %}<a href="{{ self.sort_href("activity") }}">latest post</a>{% endif %} · {% if self.sort_is("name") %}name{% else %}<a href="{{ self.sort_href("name") }}">name</a>{% endif %}</span>
   <span class="spacer"></span>
+  {% if has_mutes || muted %}<a class="toolbar-note" href="{{ self.muted_href() }}">{% if muted %}Hide the spaces you’ve muted{% else %}Show the spaces you’ve muted{% endif %}</a>{% endif %}
   <a class="toolbar-note" href="{{ self.archived_href() }}">{% if archived %}Hide archived spaces{% else %}Show archived spaces{% endif %}</a>
 </div>
 {% if spaces.is_empty() %}
@@ -30,6 +31,7 @@
           <a href="/c/{{ space.space.slug }}">{{ space.space.name }}</a>
           {% call m::access_flag(space.read_level, space.group_names) %}{% endcall %}
           {% if space.archived %}<span class="flag">Archived</span>{% endif %}
+          {% if space.muted %}<span class="flag">Muted</span>{% endif %}
         </div>
         {% if !space.description.is_empty() %}<div class="row-meta">{{ space.description }}</div>{% endif %}
       </td>

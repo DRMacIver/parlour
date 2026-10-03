@@ -1,16 +1,20 @@
 {% extends "base.html" %}
 {%- import "_macros.html" as m -%}
-{% block title %}Latest · {{ layout.site_name }}{% endblock %}
+{% block title %}{% if !self.is_all() %}{{ self.heading() }} · {% endif %}Latest · {{ layout.site_name }}{% endblock %}
 {% block content %}
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <span aria-current="page">Latest</span></nav>
-<h1 class="page-title">Latest</h1>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › {% if self.is_all() %}<span aria-current="page">Latest</span>{% else %}<a href="/latest">Latest</a> › <span aria-current="page">{{ self.heading() }}</span>{% endif %}</nav>
+<h1 class="page-title">{{ self.heading() }}</h1>
+<nav class="tabs" aria-label="Which threads">
+  {% for tab in tabs %}<a href="{{ tab.href }}"{% if tab.current %} aria-current="page"{% endif %}>{{ tab.label }}</a>{% endfor %}
+</nav>
 <div class="toolbar">
-  <span class="toolbar-note">All threads, most recently active first</span>
+  <span class="toolbar-note">{{ self.note() }}{% if has_mutes %}, leaving out the spaces you’ve muted{% endif %}</span>
+  {% if logged_in && section.is_some() %}<form class="form-inline" method="post" action="{{ self.mark_read_action() }}"><button class="button button-small button-quiet" type="submit">Mark all read</button></form>{% endif %}
   <span class="spacer"></span>
   {% call m::pagination(pagination, "Pages") %}{% endcall %}
 </div>
 {% if threads.is_empty() %}
-<section class="panel"><p class="empty">Nothing has been posted yet.</p></section>
+<section class="panel"><p class="empty">Nothing has been posted here yet.</p></section>
 {% else %}
 {% include "_thread_table.html" %}
 {% endif %}

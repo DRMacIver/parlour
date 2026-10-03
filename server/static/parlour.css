@@ -214,6 +214,19 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
 .toolbar-bottom { margin: 12px 0 0; }
 .toolbar-note { font-style: italic; color: var(--ink-muted); }
 
+/* The tabs of Latest: All, Front page and one per section. */
+.tabs { display: flex; flex-wrap: wrap; gap: 0 4px; margin-bottom: 12px; }
+.tabs a {
+  padding: 4px 8px;
+  border-bottom: 2px solid transparent;
+  font-size: 15px;
+  font-variant: small-caps;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+}
+.tabs a:hover { text-decoration: underline; }
+.tabs a[aria-current="page"] { border-bottom-color: var(--accent); color: var(--accent); }
+
 .pagination { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .pagination-summary { color: var(--ink-muted); font-size: var(--font-size-label); }
 .pagination a, .pagination strong { padding: 2px 2px; }
@@ -255,6 +268,9 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
 .list td { padding: 10px 14px; border-top: 1px solid var(--rule); vertical-align: top; }
 .list tbody tr:nth-child(even) { background: var(--panel-alt); }
 .list tr.pinned { background: var(--panel-alt); }
+.list th a { color: inherit; }
+.list th .th-action { float: right; }
+.list th .link-button { color: var(--on-ink); font-size: var(--font-size-label); }
 .list .num { width: 90px; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-muted); }
 .list th.num { color: var(--on-ink); }
 .list .last-col { width: 240px; font-size: 15px; }

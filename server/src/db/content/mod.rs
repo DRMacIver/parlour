@@ -141,6 +141,9 @@ pub struct SpaceSummary {
     pub essential: bool,
     pub thread_count: i64,
     pub post_count: i64,
+    /// For a logged-in viewer, how many of its threads have posts they
+    /// haven't read (DESIGN.md §3.5).
+    pub unread: Option<i64>,
     pub last: Option<LastActivity>,
 }
 
@@ -179,7 +182,7 @@ pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Resu
                array(SELECT g.name FROM groups g
                      WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)
                      ORDER BY lower(g.name), g.id) AS "group_names!",
-               counts.threads AS "thread_count!", counts.posts AS "post_count!",
+               counts.threads AS "thread_count!", counts.posts AS "post_count!", counts.unread AS "unread!",
                lt.id AS "last_thread_id?", lt.title AS "last_thread_title?", lt.slug AS "last_thread_slug?",
                coalesce(lp.created_at, lt.last_post_at) AS "last_at?", lp.id AS "last_post_id?",
                lu.id AS "last_user_id?", lu.username AS "last_username?", lu.display_name AS "last_display_name?"
@@ -187,8 +190,10 @@ pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Resu
         JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'
         LEFT JOIN placed p ON p.space_id = c.id
         CROSS JOIN LATERAL (
-            SELECT count(*) AS threads, coalesce(sum(t.last_seq), 0)::bigint AS posts
+            SELECT count(*) AS threads, coalesce(sum(t.last_seq), 0)::bigint AS posts,
+                   count(*) FILTER (WHERE t.last_seq > coalesce(tr.last_read_seq, 0)) AS unread
             FROM threads t
+            LEFT JOIN thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $3
             WHERE t.space_id = c.id AND t.deleted_at IS NULL
               AND thread_readable(t.visibility, t.space_id, $1, $2)
         ) counts
@@ -252,6 +257,7 @@ pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Resu
             essential: row.essential,
             thread_count: row.thread_count,
             post_count: row.post_count,
+            unread: user_id.map(|_| row.unread),
             last: match (
                 row.last_thread_id,
                 row.last_thread_title,
@@ -369,7 +375,7 @@ pub async fn space_page(
         return Ok(None);
     };
     deps.add(Tag::Space(space.id));
-    let threads = thread_rows(db, viewer, Some(space.id), page, THREADS_PER_PAGE, deps).await?;
+    let threads = thread_rows(db, viewer, &[space.id], true, page, THREADS_PER_PAGE, deps).await?;
     Ok(Some(SpacePage {
         space: SpaceRef {
             id: space.id,
@@ -390,47 +396,214 @@ pub struct LatestPage {
     pub threads: Vec<ThreadRow>,
 }
 
-/// All threads the viewer can see, most recently active first.
-pub async fn latest(
+/// Which threads a `/latest` tab lists (DESIGN.md §3.5). Every tab leaves
+/// out the spaces the viewer has muted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LatestScope {
+    /// Every thread the viewer can read.
+    All,
+    /// Threads in the spaces on the viewer's front page: the essential
+    /// spaces and those in the sections of their layout (the default
+    /// layout for a visitor), archived ones left out as the front page
+    /// leaves them out.
+    Front,
+    /// Threads in the spaces of one section of the viewer's layout. A
+    /// section of anyone else's layout holds nothing for them.
+    Section(i64),
+}
+
+impl LatestScope {
+    fn as_str(self) -> &'static str {
+        match self {
+            LatestScope::All => "all",
+            LatestScope::Front => "front",
+            LatestScope::Section(_) => "section",
+        }
+    }
+
+    fn section_id(self) -> Option<i64> {
+        match self {
+            LatestScope::Section(id) => Some(id),
+            _ => None,
+        }
+    }
+}
+
+/// A section of the viewer's layout, as a tab of `/latest`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SectionTab {
+    pub id: i64,
+    pub name: String,
+    /// How many of its spaces the viewer can see: readable, not archived
+    /// and not muted. A tab with none has nothing to show.
+    pub spaces: i64,
+}
+
+/// The viewer's layout as `/latest` shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LayoutSections {
+    /// The sections, in order.
+    pub sections: Vec<SectionTab>,
+    /// Whether the viewer has muted any space, which every tab leaves out.
+    pub has_mutes: bool,
+}
+
+/// The sections of the viewer's layout (the default layout's for a
+/// visitor), in order, in one query with whether they have muted anything.
+pub async fn layout_sections(
     db: &Db,
     viewer: &Viewer,
-    page: i64,
-    per_page: i64,
     deps: &mut Deps,
-) -> sqlx::Result<LatestPage> {
+) -> sqlx::Result<LayoutSections> {
     let filter = viewer.filter();
-    // Any visible space can gain the newest thread, so the list depends
-    // on all of them.
-    let spaces = sqlx::query!(
+    // The layout is joined on the left so that one without sections still
+    // answers the question about mutes.
+    let rows = sqlx::query!(
         r#"
+        WITH chosen AS (
+            SELECT id FROM layouts
+            WHERE user_id IS NOT DISTINCT FROM $3::bigint
+               OR (user_id IS NULL AND NOT EXISTS (SELECT 1 FROM layouts WHERE user_id = $3))
+            ORDER BY user_id NULLS LAST
+            LIMIT 1
+        )
+        SELECT s.id AS "id?", s.name AS "name?",
+               (SELECT count(*) FROM layout_section_spaces x JOIN spaces c ON c.id = x.space_id
+                WHERE x.section_id = s.id AND c.archived_at IS NULL
+                  AND space_readable(c.visibility, c.id, $1, $2)
+                  AND ($3::bigint IS NULL
+                       OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $3 AND m.space_id = c.id))
+               ) AS "spaces!",
+               EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $3) AS "has_mutes!"
+        FROM chosen l
+        LEFT JOIN layout_sections s ON s.layout_id = l.id
+        ORDER BY s.position, s.id
+        "#,
+        &filter.visibilities,
+        &filter.restricted_space_ids,
+        viewer.user_id(),
+    )
+    .fetch_all(db.pool())
+    .await?;
+    // The default layout changes `site`; a member's own isn't cached.
+    deps.add(Tag::Site);
+    let mut out = LayoutSections::default();
+    for row in rows {
+        out.has_mutes = row.has_mutes;
+        if let (Some(id), Some(name)) = (row.id, row.name) {
+            out.sections.push(SectionTab {
+                id,
+                name,
+                spaces: row.spaces,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// The spaces a scope covers that the viewer can read, each with how many
+/// of its threads they can read.
+async fn scoped_spaces(
+    db: &Db,
+    viewer: &Viewer,
+    scope: LatestScope,
+) -> sqlx::Result<Vec<(i64, i64)>> {
+    let filter = viewer.filter();
+    let rows = sqlx::query!(
+        r#"
+        WITH chosen AS (
+            SELECT id FROM layouts
+            WHERE user_id IS NOT DISTINCT FROM $3::bigint
+               OR (user_id IS NULL AND NOT EXISTS (SELECT 1 FROM layouts WHERE user_id = $3))
+            ORDER BY user_id NULLS LAST
+            LIMIT 1
+        ), placed AS (
+            SELECT x.space_id, s.id AS section_id
+            FROM chosen l
+            JOIN layout_sections s ON s.layout_id = l.id
+            JOIN layout_section_spaces x ON x.section_id = s.id
+        )
         SELECT c.id,
                (SELECT count(*) FROM threads t
                 WHERE t.space_id = c.id AND t.deleted_at IS NULL
                   AND thread_readable(t.visibility, t.space_id, $1, $2)) AS "thread_count!"
         FROM spaces c
         WHERE space_readable(c.visibility, c.id, $1, $2)
+          AND ($3::bigint IS NULL
+               OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $3 AND m.space_id = c.id))
+          AND CASE $4::text
+                WHEN 'all' THEN true
+                WHEN 'front' THEN c.archived_at IS NULL
+                     AND (c.essential OR EXISTS (SELECT 1 FROM placed p WHERE p.space_id = c.id))
+                ELSE c.archived_at IS NULL
+                     AND EXISTS (SELECT 1 FROM placed p WHERE p.space_id = c.id AND p.section_id = $5)
+              END
+        ORDER BY c.id
         "#,
         &filter.visibilities,
         &filter.restricted_space_ids,
+        viewer.user_id(),
+        scope.as_str(),
+        scope.section_id(),
     )
     .fetch_all(db.pool())
     .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.id, row.thread_count))
+        .collect())
+}
+
+/// The threads in a scope that the viewer can see, most recently active
+/// first.
+pub async fn latest(
+    db: &Db,
+    viewer: &Viewer,
+    scope: LatestScope,
+    page: i64,
+    per_page: i64,
+    deps: &mut Deps,
+) -> sqlx::Result<LatestPage> {
+    // Any space in the scope can gain the newest thread, so the list
+    // depends on all of them.
+    let spaces = scoped_spaces(db, viewer, scope).await?;
     let mut thread_count = 0;
-    for space in spaces {
-        deps.add(Tag::Space(space.id));
-        thread_count += space.thread_count;
+    let mut ids = Vec::with_capacity(spaces.len());
+    for (id, threads) in spaces {
+        deps.add(Tag::Space(id));
+        thread_count += threads;
+        ids.push(id);
     }
-    let threads = thread_rows(db, viewer, None, page, per_page, deps).await?;
+    let threads = thread_rows(db, viewer, &ids, false, page, per_page, deps).await?;
     Ok(LatestPage {
         thread_count,
         threads,
     })
 }
 
+/// The ids of the threads a scope covers that the viewer can see, for
+/// marking them all read.
+pub async fn scope_thread_ids(
+    db: &Db,
+    viewer: &Viewer,
+    scope: LatestScope,
+) -> sqlx::Result<Vec<i64>> {
+    let spaces: Vec<i64> = scoped_spaces(db, viewer, scope)
+        .await?
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    visible_thread_ids(db, viewer, &spaces).await
+}
+
+/// One page of the threads in `spaces` that the viewer can read, most
+/// recently active first, with pinned threads before the rest if
+/// `pins_first` (the space page does; the `/latest` tabs don't).
 async fn thread_rows(
     db: &Db,
     viewer: &Viewer,
-    space_id: Option<i64>,
+    spaces: &[i64],
+    pins_first: bool,
     page: i64,
     per_page: i64,
     deps: &mut Deps,
@@ -438,8 +611,10 @@ async fn thread_rows(
     let Some(offset) = page_offset(page, per_page) else {
         return Ok(Vec::new());
     };
+    if spaces.is_empty() {
+        return Ok(Vec::new());
+    }
     let filter = viewer.filter();
-    // With a space, pinned threads come first; /latest ignores pins.
     let rows = sqlx::query!(
         r#"
         SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,
@@ -471,17 +646,18 @@ async fn thread_rows(
         ) src ON true
         WHERE t.deleted_at IS NULL
           AND thread_readable(t.visibility, t.space_id, $1, $2)
-          AND ($3::bigint IS NULL OR t.space_id = $3)
-        ORDER BY CASE WHEN $3::bigint IS NULL THEN false ELSE t.pinned END DESC,
+          AND t.space_id = ANY($3)
+        ORDER BY CASE WHEN $7 THEN t.pinned ELSE false END DESC,
                  t.last_post_at DESC, t.id DESC
         LIMIT $4 OFFSET $5
         "#,
         &filter.visibilities,
         &filter.restricted_space_ids,
-        space_id,
+        spaces,
         per_page,
         offset,
         viewer.user_id(),
+        pins_first,
     )
     .fetch_all(db.pool())
     .await?;
@@ -1431,18 +1607,21 @@ pub struct SpaceListing {
     pub read_level: String,
     pub group_names: Vec<String>,
     pub archived: bool,
+    /// Whether the viewer has muted it (shown only when asked for).
+    pub muted: bool,
     pub created_at: DateTime<Utc>,
     pub thread_count: i64,
     pub last_post_at: Option<DateTime<Utc>>,
 }
 
-/// Every space the viewer can read, for the space index: archived ones
-/// only when asked for.
+/// Every space the viewer can read, for the space index: archived ones,
+/// and ones the viewer has muted, only when asked for.
 pub async fn space_index(
     db: &Db,
     viewer: &Viewer,
     sort: SpaceSort,
     include_archived: bool,
+    include_muted: bool,
     deps: &mut Deps,
 ) -> sqlx::Result<Vec<SpaceListing>> {
     let filter = viewer.filter();
@@ -1450,6 +1629,7 @@ pub async fn space_index(
         r#"
         SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,
                c.archived_at IS NOT NULL AS "archived!", c.created_at,
+               EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $5 AND m.space_id = c.id) AS "muted!",
                array(SELECT g.name FROM groups g
                      WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)
                      ORDER BY lower(g.name), g.id) AS "group_names!",
@@ -1464,6 +1644,8 @@ pub async fn space_index(
         ) counts
         WHERE space_readable(c.visibility, c.id, $1, $2)
           AND ($3 OR c.archived_at IS NULL)
+          AND ($6 OR $5::bigint IS NULL
+               OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $5 AND m.space_id = c.id))
         ORDER BY CASE WHEN $4 = 'name' THEN lower(c.name) END,
                  CASE WHEN $4 = 'activity' THEN counts.last_post_at END DESC NULLS LAST,
                  c.created_at DESC, c.id DESC
@@ -1472,6 +1654,8 @@ pub async fn space_index(
         &filter.restricted_space_ids,
         include_archived,
         sort.as_str(),
+        viewer.user_id(),
+        include_muted,
     )
     .fetch_all(db.pool())
     .await?;
@@ -1489,6 +1673,7 @@ pub async fn space_index(
                 read_level: row.read_level,
                 group_names: row.group_names,
                 archived: row.archived,
+                muted: row.muted,
                 created_at: row.created_at,
                 thread_count: row.thread_count,
                 last_post_at: row.last_post_at,
@@ -1679,14 +1864,18 @@ pub async fn post_target(
     }))
 }
 
-/// The ids of the threads in a space that the viewer can see.
-pub async fn visible_thread_ids(db: &Db, viewer: &Viewer, space_id: i64) -> sqlx::Result<Vec<i64>> {
+/// The ids of the threads in these spaces that the viewer can see.
+pub async fn visible_thread_ids(
+    db: &Db,
+    viewer: &Viewer,
+    space_ids: &[i64],
+) -> sqlx::Result<Vec<i64>> {
     let filter = viewer.filter();
     sqlx::query_scalar!(
         r#"SELECT t.id FROM threads t
-           WHERE t.space_id = $1 AND t.deleted_at IS NULL
+           WHERE t.space_id = ANY($1) AND t.deleted_at IS NULL
              AND thread_readable(t.visibility, t.space_id, $2, $3)"#,
-        space_id,
+        space_ids,
         &filter.visibilities,
         &filter.restricted_space_ids,
     )

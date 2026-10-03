@@ -7,6 +7,12 @@
 //! administer in their own right is recorded in the moderation log. Staff
 //! also place the space on the default front page from here, and admins
 //! mark it essential (DESIGN.md §3.1, §3.5).
+//!
+//! Members arrange their own front page from a space's page too: `POST
+//! /c/{slug}/follow` puts it in a section of their layout, `unfollow`
+//! takes it out, `mute` leaves it out of All, the space index and search,
+//! and `unmute` undoes that (DESIGN.md §3.5). None of these changes what
+//! anyone else sees, so nothing cached is cleared.
 
 use std::collections::HashMap;
 
@@ -24,7 +30,7 @@ use crate::changes::Change;
 use crate::content::{self, Deps, SpaceListing, SpaceSort, SpaceTarget};
 use crate::error::AppError;
 use crate::groups::{self, GroupSummary};
-use crate::layouts::{self, Section};
+use crate::layouts::{self, MuteOutcome, Section};
 use crate::mod_records::{self, NewAction};
 use crate::permissions::{Grant, Level};
 use crate::ratelimit::{Action, Scope};
@@ -51,7 +57,7 @@ async fn may_create(state: &AppState, viewer: &Viewer) -> Result<bool, AppError>
 
 /// The one address for each view of the index, so that other spellings
 /// redirect there (DESIGN.md §5).
-fn index_href(sort: SpaceSort, archived: bool) -> String {
+fn index_href(sort: SpaceSort, archived: bool, muted: bool) -> String {
     let mut href = String::from("/spaces");
     let mut sep = '?';
     if sort != SpaceSort::Created {
@@ -63,6 +69,11 @@ fn index_href(sort: SpaceSort, archived: bool) -> String {
     if archived {
         href.push(sep);
         href.push_str("archived=1");
+        sep = '&';
+    }
+    if muted {
+        href.push(sep);
+        href.push_str("muted=1");
     }
     href
 }
@@ -74,6 +85,11 @@ struct SpacesTemplate {
     spaces: Vec<SpaceListing>,
     sort: SpaceSort,
     archived: bool,
+    /// Whether the spaces the member has muted are shown too.
+    muted: bool,
+    /// Whether the member has muted anything, so that the toggle is
+    /// worth offering.
+    has_mutes: bool,
     can_create: bool,
 }
 
@@ -86,11 +102,16 @@ impl SpacesTemplate {
         index_href(
             SpaceSort::parse(sort).unwrap_or(SpaceSort::Created),
             self.archived,
+            self.muted,
         )
     }
 
     fn archived_href(&self) -> String {
-        index_href(self.sort, !self.archived)
+        index_href(self.sort, !self.archived, self.muted)
+    }
+
+    fn muted_href(&self) -> String {
+        index_href(self.sort, self.archived, !self.muted)
     }
 }
 
@@ -109,24 +130,134 @@ pub async fn index(
     let Some(sort) = sort else {
         return web::not_found(&state, &viewer).await;
     };
-    let archived = params
-        .iter()
-        .any(|(key, value)| key == "archived" && value == "1");
-    if let Some(redirect) = redirect_unless_canonical(&uri, &index_href(sort, archived)) {
+    let flag = |name: &str| {
+        params
+            .iter()
+            .any(|(key, value)| key == name && value == "1")
+    };
+    let archived = flag("archived");
+    // Visitors have nothing muted, so for them this is no view at all.
+    let muted = flag("muted") && viewer.user().is_some();
+    if let Some(redirect) = redirect_unless_canonical(&uri, &index_href(sort, archived, muted)) {
         return Ok(redirect);
     }
     let mut deps = Deps::new();
-    let spaces = content::space_index(state.db(), &viewer, sort, archived, &mut deps).await?;
+    let spaces =
+        content::space_index(state.db(), &viewer, sort, archived, muted, &mut deps).await?;
+    let has_mutes = match viewer.user() {
+        Some(user) => layouts::has_mutes(state.db(), user.id).await?,
+        None => false,
+    };
     cacheable(
         &SpacesTemplate {
             layout: Layout::load(&state, &viewer, Nav::Spaces).await?,
             spaces,
             sort,
             archived,
+            muted,
+            has_mutes,
             can_create: may_create(&state, &viewer).await?,
         },
         &deps,
     )
+}
+
+// ---------------------------------------------------------------------------
+// Following and muting
+
+/// The member acting on a space they can read at `slug`, or the page for
+/// whoever can't: visitors log in first, and a suspended member can do
+/// nothing but contest it.
+async fn member_and_space<'v>(
+    state: &AppState,
+    viewer: &'v Viewer,
+    slug: &str,
+) -> Result<Result<(&'v UserCtx, SpaceTarget), Response>, AppError> {
+    let Some(user) = viewer.user() else {
+        return Ok(Err(web::login_first(&format!("/c/{slug}"))));
+    };
+    let Some(space) = content::space_target(state.db(), viewer, slug).await? else {
+        return Ok(Err(web::not_found(state, viewer).await?));
+    };
+    if !user.may_act() {
+        return Ok(Err(web::forbidden(state, viewer).await?));
+    }
+    Ok(Ok((user, space)))
+}
+
+/// Puts the space in a section of the member's layout: the first, or a
+/// new one called "Following" if there are none.
+pub async fn follow(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(slug): Path<String>,
+) -> Result<Response, AppError> {
+    let (user, space) = match member_and_space(&state, &viewer, &slug).await? {
+        Ok(found) => found,
+        Err(response) => return Ok(response),
+    };
+    let layout = layouts::id_for(state.db(), Some(user.id)).await?;
+    if !layouts::follow_in_first_section(state.db(), layout, space.space.id).await? {
+        return web::not_found(&state, &viewer).await;
+    }
+    Ok(see_other(&format!("/c/{}", space.space.slug)))
+}
+
+/// Takes the space out of the member's sections.
+pub async fn unfollow(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(slug): Path<String>,
+) -> Result<Response, AppError> {
+    let (user, space) = match member_and_space(&state, &viewer, &slug).await? {
+        Ok(found) => found,
+        Err(response) => return Ok(response),
+    };
+    let layout = layouts::id_for(state.db(), Some(user.id)).await?;
+    layouts::unfollow(state.db(), layout, space.space.id).await?;
+    Ok(see_other(&format!("/c/{}", space.space.slug)))
+}
+
+/// Mutes the space for the member (DESIGN.md §3.5), unless it is
+/// essential.
+pub async fn mute(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(slug): Path<String>,
+) -> Result<Response, AppError> {
+    let (user, space) = match member_and_space(&state, &viewer, &slug).await? {
+        Ok(found) => found,
+        Err(response) => return Ok(response),
+    };
+    let back = format!("/c/{}", space.space.slug);
+    match layouts::mute(state.db(), user.id, space.space.id).await? {
+        MuteOutcome::Muted | MuteOutcome::AlreadyMuted => Ok(see_other(&back)),
+        MuteOutcome::Essential => {
+            web::message(
+                &state,
+                &viewer,
+                StatusCode::FORBIDDEN,
+                "Not allowed",
+                &["This space is essential: it is on everyone’s front page and can’t be muted."],
+                Some((&back, "Back to the space")),
+            )
+            .await
+        }
+        MuteOutcome::NoSuchSpace => web::not_found(&state, &viewer).await,
+    }
+}
+
+pub async fn unmute(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(slug): Path<String>,
+) -> Result<Response, AppError> {
+    let (user, space) = match member_and_space(&state, &viewer, &slug).await? {
+        Ok(found) => found,
+        Err(response) => return Ok(response),
+    };
+    layouts::unmute(state.db(), user.id, space.space.id).await?;
+    Ok(see_other(&format!("/c/{}", space.space.slug)))
 }
 
 // ---------------------------------------------------------------------------

@@ -1150,6 +1150,29 @@ pub async fn mark_space_read(
     }
 }
 
+/// Marks every thread in a section of the member's front page as read
+/// (DESIGN.md §3.5), then goes back to the section's tab, or to `next`
+/// (a path on this site) if the form says.
+pub async fn mark_section_read(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(id): Path<String>,
+    Form(fields): Form<Fields>,
+) -> Result<Response, AppError> {
+    let Some(section_id) = parse_id(&id) else {
+        return web::not_found(&state, &viewer).await;
+    };
+    let back = crate::pages::section_href(section_id);
+    match writing::mark_section_read(&state, &viewer, section_id).await? {
+        Ok(_) => Ok(see_other(
+            field(&fields, "next")
+                .and_then(web::safe_next)
+                .unwrap_or(&back),
+        )),
+        Err(refusal) => refused(&state, &viewer, refusal, &back, Typed::Nothing).await,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The admin's reactions
 

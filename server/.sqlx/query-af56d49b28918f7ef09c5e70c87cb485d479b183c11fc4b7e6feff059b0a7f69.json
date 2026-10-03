@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT t.id FROM threads t\n           WHERE t.space_id = $1 AND t.deleted_at IS NULL\n             AND thread_readable(t.visibility, t.space_id, $2, $3)",
+  "query": "SELECT id FROM layout_sections WHERE layout_id = $1 ORDER BY position, id LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -9,7 +9,7 @@
         "type_info": "Int8",
         "origin": {
           "Table": {
-            "table": "threads",
+            "table": "layout_sections",
             "name": "id"
           }
         }
@@ -17,14 +17,12 @@
     ],
     "parameters": {
       "Left": [
-        "Int8",
-        "TextArray",
-        "Int8Array"
+        "Int8"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "16f34737bf7e44ac7bcdccff1e37c287f07ad8e6088f83baaef2a0fd0b311725"
+  "hash": "af56d49b28918f7ef09c5e70c87cb485d479b183c11fc4b7e6feff059b0a7f69"
 }

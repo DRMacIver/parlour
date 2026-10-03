@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        WITH chosen AS (\n            SELECT id FROM layouts\n            WHERE user_id IS NOT DISTINCT FROM $3::bigint\n               OR (user_id IS NULL AND NOT EXISTS (SELECT 1 FROM layouts WHERE user_id = $3))\n            ORDER BY user_id NULLS LAST\n            LIMIT 1\n        ), placed AS (\n            SELECT x.space_id, s.id AS section_id, s.name AS section_name,\n                   s.position AS section_position, x.position\n            FROM chosen l\n            JOIN layout_sections s ON s.layout_id = l.id\n            JOIN layout_section_spaces x ON x.section_id = s.id\n        )\n        SELECT c.id, c.slug, c.name, c.description, c.essential, r.level AS read_level,\n               p.section_id AS \"section_id?\", p.section_name AS \"section_name?\",\n               array(SELECT g.name FROM groups g\n                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)\n                     ORDER BY lower(g.name), g.id) AS \"group_names!\",\n               counts.threads AS \"thread_count!\", counts.posts AS \"post_count!\",\n               lt.id AS \"last_thread_id?\", lt.title AS \"last_thread_title?\", lt.slug AS \"last_thread_slug?\",\n               coalesce(lp.created_at, lt.last_post_at) AS \"last_at?\", lp.id AS \"last_post_id?\",\n               lu.id AS \"last_user_id?\", lu.username AS \"last_username?\", lu.display_name AS \"last_display_name?\"\n        FROM spaces c\n        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'\n        LEFT JOIN placed p ON p.space_id = c.id\n        CROSS JOIN LATERAL (\n            SELECT count(*) AS threads, coalesce(sum(t.last_seq), 0)::bigint AS posts\n            FROM threads t\n            WHERE t.space_id = c.id AND t.deleted_at IS NULL\n              AND thread_readable(t.visibility, t.space_id, $1, $2)\n        ) counts\n        LEFT JOIN LATERAL (\n            SELECT t.id, t.title, t.slug, t.last_post_at\n            FROM threads t\n            WHERE t.space_id = c.id AND t.deleted_at IS NULL\n              AND thread_readable(t.visibility, t.space_id, $1, $2)\n            ORDER BY t.last_post_at DESC, t.id DESC\n            LIMIT 1\n        ) lt ON true\n        LEFT JOIN LATERAL (\n            SELECT p.id, p.author_id, p.created_at FROM posts p\n            WHERE p.thread_id = lt.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL\n            ORDER BY p.seq DESC\n            LIMIT 1\n        ) lp ON true\n        LEFT JOIN users lu ON lu.id = lp.author_id\n        WHERE (c.essential OR p.space_id IS NOT NULL)\n          AND c.archived_at IS NULL\n          AND space_readable(c.visibility, c.id, $1, $2)\n          AND ($3::bigint IS NULL\n               OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $3 AND m.space_id = c.id))\n        ORDER BY c.essential DESC, p.section_position NULLS LAST, p.section_id NULLS LAST,\n                 p.position, lower(c.name), c.id\n        ",
+  "query": "\n        WITH chosen AS (\n            SELECT id FROM layouts\n            WHERE user_id IS NOT DISTINCT FROM $3::bigint\n               OR (user_id IS NULL AND NOT EXISTS (SELECT 1 FROM layouts WHERE user_id = $3))\n            ORDER BY user_id NULLS LAST\n            LIMIT 1\n        ), placed AS (\n            SELECT x.space_id, s.id AS section_id, s.name AS section_name,\n                   s.position AS section_position, x.position\n            FROM chosen l\n            JOIN layout_sections s ON s.layout_id = l.id\n            JOIN layout_section_spaces x ON x.section_id = s.id\n        )\n        SELECT c.id, c.slug, c.name, c.description, c.essential, r.level AS read_level,\n               p.section_id AS \"section_id?\", p.section_name AS \"section_name?\",\n               array(SELECT g.name FROM groups g\n                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)\n                     ORDER BY lower(g.name), g.id) AS \"group_names!\",\n               counts.threads AS \"thread_count!\", counts.posts AS \"post_count!\", counts.unread AS \"unread!\",\n               lt.id AS \"last_thread_id?\", lt.title AS \"last_thread_title?\", lt.slug AS \"last_thread_slug?\",\n               coalesce(lp.created_at, lt.last_post_at) AS \"last_at?\", lp.id AS \"last_post_id?\",\n               lu.id AS \"last_user_id?\", lu.username AS \"last_username?\", lu.display_name AS \"last_display_name?\"\n        FROM spaces c\n        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'\n        LEFT JOIN placed p ON p.space_id = c.id\n        CROSS JOIN LATERAL (\n            SELECT count(*) AS threads, coalesce(sum(t.last_seq), 0)::bigint AS posts,\n                   count(*) FILTER (WHERE t.last_seq > coalesce(tr.last_read_seq, 0)) AS unread\n            FROM threads t\n            LEFT JOIN thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $3\n            WHERE t.space_id = c.id AND t.deleted_at IS NULL\n              AND thread_readable(t.visibility, t.space_id, $1, $2)\n        ) counts\n        LEFT JOIN LATERAL (\n            SELECT t.id, t.title, t.slug, t.last_post_at\n            FROM threads t\n            WHERE t.space_id = c.id AND t.deleted_at IS NULL\n              AND thread_readable(t.visibility, t.space_id, $1, $2)\n            ORDER BY t.last_post_at DESC, t.id DESC\n            LIMIT 1\n        ) lt ON true\n        LEFT JOIN LATERAL (\n            SELECT p.id, p.author_id, p.created_at FROM posts p\n            WHERE p.thread_id = lt.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL\n            ORDER BY p.seq DESC\n            LIMIT 1\n        ) lp ON true\n        LEFT JOIN users lu ON lu.id = lp.author_id\n        WHERE (c.essential OR p.space_id IS NOT NULL)\n          AND c.archived_at IS NULL\n          AND space_readable(c.visibility, c.id, $1, $2)\n          AND ($3::bigint IS NULL\n               OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $3 AND m.space_id = c.id))\n        ORDER BY c.essential DESC, p.section_position NULLS LAST, p.section_id NULLS LAST,\n                 p.position, lower(c.name), c.id\n        ",
   "describe": {
     "columns": [
       {
@@ -111,6 +111,12 @@
       },
       {
         "ordinal": 11,
+        "name": "unread!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
         "name": "last_thread_id?",
         "type_info": "Int8",
         "origin": {
@@ -121,7 +127,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "last_thread_title?",
         "type_info": "Text",
         "origin": {
@@ -132,7 +138,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "last_thread_slug?",
         "type_info": "Text",
         "origin": {
@@ -143,13 +149,13 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "last_at?",
         "type_info": "Timestamptz",
         "origin": "Expression"
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "last_post_id?",
         "type_info": "Int8",
         "origin": {
@@ -160,7 +166,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "last_user_id?",
         "type_info": "Int8",
         "origin": {
@@ -171,7 +177,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "last_username?",
         "type_info": {
           "Custom": {
@@ -187,7 +193,7 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "last_display_name?",
         "type_info": "Text",
         "origin": {
@@ -217,6 +223,7 @@
       null,
       null,
       null,
+      null,
       false,
       false,
       false,
@@ -227,5 +234,5 @@
       false
     ]
   },
-  "hash": "2c66b7d70a41a5724304f541a0d87aacb0234578041128d37ac5c579e761be2b"
+  "hash": "e6e69d39c8db846eb5645d43fff13e736ab3f821fb04f2d4faf1d70dd1065977"
 }

@@ -225,6 +225,9 @@ pub fn app(state: AppState) -> Router {
     let pages = Router::new()
         .route("/", get(pages::index))
         .route("/latest", get(pages::latest))
+        .route("/latest/front", get(pages::latest_front))
+        .route("/latest/s/{id}", get(pages::latest_section))
+        .route("/latest/s/{id}/read", post(write_pages::mark_section_read))
         .route("/c/{slug}", get(pages::space))
         .route("/spaces", get(space_pages::index))
         .route("/t/{id}", get(pages::thread_without_slug))
@@ -285,6 +288,10 @@ pub fn app(state: AppState) -> Router {
         .route("/c/{slug}/unarchive", post(space_pages::unarchive))
         .route("/c/{slug}/delete", post(space_pages::delete))
         .route("/c/{slug}/watch", post(notification_pages::watch_space))
+        .route("/c/{slug}/follow", post(space_pages::follow))
+        .route("/c/{slug}/unfollow", post(space_pages::unfollow))
+        .route("/c/{slug}/mute", post(space_pages::mute))
+        .route("/c/{slug}/unmute", post(space_pages::unmute))
         .route("/t/{id}/watch", post(notification_pages::watch_thread))
         .route(
             "/t/{id}/reply",

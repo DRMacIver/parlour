@@ -1,0 +1,39 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH chosen AS (\n            SELECT id FROM layouts\n            WHERE user_id IS NOT DISTINCT FROM $3::bigint\n               OR (user_id IS NULL AND NOT EXISTS (SELECT 1 FROM layouts WHERE user_id = $3))\n            ORDER BY user_id NULLS LAST\n            LIMIT 1\n        ), placed AS (\n            SELECT x.space_id, s.id AS section_id\n            FROM chosen l\n            JOIN layout_sections s ON s.layout_id = l.id\n            JOIN layout_section_spaces x ON x.section_id = s.id\n        )\n        SELECT c.id,\n               (SELECT count(*) FROM threads t\n                WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                  AND thread_readable(t.visibility, t.space_id, $1, $2)) AS \"thread_count!\"\n        FROM spaces c\n        WHERE space_readable(c.visibility, c.id, $1, $2)\n          AND ($3::bigint IS NULL\n               OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $3 AND m.space_id = c.id))\n          AND CASE $4::text\n                WHEN 'all' THEN true\n                WHEN 'front' THEN c.archived_at IS NULL\n                     AND (c.essential OR EXISTS (SELECT 1 FROM placed p WHERE p.space_id = c.id))\n                ELSE c.archived_at IS NULL\n                     AND EXISTS (SELECT 1 FROM placed p WHERE p.space_id = c.id AND p.section_id = $5)\n              END\n        ORDER BY c.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "thread_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "31ce678c18e9a3d3726a758bf7cbee1a589a14c209d14e8f3a726011d888e6fb"
+}

@@ -5,10 +5,15 @@
 <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <span aria-current="page">{{ space.space.name }}</span></nav>
 <h1 class="page-title">{{ space.space.name }} {% call m::access_flag(space.read_level, space.group_names) %}{% endcall %}{% if space.archived %} <span class="flag">Archived</span>{% endif %}</h1>
 {% if !space.description.is_empty() %}<p class="lede">{{ space.description }}</p>{% endif %}
+{% if muted %}<div class="notice" role="status"><p>You’ve muted this space: it is left out of your front page, the All tab of Latest, the space index and your searches. You can still read and post here.</p></div>{% endif %}
 <div class="toolbar">
   {% if can_post %}<a class="button" href="/c/{{ space.space.slug }}/new">New thread</a>{% endif %}
   <span class="toolbar-note">{{ crate::format::plural(space.thread_count, "thread", "threads") }}</span>
   {% if logged_in %}<form class="form-inline" method="post" action="/c/{{ space.space.slug }}/read"><button class="button button-small button-quiet" type="submit">Mark all read</button></form>{% endif %}
+  {% if logged_in %}
+    {% if let Some(section) = following %}<form class="form-inline" method="post" action="{{ self.action("unfollow") }}"><button class="button button-small button-quiet" type="submit">Unfollow</button></form><span class="toolbar-note">In {{ section }} on your front page</span>{% else %}<form class="form-inline" method="post" action="{{ self.action("follow") }}"><button class="button button-small button-quiet" type="submit">Follow</button></form>{% endif %}
+    {% if muted %}<form class="form-inline" method="post" action="{{ self.action("unmute") }}"><button class="button button-small button-quiet" type="submit">Unmute</button></form>{% else if !essential %}<form class="form-inline" method="post" action="{{ self.action("mute") }}"><button class="button button-small button-quiet" type="submit">Mute</button></form>{% endif %}
+  {% endif %}
   {% if let Some(level) = watch %}{% call m::watch_form(self.watch_action(), level, "space") %}{% endcall %}{% endif %}
   {% if can_administer %}<a class="button button-small button-quiet" href="/c/{{ space.space.slug }}/settings">Settings</a>{% endif %}
   <span class="spacer"></span>

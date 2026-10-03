@@ -92,9 +92,10 @@ async fn page_queries(forum: &Forum, path: &str, username: Option<&str>) -> usiz
 #[sqlx::test]
 async fn visitors_pages_make_few_queries(pool: PgPool) {
     let s = seeded(pool).await;
-    // Site settings, then the page's content.
+    // Site settings, then the page's content: for /latest, the default
+    // layout's sections (its tabs), the spaces in scope and the threads.
     assert!(page_queries(&s.forum, "/", None).await <= 4);
-    assert!(page_queries(&s.forum, "/latest", None).await <= 3);
+    assert!(page_queries(&s.forum, "/latest", None).await <= 4);
     assert!(page_queries(&s.forum, &s.thread_path, None).await <= 8);
 }
 

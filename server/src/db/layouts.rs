@@ -22,9 +22,10 @@
 //! sure): following it again moves it.
 //!
 //! Also here: muting a space (it leaves the member's sections and front
-//! page), and marking a space essential (shown at the top of every front
-//! page, and never muted), which are admin and member writes rather than
-//! content, so they live beside the layout writes.
+//! page, and is left out of the All tab, the default view of the space
+//! index and search results), and marking a space essential (shown at the
+//! top of every front page, and never muted), which are admin and member
+//! writes rather than content, so they live beside the layout writes.
 //!
 //! What a viewer is shown of a layout is read through
 //! [`crate::content::front_page`], which applies their permissions.
@@ -37,6 +38,10 @@ use crate::db::{Handle, KEY};
 /// The section every member's layout ends with, where their own feed goes
 /// (DESIGN.md §3.5).
 pub const FEEDS_SECTION: &str = "Feeds";
+
+/// The section made for a member who follows a space from its page while
+/// their layout has no sections at all.
+pub const FOLLOWING_SECTION: &str = "Following";
 
 pub const MAX_SECTION_NAME_CHARS: usize = 80;
 
@@ -186,6 +191,34 @@ pub async fn read<'c>(db: impl Handle<'c>, layout_id: i64) -> sqlx::Result<Optio
         user_id: layout.user_id,
         edited_at: layout.edited_at,
         sections,
+    }))
+}
+
+/// Where a space is in a layout: the section's id and name, if it is in
+/// one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placement {
+    pub section_id: i64,
+    pub section_name: String,
+}
+
+pub async fn placement<'c>(
+    db: impl Handle<'c>,
+    layout_id: i64,
+    space_id: i64,
+) -> sqlx::Result<Option<Placement>> {
+    let mut conn = db.open(KEY).acquire().await?;
+    let row = sqlx::query!(
+        "SELECT s.id, s.name FROM layout_section_spaces x JOIN layout_sections s ON s.id = x.section_id
+         WHERE s.layout_id = $1 AND x.space_id = $2",
+        layout_id,
+        space_id
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row.map(|row| Placement {
+        section_id: row.id,
+        section_name: row.name,
     }))
 }
 
@@ -471,6 +504,31 @@ pub async fn follow<'c>(
     Ok(true)
 }
 
+/// What "Follow" on a space's page does (DESIGN.md §3.5): puts the space
+/// in the first section of the layout, or, if the layout has no sections,
+/// in a new one called "Following". False if there is no such space.
+pub async fn follow_in_first_section<'c>(
+    db: impl Handle<'c>,
+    layout_id: i64,
+    space_id: i64,
+) -> sqlx::Result<bool> {
+    let mut tx = db.open(KEY).begin().await?;
+    lock_layout(&mut tx, layout_id).await?;
+    let first = sqlx::query_scalar!(
+        "SELECT id FROM layout_sections WHERE layout_id = $1 ORDER BY position, id LIMIT 1",
+        layout_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    let section = match first {
+        Some(id) => id,
+        None => add_section(&mut tx, layout_id, FOLLOWING_SECTION).await?,
+    };
+    let done = follow(&mut tx, layout_id, section, space_id).await?;
+    tx.commit().await?;
+    Ok(done)
+}
+
 /// Takes a space out of the layout. False if it wasn't in it.
 pub async fn unfollow<'c>(
     db: impl Handle<'c>,
@@ -604,6 +662,30 @@ pub async fn unmute<'c>(db: impl Handle<'c>, user_id: i64, space_id: i64) -> sql
     .execute(&mut *conn)
     .await?;
     Ok(done.rows_affected() == 1)
+}
+
+/// Whether a member has muted a space.
+pub async fn is_muted<'c>(db: impl Handle<'c>, user_id: i64, space_id: i64) -> sqlx::Result<bool> {
+    let mut conn = db.open(KEY).acquire().await?;
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM space_mutes WHERE user_id = $1 AND space_id = $2) AS "e!""#,
+        user_id,
+        space_id
+    )
+    .fetch_one(&mut *conn)
+    .await
+}
+
+/// Whether a member has muted any space at all, which pages that leave
+/// muted spaces out say.
+pub async fn has_mutes<'c>(db: impl Handle<'c>, user_id: i64) -> sqlx::Result<bool> {
+    let mut conn = db.open(KEY).acquire().await?;
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM space_mutes WHERE user_id = $1) AS "e!""#,
+        user_id
+    )
+    .fetch_one(&mut *conn)
+    .await
 }
 
 // ---------------------------------------------------------------------------

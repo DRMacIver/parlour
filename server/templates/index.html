@@ -1,12 +1,15 @@
 {% extends "base.html" %}
 {%- import "_macros.html" as m -%}
 
-{#- One section of the front page: a heading and the spaces under it. -#}
-{% macro space_table(heading, spaces) %}
+{#- One section of the front page: a heading and the spaces under it. A
+    section of the viewer's layout (section_id Some) heads to its tab of
+    /latest and, for a member, can be marked read; the essential block
+    (None) is just headed. -#}
+{% macro space_table(heading, section_id, spaces) %}
     <table class="list space-list">
       <thead>
         <tr>
-          <th scope="col">{{ heading }}</th>
+          <th scope="col">{% if let Some(id) = section_id %}<a href="/latest/s/{{ id }}">{{ heading }}</a>{% if layout.user.is_some() %}<form class="form-inline th-action" method="post" action="/latest/s/{{ id }}/read"><input type="hidden" name="next" value="/"><button class="link-button" type="submit">Mark all read</button></form>{% endif %}{% else %}{{ heading }}{% endif %}</th>
           <th scope="col" class="num">Threads</th>
           <th scope="col" class="num">Posts</th>
           <th scope="col" class="last-col">Last post</th>
@@ -19,6 +22,7 @@
             <div class="row-title">
               <a href="/c/{{ summary.space.slug }}">{{ summary.space.name }}</a>
               {% call m::access_flag(summary.read_level, summary.group_names) %}{% endcall %}
+              {% if let Some(n) = summary.unread %}{% if *n > 0 %}<span class="unread">{{ n }} unread</span>{% endif %}{% endif %}
             </div>
             {% if !summary.description.is_empty() %}<div class="row-meta">{{ summary.description }}</div>{% endif %}
           </td>
@@ -59,10 +63,10 @@
     </section>
   {% endif %}
   {% if !front.essential.is_empty() %}
-    {% call space_table("Spaces", &front.essential) %}{% endcall %}
+    {% call space_table("Spaces", None::<i64>, &front.essential) %}{% endcall %}
   {% endif %}
   {% for section in front.sections %}
-    {% call space_table(section.name, &section.spaces) %}{% endcall %}
+    {% call space_table(section.name, Some(section.id), &section.spaces) %}{% endcall %}
   {% endfor %}
   </div>
   <aside class="panel latest" aria-labelledby="latest-heading">

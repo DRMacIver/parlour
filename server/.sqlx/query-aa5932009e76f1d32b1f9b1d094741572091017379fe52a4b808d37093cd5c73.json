@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,\n               coalesce(lp.created_at, t.last_post_at) AS \"last_post_at!\", t.pinned, t.locked,\n               c.id AS space_id, c.slug AS space_slug, c.name AS space_name,\n               a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name,\n               lp.id AS \"last_post_id?\", lu.id AS \"last_user_id?\", lu.username AS \"last_username?\",\n               lu.display_name AS \"last_display_name?\",\n               src.id AS \"source_thread_id?\", src.title AS \"source_title?\", src.slug AS \"source_slug?\",\n               src.visible AS \"source_visible?\",\n               CASE WHEN $6::bigint IS NULL THEN NULL\n                    ELSE t.last_seq - coalesce(tr.last_read_seq, 0) END AS unread\n        FROM threads t\n        LEFT JOIN thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $6\n        JOIN spaces c ON c.id = t.space_id\n        JOIN users a ON a.id = t.author_id\n        LEFT JOIN LATERAL (\n            SELECT p.id, p.author_id, p.created_at FROM posts p\n            WHERE p.thread_id = t.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL\n            ORDER BY p.seq DESC\n            LIMIT 1\n        ) lp ON true\n        LEFT JOIN users lu ON lu.id = lp.author_id\n        LEFT JOIN LATERAL (\n            SELECT st.id, st.title, st.slug,\n                   st.deleted_at IS NULL AND thread_readable(st.visibility, st.space_id, $1, $2) AS visible\n            FROM posts sp JOIN threads st ON st.id = sp.thread_id\n            WHERE sp.id = t.forked_from_post_id\n        ) src ON true\n        WHERE t.deleted_at IS NULL\n          AND thread_readable(t.visibility, t.space_id, $1, $2)\n          AND ($3::bigint IS NULL OR t.space_id = $3)\n        ORDER BY CASE WHEN $3::bigint IS NULL THEN false ELSE t.pinned END DESC,\n                 t.last_post_at DESC, t.id DESC\n        LIMIT $4 OFFSET $5\n        ",
+  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,\n               coalesce(lp.created_at, t.last_post_at) AS \"last_post_at!\", t.pinned, t.locked,\n               c.id AS space_id, c.slug AS space_slug, c.name AS space_name,\n               a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name,\n               lp.id AS \"last_post_id?\", lu.id AS \"last_user_id?\", lu.username AS \"last_username?\",\n               lu.display_name AS \"last_display_name?\",\n               src.id AS \"source_thread_id?\", src.title AS \"source_title?\", src.slug AS \"source_slug?\",\n               src.visible AS \"source_visible?\",\n               CASE WHEN $6::bigint IS NULL THEN NULL\n                    ELSE t.last_seq - coalesce(tr.last_read_seq, 0) END AS unread\n        FROM threads t\n        LEFT JOIN thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $6\n        JOIN spaces c ON c.id = t.space_id\n        JOIN users a ON a.id = t.author_id\n        LEFT JOIN LATERAL (\n            SELECT p.id, p.author_id, p.created_at FROM posts p\n            WHERE p.thread_id = t.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL\n            ORDER BY p.seq DESC\n            LIMIT 1\n        ) lp ON true\n        LEFT JOIN users lu ON lu.id = lp.author_id\n        LEFT JOIN LATERAL (\n            SELECT st.id, st.title, st.slug,\n                   st.deleted_at IS NULL AND thread_readable(st.visibility, st.space_id, $1, $2) AS visible\n            FROM posts sp JOIN threads st ON st.id = sp.thread_id\n            WHERE sp.id = t.forked_from_post_id\n        ) src ON true\n        WHERE t.deleted_at IS NULL\n          AND thread_readable(t.visibility, t.space_id, $1, $2)\n          AND t.space_id = ANY($3)\n        ORDER BY CASE WHEN $7 THEN t.pinned ELSE false END DESC,\n                 t.last_post_at DESC, t.id DESC\n        LIMIT $4 OFFSET $5\n        ",
   "describe": {
     "columns": [
       {
@@ -256,10 +256,11 @@
       "Left": [
         "TextArray",
         "Int8Array",
+        "Int8Array",
         "Int8",
         "Int8",
         "Int8",
-        "Int8"
+        "Bool"
       ]
     },
     "nullable": [
@@ -288,5 +289,5 @@
       null
     ]
   },
-  "hash": "c0e44163941dd9906dfbf2f379f72f4e8ae351c8710349cd92cb1527f1b63514"
+  "hash": "aa5932009e76f1d32b1f9b1d094741572091017379fe52a4b808d37093cd5c73"
 }

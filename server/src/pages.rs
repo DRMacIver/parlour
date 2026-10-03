@@ -9,16 +9,18 @@ use axum::response::{IntoResponse, Redirect, Response};
 
 use crate::AppState;
 use crate::content::{
-    self, Deps, Embed, FrontPage, LATEST_ON_INDEX, POSTS_PER_PAGE, PostBody, ReactionType,
-    SpacePage, THREADS_PER_PAGE, ThreadPage, ThreadRow, page_count, page_of_seq,
+    self, Deps, Embed, FrontPage, LATEST_ON_INDEX, LatestScope, POSTS_PER_PAGE, PostBody,
+    ReactionType, SectionTab, SpacePage, THREADS_PER_PAGE, ThreadPage, ThreadRow, page_count,
+    page_of_seq,
 };
 use crate::error::AppError;
 use crate::format;
+use crate::layouts;
 use crate::notify;
 use crate::pagination::{PageItem, Pagination, page_href, thread_list_pages};
 use crate::social::{self, WatchLevel, Watched};
 use crate::viewer::Viewer;
-use crate::web::{self, Layout, Nav, cacheable, redirect_unless_canonical};
+use crate::web::{self, Layout, Nav, cacheable, redirect_unless_canonical, see_other};
 use crate::writing;
 
 /// The `?page=` number the request asks for: 1 if there is none, or `None`
@@ -86,7 +88,15 @@ pub async fn index(
     }
     let mut deps = Deps::new();
     let front = content::front_page(&state.db, &viewer, &mut deps).await?;
-    let latest = content::latest(&state.db, &viewer, 1, LATEST_ON_INDEX, &mut deps).await?;
+    let latest = content::latest(
+        &state.db,
+        &viewer,
+        LatestScope::All,
+        1,
+        LATEST_ON_INDEX,
+        &mut deps,
+    )
+    .await?;
     cacheable(
         &IndexTemplate {
             layout: Layout::load(&state, &viewer, Nav::Index).await?,
@@ -99,6 +109,13 @@ pub async fn index(
 
 // ---------------------------------------------------------------------------
 
+/// One tab of `/latest` (DESIGN.md §3.5).
+struct Tab {
+    label: String,
+    href: String,
+    current: bool,
+}
+
 #[derive(Template)]
 #[template(path = "latest.html")]
 struct LatestTemplate {
@@ -106,31 +123,161 @@ struct LatestTemplate {
     threads: Vec<ThreadRow>,
     pagination: Pagination,
     show_space: bool,
+    scope: LatestScope,
+    /// The section shown, for a section's tab.
+    section: Option<SectionTab>,
+    /// All, Front page (for members) and the sections with something in
+    /// them to see, plus the one shown.
+    tabs: Vec<Tab>,
+    /// Whether the member has muted any space, which every tab leaves out.
+    has_mutes: bool,
+    logged_in: bool,
 }
 
+impl LatestTemplate {
+    /// What the page is headed.
+    fn heading(&self) -> String {
+        match (&self.scope, &self.section) {
+            (LatestScope::All, _) => "Latest".to_owned(),
+            (LatestScope::Front, _) => "Front page".to_owned(),
+            (LatestScope::Section(_), Some(section)) => section.name.clone(),
+            (LatestScope::Section(_), None) => "Latest".to_owned(),
+        }
+    }
+
+    /// What the list holds, said under the heading.
+    fn note(&self) -> &'static str {
+        match self.scope {
+            LatestScope::All => "Every thread, most recently active first",
+            LatestScope::Front => {
+                "Threads in the spaces on your front page, most recently active first"
+            }
+            LatestScope::Section(_) => {
+                "Threads in this section’s spaces, most recently active first"
+            }
+        }
+    }
+
+    fn is_all(&self) -> bool {
+        self.scope == LatestScope::All
+    }
+
+    fn mark_read_action(&self) -> String {
+        match &self.section {
+            Some(section) => format!("/latest/s/{}/read", section.id),
+            None => String::new(),
+        }
+    }
+}
+
+/// The address of a section's tab.
+pub(crate) fn section_href(section_id: i64) -> String {
+    format!("/latest/s/{section_id}")
+}
+
+/// All threads the viewer can read, by last activity.
 pub async fn latest(
     State(state): State<AppState>,
     viewer: Viewer,
     uri: Uri,
 ) -> Result<Response, AppError> {
-    let Some(page) = requested_page(&uri) else {
+    render_latest(&state, &viewer, &uri, LatestScope::All, "/latest").await
+}
+
+/// The threads in the spaces on the viewer's front page. Visitors have no
+/// front page of their own, so for them this is All.
+pub async fn latest_front(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    uri: Uri,
+) -> Result<Response, AppError> {
+    if viewer.user().is_none() {
+        return Ok(see_other("/latest"));
+    }
+    render_latest(&state, &viewer, &uri, LatestScope::Front, "/latest/front").await
+}
+
+/// The threads in the spaces of one section of the viewer's layout.
+pub async fn latest_section(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(id): Path<String>,
+    uri: Uri,
+) -> Result<Response, AppError> {
+    let Some(id) = parse_id(&id) else {
         return web::not_found(&state, &viewer).await;
     };
-    if let Some(redirect) = redirect_unless_canonical(&uri, &page_href("/latest", page)) {
+    render_latest(
+        &state,
+        &viewer,
+        &uri,
+        LatestScope::Section(id),
+        &section_href(id),
+    )
+    .await
+}
+
+async fn render_latest(
+    state: &AppState,
+    viewer: &Viewer,
+    uri: &Uri,
+    scope: LatestScope,
+    base: &str,
+) -> Result<Response, AppError> {
+    let Some(page) = requested_page(uri) else {
+        return web::not_found(state, viewer).await;
+    };
+    if let Some(redirect) = redirect_unless_canonical(uri, &page_href(base, page)) {
         return Ok(redirect);
     }
     let mut deps = Deps::new();
-    let latest = content::latest(&state.db, &viewer, page, THREADS_PER_PAGE, &mut deps).await?;
+    let layout = content::layout_sections(&state.db, viewer, &mut deps).await?;
+    let section = match scope {
+        LatestScope::Section(id) => match layout.sections.iter().find(|s| s.id == id) {
+            Some(section) => Some(section.clone()),
+            None => return web::not_found(state, viewer).await,
+        },
+        _ => None,
+    };
+    let latest =
+        content::latest(&state.db, viewer, scope, page, THREADS_PER_PAGE, &mut deps).await?;
     let total = page_count(latest.thread_count, THREADS_PER_PAGE);
     if page > total {
-        return web::not_found(&state, &viewer).await;
+        return web::not_found(state, viewer).await;
+    }
+    let mut tabs = vec![Tab {
+        label: "All".to_owned(),
+        href: "/latest".to_owned(),
+        current: scope == LatestScope::All,
+    }];
+    if viewer.user().is_some() {
+        tabs.push(Tab {
+            label: "Front page".to_owned(),
+            href: "/latest/front".to_owned(),
+            current: scope == LatestScope::Front,
+        });
+    }
+    for s in &layout.sections {
+        let current = scope == LatestScope::Section(s.id);
+        if s.spaces > 0 || current {
+            tabs.push(Tab {
+                label: s.name.clone(),
+                href: section_href(s.id),
+                current,
+            });
+        }
     }
     cacheable(
         &LatestTemplate {
-            layout: Layout::load(&state, &viewer, Nav::Latest).await?,
+            layout: Layout::load(state, viewer, Nav::Latest).await?,
             threads: latest.threads,
-            pagination: Pagination::new("/latest", page, total),
+            pagination: Pagination::new(base, page, total),
             show_space: true,
+            scope,
+            section,
+            tabs,
+            has_mutes: layout.has_mutes,
+            logged_in: viewer.user().is_some(),
         },
         &deps,
     )
@@ -153,11 +300,21 @@ struct SpaceTemplate {
     can_administer: bool,
     /// How closely a logged-in viewer follows the space.
     watch: Option<WatchLevel>,
+    /// The section of a member's layout the space is in, if it is in one.
+    following: Option<String>,
+    /// Whether the member has muted the space.
+    muted: bool,
+    /// Essential spaces can't be muted (DESIGN.md §3.5).
+    essential: bool,
 }
 
 impl SpaceTemplate {
     fn watch_action(&self) -> String {
         format!("/c/{}/watch", self.space.space.slug)
+    }
+
+    fn action(&self, what: &str) -> String {
+        format!("/c/{}/{what}", self.space.space.slug)
     }
 }
 
@@ -195,12 +352,22 @@ pub async fn space(
     let can_administer = target
         .as_ref()
         .is_some_and(|target| target.rules.may_administer(&viewer));
-    let watch = match viewer.user() {
+    let (watch, following, muted) = match viewer.user() {
         Some(user) => {
-            Some(social::watch_level(&state.db, user.id, Watched::Space(space.space.id)).await?)
+            let layout = layouts::id_for(&state.db, Some(user.id)).await?;
+            (
+                Some(
+                    social::watch_level(&state.db, user.id, Watched::Space(space.space.id)).await?,
+                ),
+                layouts::placement(&state.db, layout, space.space.id)
+                    .await?
+                    .map(|p| p.section_name),
+                layouts::is_muted(&state.db, user.id, space.space.id).await?,
+            )
         }
-        None => None,
+        None => (None, None, false),
     };
+    let essential = target.as_ref().is_some_and(|target| target.essential);
     cacheable(
         &SpaceTemplate {
             layout: Layout::load(&state, &viewer, Nav::None).await?,
@@ -212,6 +379,9 @@ pub async fn space(
             can_post,
             can_administer,
             watch,
+            following,
+            muted,
+            essential,
         },
         &deps,
     )
