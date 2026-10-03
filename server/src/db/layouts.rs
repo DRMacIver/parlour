@@ -122,7 +122,9 @@ pub async fn member_id<'c>(db: impl Handle<'c>, user_id: i64) -> sqlx::Result<Op
 }
 
 /// The layout a viewer's front page comes from: their own, or the default
-/// for visitors and for a member who somehow has none.
+/// for visitors and for a member who somehow has none. For reading only:
+/// a member's writes go to [`own_id`], never to the default, which is
+/// everyone's who follows it.
 pub async fn id_for<'c>(db: impl Handle<'c>, user_id: Option<i64>) -> sqlx::Result<i64> {
     let mut conn = db.open(KEY).acquire().await?;
     if let Some(user_id) = user_id
@@ -133,6 +135,20 @@ pub async fn id_for<'c>(db: impl Handle<'c>, user_id: Option<i64>) -> sqlx::Resu
         return Ok(id);
     }
     ensure_default(&mut conn).await
+}
+
+/// The layout a member's own changes go to: theirs, made as a copy of the
+/// default first if they somehow have none (every account is given one,
+/// so this is belt and braces). Never the default.
+pub async fn own_id<'c>(db: impl Handle<'c>, user_id: i64) -> sqlx::Result<i64> {
+    let mut conn = db.open(KEY).acquire().await?;
+    match sqlx::query_scalar!("SELECT id FROM layouts WHERE user_id = $1", user_id)
+        .fetch_optional(&mut *conn)
+        .await?
+    {
+        Some(id) => Ok(id),
+        None => create_member_copy(&mut *conn, user_id).await,
+    }
 }
 
 /// A layout with its sections and their spaces, in order.

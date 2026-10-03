@@ -502,6 +502,146 @@ async fn members_follow_unfollow_mute_and_unmute_from_the_space_page(pool: PgPoo
     assert_eq!(response.status, StatusCode::SEE_OTHER);
 }
 
+/// A suspended member reads what visitors read, but arranges and mutes
+/// nothing (decision 20): each form is refused and changes nothing.
+#[sqlx::test]
+async fn suspended_members_cant_follow_unfollow_mute_or_unmute(pool: PgPool) {
+    let f = Forum::new(pool);
+    let forum = f.section("Forum", 1).await;
+    let general = f.space("general", "public", Some(forum), 0).await;
+    let books = f.unlisted_space("books", "public").await;
+    let ruth = f.user("ruth").await;
+    let cookie = f.session(ruth).await;
+    let ruth_layout = member_layout(&f, ruth).await;
+
+    // In good standing: General followed (from the default), Books muted.
+    let response = f.submit("/c/books/mute", &[], Some(&cookie)).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    let my_forum = section_named(&f, ruth_layout, "Forum").await;
+    // Where General and Books are in Ruth's layout, and whether each is muted.
+    async fn arrangement(
+        db: &PgPool,
+        layout: i64,
+        user: i64,
+        spaces: (i64, i64),
+    ) -> (Option<i64>, Option<i64>, bool, bool) {
+        (
+            layouts::section_of(db, layout, spaces.0).await.unwrap(),
+            layouts::section_of(db, layout, spaces.1).await.unwrap(),
+            layouts::is_muted(db, user, spaces.0).await.unwrap(),
+            layouts::is_muted(db, user, spaces.1).await.unwrap(),
+        )
+    }
+    let before = (Some(my_forum), None, false, true);
+    assert_eq!(
+        arrangement(&f.db, ruth_layout, ruth, (general, books)).await,
+        before
+    );
+
+    f.exec(&format!(
+        "UPDATE users SET suspended_until = now() + interval '1 day' WHERE id = {ruth}"
+    ))
+    .await;
+    // The pages still render for them.
+    f.page_as("/c/general", &cookie).await;
+    f.page_as("/c/books", &cookie).await;
+    for path in [
+        "/c/books/follow",
+        "/c/general/unfollow",
+        "/c/general/mute",
+        "/c/books/unmute",
+    ] {
+        let response = f.submit(path, &[], Some(&cookie)).await;
+        assert_eq!(response.status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(
+            arrangement(&f.db, ruth_layout, ruth, (general, books)).await,
+            before,
+            "{path} changed something"
+        );
+    }
+
+    // Once the suspension is over, the forms work again.
+    f.exec(&format!(
+        "UPDATE users SET suspended_until = now() - interval '1 second' WHERE id = {ruth}"
+    ))
+    .await;
+    let response = f.submit("/c/books/follow", &[], Some(&cookie)).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        arrangement(&f.db, ruth_layout, ruth, (general, books)).await,
+        (Some(my_forum), Some(my_forum), false, false)
+    );
+}
+
+/// Following and unfollowing write to the member's own layout and never
+/// to the default: a member who somehow has no layout (every account is
+/// given one, so this is belt and braces) is given a copy first, and the
+/// default, and everyone following it, are untouched.
+#[sqlx::test]
+async fn following_without_a_layout_makes_one_rather_than_editing_the_default(pool: PgPool) {
+    let f = Forum::new(pool);
+    let forum = f.section("Forum", 1).await;
+    let general = f.space("general", "public", Some(forum), 0).await;
+    let books = f.unlisted_space("books", "public").await;
+    let default = layouts::default_id(&f.db).await.unwrap();
+    let ruth = f.user("ruth").await;
+    let cookie = f.session(ruth).await;
+    let jonah = f.user("jonah").await;
+    let jonah_layout = member_layout(&f, jonah).await;
+
+    f.exec(&format!("DELETE FROM layouts WHERE user_id = {ruth}"))
+        .await;
+    assert_eq!(layouts::member_id(&f.db, ruth).await.unwrap(), None);
+    let response = f.submit("/c/general/unfollow", &[], Some(&cookie)).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(
+        layouts::section_of(&f.db, default, general).await.unwrap(),
+        Some(forum),
+        "the default lost General"
+    );
+    let ruth_layout = member_layout(&f, ruth).await;
+    assert_eq!(
+        layouts::section_of(&f.db, ruth_layout, general)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        layouts::section_of(&f.db, jonah_layout, general)
+            .await
+            .unwrap(),
+        Some(section_named(&f, jonah_layout, "Forum").await)
+    );
+    assert!(
+        f.page_as("/", &f.session(jonah).await)
+            .await
+            .contains("href=\"/c/general\"")
+    );
+
+    f.exec(&format!("DELETE FROM layouts WHERE user_id = {ruth}"))
+        .await;
+    let response = f.submit("/c/books/follow", &[], Some(&cookie)).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(
+        layouts::section_of(&f.db, default, books).await.unwrap(),
+        None,
+        "the default gained Books"
+    );
+    let ruth_layout = member_layout(&f, ruth).await;
+    assert_eq!(
+        layouts::section_of(&f.db, ruth_layout, books)
+            .await
+            .unwrap(),
+        Some(section_named(&f, ruth_layout, "Forum").await)
+    );
+    assert!(f.page_as("/", &cookie).await.contains("href=\"/c/books\""));
+    assert!(
+        !f.page_as("/", &f.session(jonah).await)
+            .await
+            .contains("href=\"/c/books\"")
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Unread counts and marking a section read
 

@@ -196,7 +196,7 @@ pub async fn follow(
         Ok(found) => found,
         Err(response) => return Ok(response),
     };
-    let layout = layouts::id_for(state.db(), Some(user.id)).await?;
+    let layout = layouts::own_id(state.db(), user.id).await?;
     if !layouts::follow_in_first_section(state.db(), layout, space.space.id).await? {
         return web::not_found(&state, &viewer).await;
     }
@@ -213,7 +213,7 @@ pub async fn unfollow(
         Ok(found) => found,
         Err(response) => return Ok(response),
     };
-    let layout = layouts::id_for(state.db(), Some(user.id)).await?;
+    let layout = layouts::own_id(state.db(), user.id).await?;
     layouts::unfollow(state.db(), layout, space.space.id).await?;
     Ok(see_other(&format!("/c/{}", space.space.slug)))
 }
