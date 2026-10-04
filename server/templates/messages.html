@@ -61,7 +61,7 @@
     </div>
     {% endif %}
   </header>
-  {% if !shown.participant %}<div class="notice" role="status"><p>You can read this conversation because one of its messages was reported. Its other conversations stay private.</p></div>{% endif %}
+  {% if !shown.participant %}<div class="notice" role="status"><p>You aren’t in this conversation. You can read it for now because you broke glass on it, and every page of it you open is recorded.</p></div>{% endif %}
   {% call f::errors(self.errors()) %}{% endcall %}
   {% call m::pagination(shown.pagination, "Pages of this conversation") %}{% endcall %}
   <div class="messages">

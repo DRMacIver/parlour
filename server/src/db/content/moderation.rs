@@ -542,9 +542,9 @@ pub struct DeletedThread {
     pub title: String,
     /// The space it was in, if the viewer can read it.
     pub space: Option<(String, String)>,
-    /// If all its posts were moved, the thread they went to: its id and
-    /// title.
-    pub merged_into: Option<(i64, String)>,
+    /// If all its posts were moved, the thread they went to: its id, and
+    /// its title if the viewer can read it.
+    pub merged_into: Option<(i64, Option<String>)>,
 }
 
 /// A deleted thread in a space, for staff only.
@@ -559,7 +559,8 @@ pub async fn deleted_thread(
     let filter = viewer.filter();
     let row = sqlx::query!(
         r#"SELECT t.id, t.title, c.name AS "space_name?", c.slug AS "space_slug?",
-                  d.id AS "merged_id?", d.title AS "merged_title?"
+                  d.id AS "merged_id?",
+                  CASE WHEN thread_readable(d, $2, $3, $4, $5) THEN d.title END AS "merged_title?"
            FROM threads t
            JOIN spaces c ON c.id = t.space_id
            LEFT JOIN threads d ON d.id = t.merged_into_thread_id
@@ -577,7 +578,7 @@ pub async fn deleted_thread(
         id: row.id,
         title: row.title,
         space: row.space_name.zip(row.space_slug),
-        merged_into: row.merged_id.zip(row.merged_title),
+        merged_into: row.merged_id.map(|id| (id, row.merged_title)),
     }))
 }
 
@@ -603,4 +604,144 @@ pub async fn merged_into(
     .fetch_optional(db.pool())
     .await?;
     Ok(row.map(|row| (row.id, row.slug)))
+}
+
+/// A thread in a space a member of staff can't read, as they see it on its
+/// moderation page (DESIGN.md §3.1, §8). They run every space, so they may
+/// still lock, pin, rename, move, delete or restore it, but they read only
+/// what their own memberships let them: nothing of what it says, its
+/// title included, is given here.
+#[derive(Clone, Debug)]
+pub struct ClosedThread {
+    pub id: i64,
+    /// Its space, which staff run (and so may know the name of).
+    pub space: SpaceTarget,
+    pub author: UserRef,
+    pub created_at: DateTime<Utc>,
+    pub last_seq: i64,
+    pub pinned: bool,
+    pub locked: bool,
+    pub deleted: bool,
+    /// Whether all its posts were moved to another thread.
+    pub merged: bool,
+    pub restriction: ThreadRestriction,
+}
+
+impl ClosedThread {
+    /// Who can read it.
+    pub fn audience(&self) -> Audience {
+        self.restriction.audience(&self.space.rules)
+    }
+}
+
+/// A thread in a space, live or deleted, that the viewer runs as staff but
+/// can't read, or `None` (for anyone who isn't staff, for a conversation,
+/// and for a thread they can read, which they moderate from its own
+/// pages).
+pub async fn closed_thread(
+    db: &Db,
+    viewer: &Viewer,
+    thread_id: i64,
+) -> sqlx::Result<Option<ClosedThread>> {
+    if !viewer.is_staff() {
+        return Ok(None);
+    }
+    let filter = viewer.filter();
+    let Some(row) = sqlx::query!(
+        r#"SELECT t.id, t.space_id AS "space_id!", t.created_at, t.last_seq, t.pinned, t.locked,
+                  t.deleted_at IS NOT NULL AS "deleted!", t.merged_into_thread_id IS NOT NULL AS "merged!",
+                  t.read_group_ids, t.read_user_ids, t.reply_group_ids, t.reply_user_ids,
+                  a.id AS author_id, a.username::text AS "author_username!", a.display_name AS author_name
+           FROM threads t JOIN users a ON a.id = t.author_id
+           WHERE t.id = $1 AND t.space_id IS NOT NULL
+             AND NOT thread_readable(t, $2, $3, $4, $5)"#,
+        thread_id,
+        &filter.visibilities,
+        &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
+    )
+    .fetch_optional(db.pool())
+    .await?
+    else {
+        return Ok(None);
+    };
+    let Some(space) = super::administered_space_by_id(db, viewer, row.space_id).await? else {
+        return Ok(None);
+    };
+    Ok(Some(ClosedThread {
+        id: row.id,
+        space,
+        author: UserRef {
+            id: row.author_id,
+            username: row.author_username,
+            display_name: row.author_name,
+        },
+        created_at: row.created_at,
+        last_seq: i64::from(row.last_seq),
+        pinned: row.pinned,
+        locked: row.locked,
+        deleted: row.deleted,
+        merged: row.merged,
+        restriction: ThreadRestriction::from_parts(
+            row.read_group_ids.as_deref(),
+            row.read_user_ids.as_deref(),
+            row.reply_group_ids.as_deref(),
+            row.reply_user_ids.as_deref(),
+        ),
+    }))
+}
+
+/// A post a member of staff can't read, as a report about it shows it in
+/// the moderation queue (DESIGN.md §8: the content appears there only if
+/// they can already read it): who wrote it and where, nothing it says.
+#[derive(Clone, Debug)]
+pub struct ClosedPost {
+    pub post_id: i64,
+    pub author: UserRef,
+    /// The space it is in, or `None` for a conversation.
+    pub space: Option<SpaceRef>,
+}
+
+/// A live post in a live thread or conversation that the viewer, as
+/// staff, can't read; `None` for anyone else and for anything else.
+pub async fn closed_post(
+    db: &Db,
+    viewer: &Viewer,
+    post_id: i64,
+) -> sqlx::Result<Option<ClosedPost>> {
+    if !viewer.is_staff() {
+        return Ok(None);
+    }
+    let filter = viewer.filter();
+    let row = sqlx::query!(
+        r#"SELECT p.id, a.id AS author_id, a.username::text AS "author_username!",
+                  a.display_name AS author_name,
+                  c.id AS "space_id?", c.slug::text AS "space_slug?", c.name AS "space_name?"
+           FROM posts p
+           JOIN threads t ON t.id = p.thread_id
+           JOIN users a ON a.id = p.author_id
+           LEFT JOIN spaces c ON c.id = t.space_id
+           WHERE p.id = $1 AND p.deleted_at IS NULL AND t.deleted_at IS NULL
+             AND NOT (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))"#,
+        post_id,
+        &filter.visibilities,
+        &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
+    )
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(row.map(|row| ClosedPost {
+        post_id: row.id,
+        author: UserRef {
+            id: row.author_id,
+            username: row.author_username,
+            display_name: row.author_name,
+        },
+        space: match (row.space_id, row.space_slug, row.space_name) {
+            (Some(id), Some(slug), Some(name)) => Some(SpaceRef { id, slug, name }),
+            _ => None,
+        },
+    }))
 }

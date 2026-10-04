@@ -11,7 +11,7 @@
 {% if let Some((id, title)) = thread.merged_into %}
 <section class="panel">
   <h2 class="panel-bar">Merged</h2>
-  <div class="panel-text"><p>All its posts were moved to <a href="/mod/t/{{ id }}">{{ title }}</a>, which its address now leads to. To bring some back, move them from there.</p></div>
+  <div class="panel-text"><p>All its posts were moved to <a href="/mod/t/{{ id }}">{% if let Some(title) = title %}{{ title }}{% else %}another thread, which you can’t read{% endif %}</a>, which its address now leads to. To bring some back, move them from there.</p></div>
 </section>
 {% else %}
 <form class="panel" method="post" action="/mod/t/{{ thread.id }}">

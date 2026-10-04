@@ -141,8 +141,6 @@ struct ConversationModel {
     /// The current participants, by user id.
     participants: BTreeSet<i64>,
     last_seq: i64,
-    /// Whether one of its messages was reported, opening it to staff.
-    reported: bool,
 }
 
 struct MessageModel {
@@ -170,6 +168,21 @@ struct ThreadModel {
     /// groups (indexes into `World::groups`) and the members (by id) it
     /// names.
     read: Option<(BTreeSet<usize>, BTreeSet<i64>)>,
+}
+
+/// What a break-glass grant opens to the moderator viewer (DESIGN.md §8),
+/// as an index into the world's threads, spaces or conversations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Opened {
+    Thread(usize),
+    Space(usize),
+    Conversation(usize),
+}
+
+struct GrantModel {
+    opened: Opened,
+    /// Whether it is still running; some are made already run out.
+    active: bool,
 }
 
 /// A new member's post, held for a moderator.
@@ -214,6 +227,9 @@ struct Pages<'a> {
     world: &'a World,
     who: Who,
     seen: std::cell::RefCell<HashMap<String, std::rc::Rc<Response>>>,
+    /// The pages whose fetching recorded a view under a break-glass grant
+    /// (DESIGN.md §8).
+    recorded: std::cell::RefCell<BTreeSet<String>>,
 }
 
 impl<'a> Pages<'a> {
@@ -222,6 +238,7 @@ impl<'a> Pages<'a> {
             world,
             who,
             seen: Default::default(),
+            recorded: Default::default(),
         }
     }
 
@@ -229,11 +246,31 @@ impl<'a> Pages<'a> {
         if let Some(response) = self.seen.borrow().get(path) {
             return response.clone();
         }
+        // Only staff read under grants; for anyone else the check as a
+        // whole makes sure that nothing was recorded.
+        let before = (self.who == Who::Staff).then(|| self.world.views(path));
         let response = std::rc::Rc::new(self.world.get_as(self.who, path));
+        if let Some(before) = before {
+            let after = self.world.views(path);
+            // A view is recorded against the page asked for, and no other.
+            assert_eq!(
+                after.0 - before.0,
+                after.1 - before.1,
+                "{path} recorded views of other pages"
+            );
+            if after.1 > before.1 {
+                self.recorded.borrow_mut().insert(path.to_owned());
+            }
+        }
         self.seen
             .borrow_mut()
             .insert(path.to_owned(), response.clone());
         response
+    }
+
+    /// Whether fetching the page recorded a view under a grant.
+    fn recorded(&self, path: &str) -> bool {
+        self.recorded.borrow().contains(path)
     }
 }
 
@@ -279,13 +316,22 @@ struct World {
     /// Who is subscribed to which thread or conversation, as (user id,
     /// thread id).
     subscriptions: BTreeSet<(i64, i64)>,
+    /// The break-glass grants the moderator viewer has opened.
+    grants: Vec<GrantModel>,
 }
 
 impl World {
     fn new(rt: Handle, db: PgPool, mode: Mode) -> World {
         rt.block_on(async {
+            // The break-glass log refuses to be emptied (DESIGN.md §4);
+            // a test case's whole forum is thrown away, so its protection
+            // is set aside for that alone (`break_glass.rs` tests it).
             sqlx::raw_sql(
-                "TRUNCATE settings, jobs, posts, threads, spaces, layouts, groups, users RESTART IDENTITY CASCADE",
+                "ALTER TABLE staff_access DISABLE TRIGGER staff_access_no_truncate;
+                 ALTER TABLE staff_access_views DISABLE TRIGGER staff_access_views_no_truncate;
+                 TRUNCATE settings, jobs, posts, threads, spaces, layouts, groups, users RESTART IDENTITY CASCADE;
+                 ALTER TABLE staff_access ENABLE TRIGGER staff_access_no_truncate;
+                 ALTER TABLE staff_access_views ENABLE TRIGGER staff_access_views_no_truncate;",
             )
             .execute(&db)
             .await
@@ -330,6 +376,7 @@ impl World {
             default_layout: 0,
             default_section: 0,
             subscriptions: BTreeSet::new(),
+            grants: Vec::new(),
         };
         world.default_layout = world.block(layouts::default_id(world.db())).unwrap();
         world.default_section = world
@@ -476,6 +523,62 @@ impl World {
 
     fn exec(&self, sql: String) {
         self.block(self.cached.exec(&sql));
+    }
+
+    /// How many views have been recorded under break-glass grants, in all
+    /// and against `path`.
+    fn views(&self, path: &str) -> (i64, i64) {
+        self.block(
+            sqlx::query_as(
+                "SELECT count(*), count(*) FILTER (WHERE path = $1) FROM staff_access_views",
+            )
+            .bind(path)
+            .fetch_one(self.db()),
+        )
+        .unwrap()
+    }
+
+    /// Whether a running grant opens this to the moderator viewer.
+    fn opened(&self, opened: Opened) -> bool {
+        self.grants
+            .iter()
+            .any(|grant| grant.active && grant.opened == opened)
+    }
+
+    /// Whether the moderator viewer may read thread `t` under a grant: on
+    /// it, or on its space (every thread in it, DESIGN.md §8).
+    fn granted_thread(&self, t: usize) -> bool {
+        !self.threads[t].deleted
+            && (self.opened(Opened::Thread(t)) || self.opened(Opened::Space(self.threads[t].space)))
+    }
+
+    /// The tokens grants let the moderator viewer read, on the pages that
+    /// record it: granted threads' titles and the text of their posts
+    /// (hidden ones too, as staff are shown them), and granted
+    /// conversations' titles and messages.
+    fn granted_tokens(&self) -> BTreeSet<&str> {
+        let mut tokens = BTreeSet::new();
+        for (i, t) in self.threads.iter().enumerate() {
+            if self.granted_thread(i) {
+                tokens.insert(t.title_token.as_str());
+            }
+        }
+        for p in &self.posts {
+            if !p.deleted && self.granted_thread(p.thread) {
+                tokens.insert(p.body_token.as_str());
+            }
+        }
+        for (i, c) in self.conversations.iter().enumerate() {
+            if self.opened(Opened::Conversation(i)) {
+                tokens.insert(c.title_token.as_str());
+            }
+        }
+        for m in &self.messages {
+            if !m.deleted && self.opened(Opened::Conversation(m.conversation)) {
+                tokens.insert(m.body_token.as_str());
+            }
+        }
+        tokens
     }
 
     fn add_space(&mut self, level: &'static str) {
@@ -753,9 +856,8 @@ impl World {
     /// DESIGN.md §9: who should be told about a new post, and how. In a
     /// conversation, someone in it and subscribed to it hears of it as a
     /// message. Otherwise someone mentioned hears of it as a mention,
-    /// subscribed or not (staff included, in a reported conversation they
-    /// can read), and someone subscribed to its thread hears of it as a
-    /// new post there. Nobody hears of their own posts or of what they
+    /// subscribed or not, and someone subscribed to its thread hears of it
+    /// as a new post there. Nobody hears of their own posts or of what they
     /// can't read. (The model has no blocks.)
     fn expected_notified(&self, post_id: i64) -> BTreeMap<i64, &'static str> {
         let mut told = BTreeMap::new();
@@ -788,8 +890,8 @@ impl World {
                         .fetch_one(self.db()),
                 )
                 .unwrap();
-            // Anyone who can read it, which is the people in it and,
-            // once one of its messages is reported, staff.
+            // Anyone who can read it, which is the people in it: staff
+            // aren't told of what they could read only under a grant.
             for user in self.dm_people() {
                 if user == author
                     || m.deleted
@@ -873,8 +975,9 @@ impl World {
     // -- The reference permission function, independent of the app's SQL.
 
     /// DESIGN.md §3.1: anyone reads public spaces, members also read
-    /// members-only ones, members of a space's read groups read it, and
-    /// staff read everything.
+    /// members-only ones, and members of a space's read groups read it.
+    /// Staff read only what their memberships let them, like anyone else:
+    /// the moderator viewer is in no group, so no listed space.
     fn space_readable(&self, space: usize, who: Who) -> bool {
         let c = &self.spaces[space];
         // A suspended member reads what visitors read.
@@ -884,7 +987,7 @@ impl World {
             who
         };
         match (c.read_level, who) {
-            ("public", _) | ("members", Who::Member | Who::Staff) | (_, Who::Staff) => true,
+            ("public", _) | ("members", Who::Member | Who::Staff) => true,
             ("listed", Who::Member) => {
                 self.lets_in(&c.read_groups, self.member_id) || c.owner == Some(self.member_id)
             }
@@ -915,8 +1018,7 @@ impl World {
     }
 
     /// DESIGN.md §3.4: a thread with its own read restriction is read by
-    /// those who read its space and whom it names; staff read every
-    /// thread for now.
+    /// those who read its space and whom it names, staff included.
     fn thread_readable(&self, thread: usize, who: Who) -> bool {
         !self.threads[thread].deleted && self.readable_if_live(thread, who)
     }
@@ -928,7 +1030,8 @@ impl World {
         let t = &self.threads[thread];
         self.space_readable(t.space, who)
             && match (&t.read, who) {
-                (None, _) | (_, Who::Staff) => true,
+                (None, _) => true,
+                (Some(names), Who::Staff) => self.named(names, self.staff_id),
                 (Some(_), Who::Anonymous) => false,
                 (Some(names), Who::Member) => {
                     !self.member_suspended && self.named(names, self.member_id)
@@ -995,9 +1098,6 @@ impl World {
     /// are in no groups, though Ruth owns a list) as a member viewer in no
     /// groups would be.
     fn space_readable_by(&self, space: usize, user: i64) -> bool {
-        if user == self.staff_id {
-            return true;
-        }
         let c = &self.spaces[space];
         if user == self.member_id && self.member_suspended {
             return c.read_level == "public";
@@ -1009,16 +1109,14 @@ impl World {
     }
 
     /// Whether member `user` reads a thread now: its space, and, if it
-    /// has its own read restriction, it names them (staff read every
-    /// thread for now; a suspended member is named by nothing).
+    /// has its own read restriction, it names them (staff are no
+    /// exception; a suspended member is named by nothing).
     fn thread_readable_by(&self, thread: usize, user: i64) -> bool {
         let t = &self.threads[thread];
         !t.deleted
             && self.space_readable_by(t.space, user)
             && t.read.as_ref().is_none_or(|names| {
-                user == self.staff_id
-                    || (!(user == self.member_id && self.member_suspended)
-                        && self.named(names, user))
+                !(user == self.member_id && self.member_suspended) && self.named(names, user)
             })
     }
 
@@ -1048,14 +1146,14 @@ impl World {
         tokens
     }
 
-    /// Whether member `user` reads a conversation: they are in it, or they
-    /// are staff and it was reported; a suspended member reads none.
+    /// Whether member `user` reads a conversation: they are in it, staff
+    /// included, reported or not; a suspended member reads none.
     fn conversation_readable_by(&self, conversation: usize, user: i64) -> bool {
         let c = &self.conversations[conversation];
         if user == self.member_id && self.member_suspended {
             return false;
         }
-        c.participants.contains(&user) || (c.reported && user == self.staff_id)
+        c.participants.contains(&user)
     }
 
     /// How many unread notifications the viewer should see on the badge:
@@ -1166,14 +1264,16 @@ impl World {
     fn visible_tokens(&self, who: Who) -> BTreeSet<&str> {
         let mut tokens = BTreeSet::new();
         for (i, c) in self.spaces.iter().enumerate() {
-            if self.space_readable(i, who) {
+            // Staff run every space, so see every space's name, on its
+            // settings page for one.
+            if self.space_readable(i, who) || who == Who::Staff {
                 tokens.insert(c.token.as_str());
             }
         }
         for (i, t) in self.threads.iter().enumerate() {
             // Staff are told in the moderation log what deleted threads
-            // were called.
-            let staff_knows = who == Who::Staff;
+            // they could read were called.
+            let staff_knows = who == Who::Staff && self.readable_if_live(i, who);
             if self.thread_readable(i, who) || staff_knows {
                 tokens.insert(t.title_token.as_str());
                 tokens.extend(t.old_titles.iter().map(String::as_str));
@@ -1530,6 +1630,7 @@ impl World {
         // Nothing changes during a check, so each page is fetched once,
         // however many of the checks below look at it.
         let pages = Pages::new(self, who);
+        let views_before = self.views("").0;
         let visible = self.visible_tokens(who);
         let forbidden: Vec<&String> = self
             .all_tokens
@@ -1552,7 +1653,17 @@ impl World {
                 );
             }
             let kept = self.own_post_tokens(path, who);
-            for token in forbidden.iter().filter(|t| !kept.contains(t.as_str())) {
+            // What a grant opens may be shown only on a page that recorded
+            // the view (DESIGN.md §6).
+            let granted = if pages.recorded(path) {
+                self.granted_tokens()
+            } else {
+                BTreeSet::new()
+            };
+            for token in forbidden
+                .iter()
+                .filter(|t| !kept.contains(t.as_str()) && !granted.contains(t.as_str()))
+            {
                 assert!(
                     !response.body.contains(token.as_str()),
                     "{path} shows {token} to {who:?}:\n{}",
@@ -1586,11 +1697,16 @@ impl World {
         // Visible things can be found where they should be, and invisible
         // things are not found at all.
         for (i, t) in self.threads.iter().enumerate() {
-            let response = pages.get(&format!("/t/{}/{}", t.id, self.slug_of(t)));
-            if self.thread_readable(i, who) {
+            let path = format!("/t/{}/{}", t.id, self.slug_of(t));
+            let response = pages.get(&path);
+            let readable = self.thread_readable(i, who);
+            if readable || (who == Who::Staff && self.granted_thread(i)) {
                 assert_eq!(response.status, StatusCode::OK);
                 assert!(response.body.contains(&t.title_token));
-                self.check_toggle(who, t.id, true, &response.body);
+                // Under a grant, the view was recorded, and the page is
+                // for reading only.
+                assert_eq!(pages.recorded(&path), !readable, "{who:?} thread {i}");
+                self.check_toggle(who, t.id, readable, &response.body);
                 // A lock and its audience only for a thread narrower than
                 // its space (DESIGN.md §3.4): one whose restriction doesn't
                 // name every group its listed space names.
@@ -1614,13 +1730,14 @@ impl World {
             }
         }
         // Who can take part in a thread: for members who can read it, and
-        // those who run its space (here, staff), whom it shows to without
-        // its title if it doesn't let them read it; visitors log in first.
+        // those who run its space (here, staff, where they read the space),
+        // whom it shows to without its title if it doesn't let them read
+        // it; visitors log in first.
         for (i, t) in self.threads.iter().enumerate() {
             let response = pages.get(&format!("/t/{}/audience", t.id));
             let expected = match who {
                 Who::Anonymous => StatusCode::SEE_OTHER,
-                Who::Staff if !t.deleted => StatusCode::OK,
+                Who::Staff if !t.deleted && self.space_readable(t.space, who) => StatusCode::OK,
                 _ if self.thread_readable(i, who) => StatusCode::OK,
                 _ => StatusCode::NOT_FOUND,
             };
@@ -1664,19 +1781,26 @@ impl World {
             }
         }
         for (i, c) in self.spaces.iter().enumerate() {
-            let response = pages.get(&format!("/c/{}", c.slug));
-            let expected = if self.space_readable(i, who) {
+            let path = format!("/c/{}", c.slug);
+            let response = pages.get(&path);
+            let readable = self.space_readable(i, who);
+            let granted = who == Who::Staff && self.opened(Opened::Space(i));
+            let expected = if readable || granted {
                 StatusCode::OK
             } else {
                 StatusCode::NOT_FOUND
             };
-            assert_eq!(response.status, expected);
+            assert_eq!(response.status, expected, "{who:?} space {i}");
+            if !readable && granted {
+                assert!(pages.recorded(&path), "{who:?} space {i}");
+            }
             // Its audience page names a list to the people on it, and
             // visitors are asked to log in.
             let audience = pages.get(&format!("/c/{}/audience", c.slug));
             let expected = match who {
                 Who::Anonymous => StatusCode::SEE_OTHER,
-                _ => expected,
+                _ if readable => StatusCode::OK,
+                _ => StatusCode::NOT_FOUND,
             };
             assert_eq!(audience.status, expected, "{who:?} audience of space {i}");
             if expected == StatusCode::OK {
@@ -1732,17 +1856,21 @@ impl World {
             }
         }
         for (i, c) in self.conversations.iter().enumerate() {
-            let response = pages.get(&format!("/messages/{}", c.id));
+            let path = format!("/messages/{}", c.id);
+            let response = pages.get(&path);
+            let readable = self.conversation_readable(i, who);
+            let granted = who == Who::Staff && self.opened(Opened::Conversation(i));
             let expected = match who {
                 Who::Anonymous => StatusCode::SEE_OTHER,
-                _ if self.conversation_readable(i, who) => StatusCode::OK,
+                _ if readable || granted => StatusCode::OK,
                 _ => StatusCode::NOT_FOUND,
             };
             assert_eq!(response.status, expected, "{who:?} conversation {i}");
             if expected == StatusCode::OK {
                 assert!(response.body.contains(&c.title_token));
-                // Staff reading a reported conversation they aren't in
-                // have nothing to subscribe to.
+                assert_eq!(pages.recorded(&path), !readable, "{who:?} conversation {i}");
+                // Staff reading it under a grant aren't in it, and have
+                // nothing to subscribe to.
                 let participant = self
                     .viewer_id(who)
                     .is_some_and(|id| c.participants.contains(&id));
@@ -1791,6 +1919,13 @@ impl World {
                 let body = &page.body;
                 assert!(body.contains(&m.body_token), "message {} missing", m.id);
             }
+        }
+        if who != Who::Staff {
+            assert_eq!(
+                self.views("").0,
+                views_before,
+                "{who:?}'s pages recorded views under a grant"
+            );
         }
     }
 }
@@ -2233,7 +2368,6 @@ impl World {
             title_token,
             participants,
             last_seq: 1,
-            reported: false,
         });
         self.messages.push(MessageModel {
             id: created.first_post_id,
@@ -2362,8 +2496,8 @@ impl World {
         self.changed(Change::PostRemoved { post_id: id });
     }
 
-    /// Someone in a conversation reports a message, which opens that
-    /// conversation to staff.
+    /// Someone in a conversation reports a message. That opens nothing to
+    /// staff (DESIGN.md §3.9, §8): a report carries no content.
     #[rule]
     fn report_message(&mut self, tc: TestCase) {
         tc.assume(!self.messages.is_empty());
@@ -2382,9 +2516,70 @@ impl World {
                 "",
             ))
             .unwrap();
-        if outcome.is_ok() {
-            self.conversations[c].reported = true;
+        let _ = outcome;
+    }
+
+    /// The moderator viewer breaks glass (DESIGN.md §8) on a thread, a
+    /// whole space or a conversation. Some grants have run out already,
+    /// and open nothing.
+    #[rule]
+    fn break_glass(&mut self, tc: TestCase) {
+        // Mostly on what the moderator can't read, which is what breaking
+        // glass is for; now and then on anything, which opens nothing
+        // more.
+        let any = tc.draw(gs::integers::<u8>().max_value(3)) == 0;
+        let mut choices: Vec<Opened> = Vec::new();
+        for t in 0..self.threads.len() {
+            if any || !self.thread_readable(t, Who::Staff) {
+                choices.push(Opened::Thread(t));
+            }
         }
+        for c in 0..self.spaces.len() {
+            let closed = !self.space_readable(c, Who::Staff)
+                || (0..self.threads.len())
+                    .any(|t| self.threads[t].space == c && !self.thread_readable(t, Who::Staff));
+            if any || closed {
+                choices.push(Opened::Space(c));
+            }
+        }
+        for c in 0..self.conversations.len() {
+            if any || !self.conversation_readable(c, Who::Staff) {
+                choices.push(Opened::Conversation(c));
+            }
+        }
+        tc.assume(!choices.is_empty());
+        let opened = choices[tc.draw(gs::integers::<usize>().max_value(choices.len() - 1))];
+        let scope = match opened {
+            Opened::Thread(t) => parlour::staff_access::Scope::Thread(self.threads[t].id),
+            Opened::Space(c) => parlour::staff_access::Scope::Space(self.spaces[c].id),
+            Opened::Conversation(c) => {
+                parlour::staff_access::Scope::Thread(self.conversations[c].id)
+            }
+        };
+        let active = tc.draw(gs::booleans());
+        let id = self
+            .block(parlour::staff_access::open(
+                self.db(),
+                &parlour::staff_access::NewAccess {
+                    actor_id: self.staff_id,
+                    scope,
+                    report_id: None,
+                    reason: "Checking",
+                },
+            ))
+            .unwrap();
+        if !active {
+            // One that ran out long ago: the log can't be changed, so it is
+            // backdated as the test's database owner, setting the
+            // protection aside for that alone.
+            self.exec(format!(
+                "ALTER TABLE staff_access DISABLE TRIGGER staff_access_append_only;
+                 UPDATE staff_access SET created_at = now() - interval '4 days',
+                                         expires_at = now() - interval '1 day' WHERE id = {id};
+                 ALTER TABLE staff_access ENABLE TRIGGER staff_access_append_only;"
+            ));
+        }
+        self.grants.push(GrantModel { opened, active });
     }
 
     /// A moderator silences or suspends the member viewer, or lifts it.
@@ -2442,8 +2637,10 @@ impl World {
                 None,
             ))
             .unwrap();
-        // A deleted post can't be hidden.
-        assert_eq!(outcome.is_ok(), !p.deleted, "{action:?}");
+        // A deleted post can't be hidden, and staff act on posts only
+        // where they can read them (DESIGN.md §3.1).
+        let readable = self.thread_readable(p.thread, Who::Staff);
+        assert_eq!(outcome.is_ok(), !p.deleted && readable, "{action:?}");
         if outcome.is_ok() {
             self.posts[post].hidden = action == PostAction::Hide;
         }
@@ -2481,7 +2678,9 @@ impl World {
         use parlour::moderation::Destination;
         tc.assume(!self.threads.is_empty());
         let from = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
-        tc.assume(!self.threads[from].deleted);
+        // Moving posts means choosing them, so the moderator must be able
+        // to read both threads (DESIGN.md §3.1).
+        tc.assume(self.thread_readable(from, Who::Staff));
         let in_thread: Vec<usize> = (0..self.posts.len())
             .filter(|&p| self.posts[p].thread == from)
             .collect();
@@ -2497,11 +2696,12 @@ impl World {
             .map(|&p| self.posts[p].seq.to_string())
             .collect();
         let others: Vec<usize> = (0..self.threads.len())
-            .filter(|&t| t != from && !self.threads[t].deleted)
+            .filter(|&t| t != from && self.thread_readable(t, Who::Staff))
             .collect();
         let new_thread = others.is_empty() || tc.draw(gs::booleans());
         let (destination, title_token, space) = if new_thread {
             let space = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
+            tc.assume(self.space_readable(space, Who::Staff));
             let token = self.token();
             (
                 Destination::New {
@@ -2736,10 +2936,11 @@ async fn members_see_only_what_members_may(pool: PgPool) {
     run_in_blocking_thread(pool, Mode::Visibility(Who::Member)).await;
 }
 
-/// Staff see every space, and their browsing never reaches anonymous
-/// visitors either.
+/// Staff see only what their memberships let them, and what a
+/// break-glass grant opens, on the pages that record it (DESIGN.md §6);
+/// their browsing never reaches anonymous visitors either.
 #[sqlx::test]
-async fn staff_see_every_space(pool: PgPool) {
+async fn staff_see_only_what_they_may(pool: PgPool) {
     run_in_blocking_thread(pool, Mode::Visibility(Who::Staff)).await;
 }
 
@@ -2850,8 +3051,6 @@ struct AccessConversation {
     id: i64,
     /// Current participants, as indexes into `users`.
     participants: BTreeSet<usize>,
-    /// Whether one of its messages was reported, which opens it to staff.
-    reported: bool,
 }
 
 struct AccessMessage {
@@ -3233,8 +3432,8 @@ impl Access {
 
     /// `who` is an index into `users`, or `None` for an anonymous visitor.
     /// A suspended member reads what a visitor reads (DESIGN.md §3.1:
-    /// members-only means members who are not suspended).
-    /// Staff read every space for now (DESIGN.md §13, milestone 15).
+    /// members-only means members who are not suspended). Staff read only
+    /// what their memberships let them, and a grant to staff.
     fn reads_space(&self, who: Option<usize>, space: usize) -> bool {
         let c = &self.spaces[space];
         let who = who.filter(|&u| !self.users[u].suspended);
@@ -3243,9 +3442,7 @@ impl Access {
             (_, None) => false,
             ("members", Some(_)) => true,
             ("staff", Some(u)) => self.users[u].staff,
-            (_, Some(u)) => {
-                self.users[u].staff || self.lets_in(&c.read_groups, u) || c.read_users.contains(&u)
-            }
+            (_, Some(u)) => self.lets_in(&c.read_groups, u) || c.read_users.contains(&u),
         }
     }
 
@@ -3262,18 +3459,17 @@ impl Access {
     }
 
     /// DESIGN.md §3.4: a thread's readers are its space's readers, and,
-    /// if it has its own read restriction, only those it names (staff
-    /// read everything for now; a suspended member is named by nothing).
+    /// if it has its own read restriction, only those it names (staff are
+    /// no exception; a suspended member is named by nothing).
     fn reads_thread(&self, who: Option<usize>, thread: usize) -> bool {
         let t = &self.threads[thread];
         !t.deleted
             && self.reads_space(who, t.space)
             && match &t.read {
                 None => true,
-                Some(names) => who.is_some_and(|u| {
-                    self.users[u].acts_as_staff()
-                        || (!self.users[u].suspended && self.names(names, u))
-                }),
+                Some(names) => {
+                    who.is_some_and(|u| !self.users[u].suspended && self.names(names, u))
+                }
             }
     }
 
@@ -3316,13 +3512,13 @@ impl Access {
         self.post_live(post) && self.reads_thread(who, self.posts[post].thread)
     }
 
-    /// DESIGN.md §3.7: only a conversation's current participants read it,
-    /// and staff once one of its messages has been reported; suspended
-    /// members read none.
+    /// DESIGN.md §3.7, §3.9: only a conversation's current participants
+    /// read it, staff included, reported or not; suspended members read
+    /// none.
     fn reads_conversation(&self, who: Option<usize>, conversation: usize) -> bool {
         let c = &self.conversations[conversation];
         who.filter(|&u| !self.users[u].suspended)
-            .is_some_and(|u| c.participants.contains(&u) || (c.reported && self.users[u].staff))
+            .is_some_and(|u| c.participants.contains(&u))
     }
 
     /// The viewer's own conversations, which their list shows.
@@ -3440,8 +3636,7 @@ impl Access {
             }
         }
         // Messages are found by searching only by the people in the
-        // conversation now: not by staff it was reported to, nor by
-        // anyone suspended.
+        // conversation now: not by staff, nor by anyone suspended.
         let found = self.search(viewer, "psst or message", None);
         let expected = Self::ids(
             &self.messages,
@@ -5120,7 +5315,6 @@ impl Access {
         self.conversations.push(AccessConversation {
             id: created.thread_id,
             participants: others,
-            reported: false,
         });
         self.messages.push(AccessMessage {
             id: created.first_post_id,
@@ -5229,7 +5423,8 @@ impl Access {
         self.exec(sql);
     }
 
-    /// Someone reports a message, which opens its conversation to staff.
+    /// Someone reports a message, which opens nothing to staff (DESIGN.md
+    /// §3.9, §8).
     #[rule]
     fn report_message(&mut self, tc: TestCase) {
         tc.assume(!self.messages.is_empty());
@@ -5259,7 +5454,6 @@ impl Access {
             },
         ))
         .unwrap();
-        self.conversations[c].reported = true;
     }
 
     #[rule]

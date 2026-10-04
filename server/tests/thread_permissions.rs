@@ -157,10 +157,11 @@ async fn a_restricted_thread_is_read_only_by_those_it_names(pool: PgPool) {
         let body = f.page_as(page, &club.maya_cookie).await;
         assert!(!body.contains("Secret plans"), "{page}: {body}");
     }
-    // Staff still read every thread until milestone 15.
+    // Nor do staff, who read only what their memberships let them
+    // (DESIGN.md §3.1).
     assert_eq!(
         club.status(&path, Some(&club.staff_cookie)).await,
-        StatusCode::OK
+        StatusCode::NOT_FOUND
     );
 
     // Widening it back to the space's audience makes it public again.

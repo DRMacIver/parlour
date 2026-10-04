@@ -169,8 +169,7 @@ async fn set_subscribed(
     let Some(thread) = content::thread_target(state.db(), viewer, thread_id).await? else {
         return web::not_found(state, viewer).await;
     };
-    // Staff reading a reported conversation aren't in it, and have nothing
-    // to be told about.
+    // Only the people in a conversation have anything to be told about.
     if thread
         .conversation()
         .is_some_and(|conversation| !conversation.includes(user.id))

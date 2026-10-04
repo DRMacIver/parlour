@@ -411,7 +411,7 @@ async fn seed_has_things_for_the_moderators(pool: PgPool) {
         "Best replica watches, cheap",
         "reported by maya and kit",
         "Report on a message",
-        "why are you ignoring me",
+        "A conversation you aren’t in",
         "Personal information",
         "Held for approval",
         "Hello from Otley",
@@ -422,7 +422,9 @@ async fn seed_has_things_for_the_moderators(pool: PgPool) {
             "{text} missing from the queue:\n{queue}"
         );
     }
-    // The reported conversation is open to staff, and only that one.
+    // The reported conversation stays closed to staff, who aren't in it
+    // (DESIGN.md §3.9, §8), and so does every other.
+    assert!(!queue.contains("why are you ignoring me"), "{queue}");
     let ruth = f.session(id("ruth").await).await;
     let reported: i64 = sqlx::query_scalar(
         "SELECT DISTINCT thread_id FROM reports r JOIN threads t ON t.id = r.thread_id
@@ -431,7 +433,12 @@ async fn seed_has_things_for_the_moderators(pool: PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    f.page_as(&format!("/messages/{reported}"), &ruth).await;
+    assert_eq!(
+        f.get_as(&format!("/messages/{reported}"), Some(&ruth))
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
     let brass: i64 =
         sqlx::query_scalar("SELECT id FROM threads WHERE title = 'Tuesday 7th: Brass'")
             .fetch_one(&pool)

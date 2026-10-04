@@ -32,7 +32,7 @@ use crate::mod_records::{
     ReportAbout, Restriction, Settles,
 };
 use crate::notify;
-use crate::permissions::{Audience, Grant, ThreadRestriction, at_most_as_visible};
+use crate::permissions::{Audience, Grant, ThreadRestriction, at_most_as_visible, user_can_read};
 use crate::ratelimit::{Action, Scope};
 use crate::sessions;
 use crate::social;
@@ -200,7 +200,6 @@ pub async fn report_post(
     if let Some(conversation) = post.thread.conversation()
         && !conversation.includes(user.id)
     {
-        // Staff reading a reported conversation act on it instead.
         return Ok(Err(Refused::NotAllowed(
             "Only the people in a conversation can report its messages.",
         )));
@@ -481,6 +480,13 @@ pub enum QueueKind {
         post_id: i64,
         reports: Vec<OpenReport>,
     },
+    /// Reports about a post the moderator can't read: who wrote it and
+    /// where, but not what it says (DESIGN.md §8).
+    PostClosed {
+        post: Box<content::moderation::ClosedPost>,
+        author: Box<MemberRecord>,
+        reports: Vec<OpenReport>,
+    },
     /// Reports about a member.
     Member {
         member: Box<MemberRecord>,
@@ -564,7 +570,17 @@ pub async fn queue(state: &AppState, viewer: &Viewer) -> Result<Vec<QueueItem>, 
                 },
                 None => QueueKind::PostGone { post_id, reports },
             },
-            None => QueueKind::PostGone { post_id, reports },
+            None => match content::moderation::closed_post(db, viewer, post_id).await? {
+                Some(post) => match mod_records::member_record(db, &post.author.username).await? {
+                    Some(author) => QueueKind::PostClosed {
+                        post: Box::new(post),
+                        author: Box::new(author),
+                        reports,
+                    },
+                    None => QueueKind::PostGone { post_id, reports },
+                },
+                None => QueueKind::PostGone { post_id, reports },
+            },
         };
         items.push(QueueItem { first_at, kind });
     }
@@ -624,10 +640,21 @@ pub async fn held_place(
                         .unwrap_or_default();
                     (format!("{space}reply in “{}”", t.name), t.href())
                 }
-                None => (
-                    "a reply in a thread that has gone".to_owned(),
-                    "/".to_owned(),
-                ),
+                // Staff run every space, but read only what their own
+                // memberships let them (DESIGN.md §3.1).
+                None => match content::moderation::closed_thread(state.db(), viewer, *thread_id)
+                    .await?
+                    .filter(|t| !t.deleted)
+                {
+                    Some(t) => (
+                        format!("{} › reply in a thread you can’t read", t.space.space.name),
+                        format!("/mod/t/{}", t.id),
+                    ),
+                    None => (
+                        "a reply in a thread that has gone".to_owned(),
+                        "/".to_owned(),
+                    ),
+                },
             }
         }
     })
@@ -1036,11 +1063,13 @@ pub async fn moderate_thread(
     let db = state.db();
     let reason = clean_line(reason);
     // A deleted thread can only be restored, from its page in the
-    // moderation pages, which the log links to.
+    // moderation pages, which the log links to. Staff run every space, so
+    // they act on threads they can't read too, knowing only where they are
+    // and who may read them (DESIGN.md §3.1).
     let thread = match &action {
         ThreadAction::Restore => None,
-        _ => match content::thread_target(db, viewer, thread_id).await? {
-            Some(t) if t.space().is_some() => Some(t),
+        _ => match moderated_thread(db, viewer, thread_id).await? {
+            Some(t) if !t.deleted => Some(t),
             _ => return Ok(Err(Refused::NotFound)),
         },
     };
@@ -1052,11 +1081,23 @@ pub async fn moderate_thread(
             writing::check_title(&writing::clean_title(title), &mut problems)
         }
         ThreadAction::Move(slug) => {
-            destination = content::space_target(db, viewer, slug).await?;
+            destination = content::administered_space(db, viewer, slug).await?;
             match (&destination, &thread) {
                 (None, _) => problems.push("Choose a space to move it to.".to_owned()),
-                (Some(to), Some(t)) if Some(to.space.id) == t.space().map(|c| c.space.id) => {
+                (Some(to), Some(t)) if to.space.id == t.space_id => {
                     problems.push("It is already in that space.".to_owned())
+                }
+                // Moving a thread they can't read where they could would
+                // be reading it by another way: breaking glass, which
+                // isn't done by moving things (DESIGN.md §3.1, §8).
+                (Some(to), Some(t))
+                    if !t.readable
+                        && user_can_read(user, &t.restriction.audience(&to.rules)) =>
+                {
+                    problems.push(
+                        "You can’t read this thread, and moving it there would let you. Choose a space you can’t read either, or leave the move to someone who can read it."
+                            .to_owned(),
+                    )
                 }
                 _ => {}
             }
@@ -1066,7 +1107,7 @@ pub async fn moderate_thread(
     if !problems.is_empty() {
         return Ok(Err(Refused::Invalid(problems)));
     }
-    let audience = thread.as_ref().map(ThreadTarget::audience);
+    let audience = thread.as_ref().map(|t| t.audience.clone());
     let mut previous_space_id = None;
     let mut details = json!({});
     let (key, changed) = match &action {
@@ -1112,15 +1153,15 @@ pub async fn moderate_thread(
     if !changed {
         return Ok(Err(Refused::NotAllowed("Nothing needed changing.")));
     }
-    // Restoring: find it now that it can be read again.
+    // Restoring: find it now that it is live again.
     let thread = match thread {
         Some(t) => t,
-        None => match content::thread_target(db, viewer, thread_id).await? {
+        None => match moderated_thread(db, viewer, thread_id).await? {
             Some(t) => t,
             None => return Ok(Err(Refused::NotFound)),
         },
     };
-    let after = thread.audience();
+    let after = thread.audience.clone();
     let public = is_public(&audience.unwrap_or(after.clone()))
         && match &destination {
             // A thread keeps its own restriction wherever it goes.
@@ -1169,6 +1210,47 @@ pub async fn moderate_thread(
         .await?;
     state.changed(Change::ModLogged).await?;
     Ok(Ok(thread_id))
+}
+
+/// A thread in a space as a moderator acts on it: whether or not they
+/// can read it, where it is and who can.
+struct ModeratedThread {
+    space_id: i64,
+    deleted: bool,
+    readable: bool,
+    restriction: ThreadRestriction,
+    audience: Audience,
+}
+
+/// A live thread in a space, readable to the moderator or not, or a
+/// deleted one they can't read.
+async fn moderated_thread(
+    db: &crate::db::Db,
+    viewer: &Viewer,
+    thread_id: i64,
+) -> sqlx::Result<Option<ModeratedThread>> {
+    if let Some(t) = content::thread_target(db, viewer, thread_id).await?
+        && let Some(space) = t.space()
+    {
+        return Ok(Some(ModeratedThread {
+            space_id: space.space.id,
+            deleted: false,
+            readable: true,
+            audience: t.audience(),
+            restriction: t.restriction,
+        }));
+    }
+    // A deleted one they can read is only for restoring, after which it is
+    // found above.
+    Ok(content::moderation::closed_thread(db, viewer, thread_id)
+        .await?
+        .map(|t| ModeratedThread {
+            space_id: t.space.space.id,
+            deleted: t.deleted,
+            readable: false,
+            audience: t.audience(),
+            restriction: t.restriction,
+        }))
 }
 
 /// Where posts are moved to.

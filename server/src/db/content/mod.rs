@@ -370,10 +370,15 @@ pub struct SpacePage {
     pub owner: Option<UserRef>,
     pub thread_count: i64,
     pub threads: Vec<ThreadRow>,
+    /// Whether a break-glass grant shows the viewer something here that
+    /// they couldn't read otherwise (DESIGN.md §8).
+    pub granted: bool,
 }
 
 /// One page of a space's threads, or `None` if the space doesn't
-/// exist or the viewer can't read it. A page past the end is empty.
+/// exist or the viewer can't read it. A page past the end is empty. A
+/// staff member may read a whole space under a break-glass grant, its
+/// restricted threads included, which records the view.
 pub async fn space_page(
     db: &Db,
     viewer: &Viewer,
@@ -390,13 +395,17 @@ pub async fn space_page(
                list_labels(r.group_ids, $4) AS "list_names!",
                (SELECT count(*) FROM threads t
                 WHERE t.space_id = c.id AND t.deleted_at IS NULL
-                  AND thread_readable(t, $2, $3, $5, $6)) AS "thread_count!",
+                  AND (thread_readable(t, $2, $3, $5, $6) OR c.id = ANY ($7))) AS "thread_count!",
+               (SELECT count(*) FROM threads t
+                WHERE t.space_id = c.id AND t.deleted_at IS NULL
+                  AND NOT thread_readable(t, $2, $3, $5, $6)) AS "unreadable_threads!",
+               space_readable(c.visibility, c.id, $2, $3) AS "readable!",
                o.id AS "owner_id?", o.username::text AS "owner_username?",
                o.display_name AS "owner_display_name?"
         FROM spaces c
         JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'
         LEFT JOIN users o ON o.id = c.owner_user_id AND o.deleted_at IS NULL
-        WHERE c.slug = $1 AND space_readable(c.visibility, c.id, $2, $3)
+        WHERE c.slug = $1 AND (space_readable(c.visibility, c.id, $2, $3) OR c.id = ANY ($7))
         "#,
         slug,
         &filter.visibilities,
@@ -404,6 +413,7 @@ pub async fn space_page(
         viewer.user_id(),
         filter.dm_viewer,
         &filter.group_ids,
+        &filter.granted_space_ids,
     )
     .fetch_optional(db.pool())
     .await?
@@ -411,7 +421,23 @@ pub async fn space_page(
         return Ok(None);
     };
     deps.add(Tag::Space(space.id));
-    let threads = thread_rows(db, viewer, &[space.id], true, page, THREADS_PER_PAGE, deps).await?;
+    // Under a grant on the space, it lists every thread in it.
+    let granted = filter.granted_space_ids.contains(&space.id);
+    let opened = granted && (!space.readable || space.unreadable_threads > 0);
+    if opened {
+        record_granted_view(db, viewer, Granted::Space(space.id)).await?;
+    }
+    let threads = thread_rows(
+        db,
+        viewer,
+        &[space.id],
+        true,
+        granted,
+        page,
+        THREADS_PER_PAGE,
+        deps,
+    )
+    .await?;
     Ok(Some(SpacePage {
         space: SpaceRef {
             id: space.id,
@@ -430,6 +456,7 @@ pub async fn space_page(
         ),
         thread_count: space.thread_count,
         threads,
+        granted: opened,
     }))
 }
 
@@ -621,7 +648,7 @@ pub async fn latest(
         thread_count += threads;
         ids.push(id);
     }
-    let threads = thread_rows(db, viewer, &ids, false, page, per_page, deps).await?;
+    let threads = thread_rows(db, viewer, &ids, false, false, page, per_page, deps).await?;
     Ok(LatestPage {
         thread_count,
         threads,
@@ -645,12 +672,16 @@ pub async fn scope_thread_ids(
 
 /// One page of the threads in `spaces` that the viewer can read, most
 /// recently active first, with pinned threads before the rest if
-/// `pins_first` (the space page does; the `/latest` tabs don't).
+/// `pins_first` (the space page does; the `/latest` tabs don't). With
+/// `granted`, also those a break-glass grant on their space lets the
+/// viewer read: only for a space's page, whose caller records the view.
+#[allow(clippy::too_many_arguments)]
 async fn thread_rows(
     db: &Db,
     viewer: &Viewer,
     spaces: &[i64],
     pins_first: bool,
+    granted: bool,
     page: i64,
     per_page: i64,
     deps: &mut Deps,
@@ -699,7 +730,7 @@ async fn thread_rows(
             WHERE sp.id = t.forked_from_post_id
         ) src ON true
         WHERE t.deleted_at IS NULL
-          AND thread_readable(t, $1, $2, $8, $9)
+          AND (thread_readable(t, $1, $2, $8, $9) OR thread_granted(t, '{}', $10))
           AND t.space_id = ANY($3)
         ORDER BY CASE WHEN $7 THEN t.pinned ELSE false END DESC,
                  t.last_post_at DESC, t.id DESC
@@ -714,6 +745,11 @@ async fn thread_rows(
         pins_first,
         filter.dm_viewer,
         &filter.group_ids,
+        if granted {
+            &filter.granted_space_ids[..]
+        } else {
+            &[][..]
+        },
     )
     .fetch_all(db.pool())
     .await?;
@@ -820,6 +856,9 @@ pub struct ThreadPage {
     pub read_marker: Option<i64>,
     /// Whether the viewer (if logged in) is subscribed to the thread.
     pub subscribed: bool,
+    /// Whether only a break-glass grant lets the viewer read it (DESIGN.md
+    /// §8): the page is then for reading, and says so.
+    pub granted: bool,
 }
 
 impl ThreadPage {
@@ -925,7 +964,8 @@ pub struct AuthorInfo {
 }
 
 /// One page of a thread, or `None` if it doesn't exist or the viewer can't
-/// see it. A page past the end has no posts.
+/// see it. A page past the end has no posts. A staff member may read it
+/// under a break-glass grant, which records the view.
 pub async fn thread_page(
     db: &Db,
     viewer: &Viewer,
@@ -962,12 +1002,14 @@ pub async fn thread_page(
                people_names(coalesce(t.read_user_ids, '{}')) AS "read_people!",
                site_group_names(coalesce(t.reply_group_ids, '{}')) AS "reply_groups!",
                list_labels(coalesce(t.reply_group_ids, '{}'), $5) AS "reply_lists!",
-               people_names(coalesce(t.reply_user_ids, '{}')) AS "reply_people!"
+               people_names(coalesce(t.reply_user_ids, '{}')) AS "reply_people!",
+               thread_readable(t, $2, $3, $4, $6) AS "readable!"
         FROM threads t
         JOIN space_targets c ON c.id = t.space_id
         JOIN users a ON a.id = t.author_id
         LEFT JOIN users o ON o.id = c.owner_user_id
-        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t, $2, $3, $4, $6)
+        WHERE t.id = $1 AND t.deleted_at IS NULL
+          AND (thread_readable(t, $2, $3, $4, $6) OR thread_granted(t, $7, $8))
         "#,
         thread_id,
         &filter.visibilities,
@@ -975,12 +1017,25 @@ pub async fn thread_page(
         filter.dm_viewer,
         viewer.user_id(),
         &filter.group_ids,
+        &filter.granted_thread_ids,
+        &filter.granted_space_ids,
     )
     .fetch_optional(db.pool())
     .await?
     else {
         return Ok(None);
     };
+    if !thread.readable {
+        record_granted_view(
+            db,
+            viewer,
+            Granted::Thread {
+                thread_id: thread.id,
+                space_id: Some(thread.space_id),
+            },
+        )
+        .await?;
+    }
     // The space's name appears in the breadcrumbs, but renaming a
     // space clears `site`, and moving the thread clears `thread:N`.
     deps.add(Tag::Thread(thread.id));
@@ -1085,6 +1140,7 @@ pub async fn thread_page(
         posts,
         read_marker: thread.read_marker.map(i64::from),
         subscribed: thread.subscribed,
+        granted: !thread.readable,
     }))
 }
 
@@ -1567,19 +1623,24 @@ pub async fn post_location(
     }))
 }
 
-/// The thread's canonical slug, if the viewer can see it.
+/// The thread's canonical slug, if the viewer can see it, for the
+/// redirects to its page: under a break-glass grant too, since the page
+/// it leads to records the view (a redirect shows nothing).
 pub async fn thread_slug(db: &Db, viewer: &Viewer, thread_id: i64) -> sqlx::Result<Option<String>> {
     let filter = viewer.filter();
     sqlx::query_scalar!(
         r#"
         SELECT t.slug FROM threads t
-        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t, $2, $3, $4, $5)
+        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.space_id IS NOT NULL
+          AND (thread_readable(t, $2, $3, $4, $5) OR thread_granted(t, $6, $7))
         "#,
         thread_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
         &filter.group_ids,
+        &filter.granted_thread_ids,
+        &filter.granted_space_ids,
     )
     .fetch_optional(db.pool())
     .await
@@ -1678,19 +1739,23 @@ impl SpaceTarget {
 
 /// A space the viewer can read, by id.
 pub async fn space_by_id(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result<Option<SpaceTarget>> {
-    Ok(space_targets(db, viewer, Some(id), None).await?.pop())
+    Ok(space_targets(db, viewer, Some(id), None, false)
+        .await?
+        .pop())
 }
 
-/// How many threads a space the viewer can read has ever had,
-/// including deleted ones: only a space with none can be deleted.
+/// How many threads a space the viewer can read (or, as staff, run) has
+/// ever had, including deleted ones: only a space with none can be
+/// deleted. A count says nothing of what the threads are.
 pub async fn space_thread_count(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result<i64> {
     let filter = viewer.filter();
     sqlx::query_scalar!(
         r#"SELECT count(t.id) AS "n!" FROM spaces c LEFT JOIN threads t ON t.space_id = c.id
-           WHERE c.id = $1 AND space_readable(c.visibility, c.id, $2, $3)"#,
+           WHERE c.id = $1 AND (space_readable(c.visibility, c.id, $2, $3) OR $4)"#,
         id,
         &filter.visibilities,
         &filter.restricted_space_ids,
+        viewer.is_staff(),
     )
     .fetch_one(db.pool())
     .await
@@ -1871,16 +1936,49 @@ async fn people_named(db: &Db, ids: &[i64]) -> sqlx::Result<Vec<UserRef>> {
 
 /// Every space the viewer can read, archived ones included, by name.
 pub async fn readable_spaces(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<SpaceTarget>> {
-    space_targets(db, viewer, None, None).await
+    space_targets(db, viewer, None, None, false).await
+}
+
+/// A space the viewer can read or run as staff, by slug: staff hold
+/// `administer` on every space, readable to them or not (DESIGN.md §3.1),
+/// and see its name and grants to run it, never its threads. Whether the
+/// viewer may administer it is still [`SpaceRules::may_administer`]'s to
+/// say.
+pub async fn administered_space(
+    db: &Db,
+    viewer: &Viewer,
+    slug: &str,
+) -> sqlx::Result<Option<SpaceTarget>> {
+    Ok(space_targets(db, viewer, None, Some(slug), true)
+        .await?
+        .pop())
+}
+
+/// The same, by id.
+pub async fn administered_space_by_id(
+    db: &Db,
+    viewer: &Viewer,
+    id: i64,
+) -> sqlx::Result<Option<SpaceTarget>> {
+    Ok(space_targets(db, viewer, Some(id), None, true).await?.pop())
+}
+
+/// Every space the viewer can read, and for staff every space, by name:
+/// the admins' list of spaces.
+pub async fn administered_spaces(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<SpaceTarget>> {
+    space_targets(db, viewer, None, None, true).await
 }
 
 /// The spaces the viewer can read, by name: all of them, or (with `id` or
-/// `slug`) just the one so named.
+/// `slug`) just the one so named. With `administered`, staff are given
+/// the spaces they can't read as well (only what [`SpaceTarget`] says of
+/// a space; whether it has threads counts only those they can read).
 async fn space_targets(
     db: &Db,
     viewer: &Viewer,
     id: Option<i64>,
     slug: Option<&str>,
+    administered: bool,
 ) -> sqlx::Result<Vec<SpaceTarget>> {
     let filter = viewer.filter();
     let rows = sqlx::query!(
@@ -1903,7 +2001,7 @@ async fn space_targets(
                          AND thread_readable(t, $1, $2, $6, $7)) AS "has_threads!"
         FROM space_targets c
         LEFT JOIN users o ON o.id = c.owner_user_id
-        WHERE space_readable(c.visibility, c.id, $1, $2)
+        WHERE (space_readable(c.visibility, c.id, $1, $2) OR $8)
           AND ($3::bigint IS NULL OR c.id = $3)
           AND ($4::text IS NULL OR c.slug = $4)
         ORDER BY lower(c.name), c.id
@@ -1915,6 +2013,7 @@ async fn space_targets(
         viewer.user_id(),
         filter.dm_viewer,
         &filter.group_ids,
+        administered && viewer.is_staff(),
     )
     .fetch_all(db.pool())
     .await?;
@@ -1969,7 +2068,9 @@ pub async fn space_target(
     viewer: &Viewer,
     slug: &str,
 ) -> sqlx::Result<Option<SpaceTarget>> {
-    Ok(space_targets(db, viewer, None, Some(slug)).await?.pop())
+    Ok(space_targets(db, viewer, None, Some(slug), false)
+        .await?
+        .pop())
 }
 
 // ---------------------------------------------------------------------------
@@ -2845,4 +2946,64 @@ mod tests {
             None => assert!((i128::from(page) - 1) * i128::from(per_page) > i128::from(i64::MAX)),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Reading under a break-glass grant (DESIGN.md §6, §8)
+//
+// Staff read what their memberships let them, through `thread_readable`
+// like anyone else. Beyond that they read only under a `staff_access`
+// grant, whose threads and spaces the viewer's `ReadFilter` carries. Only
+// the functions that serve a page of a thread, a conversation or a space
+// look at them (with the SQL function `thread_granted`), and each of those
+// calls [`record_granted_view`] whenever a grant is what let the viewer
+// in, before returning anything: so every page shown under a grant is
+// recorded, against the page the viewer asked for.
+
+/// What a grant let the viewer read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Granted {
+    /// A thread or conversation, and the space it is in, if any.
+    Thread {
+        thread_id: i64,
+        space_id: Option<i64>,
+    },
+    /// A space's page.
+    Space(i64),
+}
+
+/// Records, for each of the viewer's grants that covers what they were
+/// shown, that the page being rendered showed it. A viewer can only have
+/// read under a grant on a page, and a grant's row can't be removed, so
+/// this always records something; if it somehow didn't, the read fails
+/// rather than show what nobody would know was seen.
+async fn record_granted_view(db: &Db, viewer: &Viewer, granted: Granted) -> sqlx::Result<()> {
+    let (Some(user), Some(page)) = (viewer.user(), viewer.page()) else {
+        return Err(sqlx::Error::RowNotFound);
+    };
+    let ids: Vec<i64> = user.glass.access.iter().map(|access| access.id).collect();
+    let (thread_id, space_id) = match granted {
+        Granted::Thread {
+            thread_id,
+            space_id,
+        } => (Some(thread_id), space_id),
+        Granted::Space(space_id) => (None, Some(space_id)),
+    };
+    let done = sqlx::query!(
+        r#"INSERT INTO staff_access_views (access_id, path)
+           SELECT a.id, $4 FROM staff_access a
+           WHERE a.id = ANY ($1) AND a.actor_id = $5
+             AND (a.thread_id = $2 OR a.space_id = $3)"#,
+        &ids,
+        thread_id,
+        space_id,
+        page,
+        user.id,
+    )
+    .execute(db.pool())
+    .await?;
+    if done.rows_affected() == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
+    Ok(())
 }

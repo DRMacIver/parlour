@@ -47,8 +47,8 @@ pub mod writing;
 
 pub use db::{
     changes, content, groups, invites, jobs, layouts, lists, login_tokens, members,
-    moderation as mod_records, notifications, seed, sessions, settings, social, store,
-    uploads as upload_records, users,
+    moderation as mod_records, notifications, seed, sessions, settings, social, staff_access,
+    store, uploads as upload_records, users,
 };
 
 use std::sync::{Arc, Mutex};

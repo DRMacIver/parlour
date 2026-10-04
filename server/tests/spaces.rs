@@ -242,7 +242,23 @@ async fn administrators_set_who_may_read_reply_and_start(pool: PgPool) {
         )
         .await;
     assert_eq!(response.status, StatusCode::FORBIDDEN);
-    // Staff read every space for now (DESIGN.md §13, milestone 15).
+    // A moderator may start threads but, not being named among those who
+    // read it, can't read the space, so can't post in it: staff read only
+    // what their memberships let them (DESIGN.md §3.1).
+    let response =
+        s.f.submit(
+            "/c/club/new",
+            &[("title", "Notice"), ("body", "x")],
+            Some(&s.staff_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND, "{}", response.body);
+    // Once the read grant names them, they can.
+    let sam = s.f.user_id("sam").await;
+    let ruth = s.f.user_id("ruth").await;
+    let jonah = s.f.user_id("jonah").await;
+    s.f.set_grant(club, "read", Grant::listed([], [ruth, jonah, sam]))
+        .await;
     let response =
         s.f.submit(
             "/c/club/new",

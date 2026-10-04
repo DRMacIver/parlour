@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{%- import "_mod.html" as md -%}
+{% block title %}Moderate a thread in {{ thread.space.space.name }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/mod/queue">Moderation</a> › <a href="/c/{{ thread.space.space.slug }}/settings">{{ thread.space.space.name }}</a> › <span aria-current="page">Thread № {{ thread.id }}</span></nav>
+<h1 class="page-title">Moderate a thread in {{ thread.space.space.name }}</h1>
+{% call md::mod_nav("") %}{% endcall %}
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+<div class="notice" role="status"><p>You can’t read this thread, so its title and posts aren’t shown to you. Moderators and admins run every space, so you can still {% if thread.deleted %}restore it{% else %}lock, pin, rename, move or delete it{% endif %}; you read only what your own groups and lists let you, like everyone else.</p></div>
+<p class="lede">Thread № {{ thread.id }} · started by <a href="/u/{{ thread.author.username }}">{{ thread.author.display_name }}</a> on <time datetime="{{ crate::format::iso(thread.created_at) }}">{{ crate::format::date(thread.created_at) }}</time> · {{ crate::format::plural(thread.last_seq, "post", "posts") }}{% if thread.locked %} · <span class="flag">Locked</span>{% endif %}{% if thread.pinned %} · <span class="flag">Pinned</span>{% endif %}{% if thread.deleted %} · <span class="flag">Deleted</span>{% endif %}</p>
+
+{% if thread.deleted %}
+{% if thread.merged %}
+<section class="panel">
+  <h2 class="panel-bar">Merged</h2>
+  <div class="panel-text"><p>All its posts were moved to another thread, which its address now leads to.</p></div>
+</section>
+{% else %}
+<form class="panel" method="post" action="/mod/t/{{ thread.id }}">
+  <h2 class="panel-bar">Restore it</h2>
+  <div class="form">
+    <p class="form-note">Members can read it again where they could before, with its posts as they were.</p>
+    <div class="field"><label for="reason-restore">Reason</label><input id="reason-restore" name="reason" type="text" maxlength="500" required></div>
+    <div class="form-actions"><button class="button" type="submit" name="action" value="restore">Restore the thread</button></div>
+  </div>
+</form>
+{% endif %}
+{% else %}
+<form class="panel" method="post" action="/mod/t/{{ thread.id }}">
+  {% call md::no_enter() %}{% endcall %}
+  <h2 class="panel-bar">Lock, pin or delete</h2>
+  <div class="form">
+    <div class="field"><label for="reason-state">Reason</label><input id="reason-state" name="reason" type="text" maxlength="500" required></div>
+    <div class="form-actions">
+      {% if thread.locked %}<button class="button" type="submit" name="action" value="unlock">Unlock</button>{% else %}<button class="button" type="submit" name="action" value="lock">Lock</button>{% endif %}
+      {% if thread.pinned %}<button class="button button-quiet" type="submit" name="action" value="unpin">Unpin</button>{% else %}<button class="button button-quiet" type="submit" name="action" value="pin">Pin</button>{% endif %}
+      <button class="button button-danger" type="submit" name="action" value="delete">Delete the thread</button>
+    </div>
+  </div>
+</form>
+
+<form class="panel" method="post" action="/mod/t/{{ thread.id }}">
+  {% call md::no_enter() %}{% endcall %}
+  <h2 class="panel-bar">Rename or move</h2>
+  <div class="form">
+    <div class="field"><label for="title">New title</label><input id="title" name="title" type="text" maxlength="150"><span class="field-hint">Its present title isn’t shown to you.</span></div>
+    <div class="field"><label for="space">Space</label>
+      <select id="space" name="space">{% for c in spaces %}<option value="{{ c.space.slug }}">{{ c.space.name }}{% if let Some(access) = crate::format::access_label(c.read_level(), c.group_names, c.list_names) %} ({{ access }}){% endif %}</option>{% endfor %}</select>
+    </div>
+    <div class="field"><label for="reason-edit">Reason</label><input id="reason-edit" name="reason" type="text" maxlength="500" required></div>
+    <div class="form-actions">
+      <button class="button" type="submit" name="action" value="rename">Rename</button>
+      <button class="button button-quiet" type="submit" name="action" value="move">Move to that space</button>
+    </div>
+    <p class="form-note">Moving a thread somewhere more public shows it to everyone who can read there. It keeps its own restriction wherever it goes.</p>
+  </div>
+</form>
+{% endif %}
+</div>
+{% endblock %}

@@ -393,8 +393,8 @@ async fn notices_of_moved_spaces_go_only_to_their_readers(db: PgPool) {
     run_to(&db, 28).await;
 
     // Maya made Secret Plans and Kit helps run it, but neither can read
-    // it; Jonah can, and so can Ruth, who as an admin reads every space
-    // until milestone 15. Everyone who runs Games reads it.
+    // it; Jonah can, and so could Ruth, who as an admin read every space
+    // until migration 0032. Everyone who runs Games reads it.
     let notices = pairs(
         &db,
         "SELECT user_id::text, message FROM notifications WHERE kind = 'moderation' ORDER BY user_id, id",

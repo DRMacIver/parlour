@@ -283,8 +283,10 @@ pub fn narrows(space: &Grant, restriction: Option<&Grant>) -> bool {
 
 /// Whether a member can read something with this audience. The access
 /// layer decides this in SQL for reads; this is the same rule, for checking
-/// the destination of a write. Staff read every space for now (DESIGN.md
-/// §13, milestone 15 takes that away), as the SQL side does too.
+/// the destination of a write. Staff read only what their memberships let
+/// them, like anyone else (DESIGN.md §3.1): a grant to staff lets them in,
+/// their role alone doesn't. A break-glass grant (§8) opens pages to read,
+/// never somewhere to write, so it plays no part here.
 pub fn user_can_read(user: &UserCtx, audience: &Audience) -> bool {
     match audience {
         Audience::Public => true,
@@ -292,10 +294,8 @@ pub fn user_can_read(user: &UserCtx, audience: &Audience) -> bool {
         Audience::Members => !user.is_suspended(),
         Audience::Staff => user.is_staff(),
         Audience::Restricted { groups, users } => {
-            user.is_staff()
-                || (!user.is_suspended()
-                    && (users.contains(&user.id)
-                        || user.group_ids.iter().any(|g| groups.contains(g))))
+            !user.is_suspended()
+                && (users.contains(&user.id) || user.group_ids.iter().any(|g| groups.contains(g)))
         }
         // DMs check their participant list instead.
         Audience::Private => false,
@@ -340,13 +340,15 @@ impl SpaceRules {
     }
 
     /// Whether the viewer may change the space's settings and moderate
-    /// within it. Staff administer every space (DESIGN.md §3.1), the
-    /// administer grant names the rest. Archiving doesn't close this.
+    /// within it. Staff administer every space, whether or not they can
+    /// read it (DESIGN.md §3.1: they act on what they can't read without
+    /// being shown it); the administer grant names the rest, who must be
+    /// able to read it. Archiving doesn't close this.
     pub fn may_administer(&self, viewer: &Viewer) -> bool {
         viewer.user().is_some_and(|user| {
             user.may_act()
-                && user_can_read(user, &self.read.audience())
-                && (user.is_staff() || self.administer.allows(user))
+                && (user.is_staff()
+                    || (user_can_read(user, &self.read.audience()) && self.administer.allows(user)))
         })
     }
 
@@ -593,18 +595,18 @@ mod tests {
             (Person::Member { .. }, Audience::Members) => true,
             (Person::Member { staff, .. }, Audience::Staff) => *staff,
             (
-                Person::Member { id, staff, groups },
+                Person::Member { id, groups, .. },
                 Audience::Restricted {
                     groups: allowed,
                     users,
                 },
-            ) => *staff || users.contains(id) || !groups.is_disjoint(allowed),
+            ) => users.contains(id) || !groups.is_disjoint(allowed),
             // Staff don't read DMs.
             (Person::Member { id, .. }, Audience::Private) => participants.contains(id),
             // A thread's restriction: they read its space, and it names
-            // them (staff read every thread for now).
+            // them. Staff are no exception (DESIGN.md §3.1).
             (
-                Person::Member { id, staff, groups },
+                Person::Member { id, groups, .. },
                 Audience::Within {
                     space,
                     groups: allowed,
@@ -612,7 +614,7 @@ mod tests {
                 },
             ) => {
                 sees_audience(person, space, participants)
-                    && (*staff || users.contains(id) || !groups.is_disjoint(allowed))
+                    && (users.contains(id) || !groups.is_disjoint(allowed))
             }
         }
     }
@@ -660,14 +662,13 @@ mod tests {
     }
 
     /// Nobody who can see the destination is ever shown a post they
-    /// couldn't see where it was. (Staff see every space for now, so the
-    /// check is for everyone else; the rule itself ignores that bypass.)
+    /// couldn't see where it was, staff included: they read only what
+    /// their memberships let them (DESIGN.md §3.1).
     #[hegel::test(test_cases = 1000)]
     fn forks_never_widen_the_audience(tc: TestCase) {
         let source = place(&tc);
         let dest = place(&tc);
         let viewer = person(&tc);
-        tc.assume(!matches!(viewer, Person::Member { staff: true, .. }));
         if at_most_as_visible(&source.audience, &dest.audience) && sees(&viewer, &dest) {
             assert!(sees(&viewer, &source), "{viewer:?} {source:?} {dest:?}");
         }
@@ -692,10 +693,9 @@ mod tests {
         if at_most_as_visible(&source.audience, &dest.audience) {
             return;
         }
-        // A staff-only destination is readable only by staff, who read every
-        // source but a DM for now. What the rule refuses there is on
-        // purpose: once staff stop reading everything, a staff space mustn't
-        // hold a quote of a restricted one.
+        // A staff-only destination is readable only by staff, who read
+        // public and members-only sources but no restricted one unless
+        // they are in it, which the rule, comparing names, can't know.
         if dest.audience == Audience::Staff {
             assert!(
                 !matches!(
@@ -706,8 +706,8 @@ mod tests {
             );
             return;
         }
-        // A listed destination naming nobody is readable by nobody (but
-        // staff, for now), so refusing a quote into it costs nothing.
+        // A listed destination naming nobody is readable by nobody, so
+        // refusing a quote into it costs nothing.
         if matches!(&dest.audience, Audience::Restricted { groups, users }
             if groups.is_empty() && users.is_empty())
         {
@@ -798,10 +798,14 @@ mod tests {
         assert!(user_can_read(&ruth, &within));
         ruth.group_ids = vec![3];
         assert!(!user_can_read(&ruth, &within));
-        assert!(user_can_read(
-            &user(Role::Moderator, BTreeSet::new()),
-            &within
-        ));
+        // Staff read by their memberships too, not by their role.
+        let mut moderator = user(Role::Moderator, BTreeSet::new());
+        assert!(!user_can_read(&moderator, &within));
+        assert!(!user_can_read(&moderator, &restricted(&[1, 2], &[])));
+        assert!(user_can_read(&moderator, &Audience::Staff));
+        moderator.group_ids = vec![2];
+        moderator.id = 7;
+        assert!(user_can_read(&moderator, &within));
     }
 
     fn user(role: Role, groups: BTreeSet<i64>) -> UserCtx {
@@ -818,6 +822,7 @@ mod tests {
             silenced_until: None,
             suspended_until: None,
             blocked_user_ids: Vec::new(),
+            glass: Box::default(),
         }
     }
 
@@ -913,8 +918,7 @@ mod tests {
         assert_eq!(
             rules.may_administer(&viewer),
             restriction != 2
-                && reads
-                && (role.is_staff() || model_allows(&rules.administer, &person)),
+                && (role.is_staff() || (reads && model_allows(&rules.administer, &person))),
             "administer: {role:?} {member_groups:?} {restriction} {rules:?}"
         );
         assert!(!rules.may_start(&Viewer::Anonymous));

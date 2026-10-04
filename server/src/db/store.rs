@@ -488,6 +488,18 @@ pub async fn delete_space(db: &crate::db::Db, id: i64) -> sqlx::Result<Result<bo
             "Only an empty space can be deleted. Move its threads elsewhere first.".to_owned(),
         ));
     }
+    // The record of staff reading it stays (DESIGN.md §8).
+    let accessed = sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM staff_access WHERE space_id = $1) AS "accessed!""#,
+        id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if accessed {
+        return Ok(Err(
+            "A moderator or admin once broke glass to read this space, and the record of it names the space, so it can’t be deleted. You can archive it instead.".to_owned(),
+        ));
+    }
     let done = sqlx::query!("DELETE FROM spaces WHERE id = $1", id)
         .execute(&mut *tx)
         .await?;

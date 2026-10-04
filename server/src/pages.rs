@@ -370,6 +370,8 @@ pub async fn space(
     let own_feed = target
         .as_ref()
         .is_some_and(|target| target.owned_by(&viewer));
+    // Under a break-glass grant the page is for reading only.
+    let logged_in = viewer.user().is_some() && !space.granted;
     cacheable(
         &SpaceTemplate {
             layout: Layout::load(&state, &viewer, Nav::None).await?,
@@ -377,7 +379,7 @@ pub async fn space(
             threads,
             pagination: Pagination::new(base, page, total),
             show_space: false,
-            logged_in: viewer.user().is_some(),
+            logged_in,
             can_post,
             can_administer,
             following,
@@ -512,6 +514,15 @@ pub async fn thread(
     let base = format::thread_href(&id, &thread.thread.slug);
     let (reply_box, can_edit, reaction_types, divider_before, subscribed) = match viewer.user() {
         None => (ReplyBox::LogIn, false, Vec::new(), None, None),
+        // Under a break-glass grant the page is for reading: nothing to
+        // reply, react or subscribe with (DESIGN.md §8).
+        Some(_) if thread.granted => (
+            ReplyBox::Note("You can’t reply in this thread."),
+            false,
+            Vec::new(),
+            None,
+            None,
+        ),
         Some(user) => {
             let reply_box = match writing::reply_refusal(&state, &viewer, &thread.target()).await? {
                 None => ReplyBox::Form,
@@ -539,9 +550,10 @@ pub async fn thread(
     let may_restrict = viewer.user().is_some_and(|user| {
         user.id == thread.author.id || thread.space.rules.may_administer(&viewer)
     });
-    let can_react = viewer.user().is_some_and(|user| {
-        writing::restriction(user).is_none() && (!thread.locked || viewer.is_staff())
-    });
+    let can_react = !thread.granted
+        && viewer.user().is_some_and(|user| {
+            writing::restriction(user).is_none() && (!thread.locked || viewer.is_staff())
+        });
     cacheable(
         &ThreadTemplate {
             layout: Layout::load(&state, &viewer, Nav::None).await?,

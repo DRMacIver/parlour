@@ -72,12 +72,12 @@
   <div class="form">
     {% if let Some(owner) = space.owner %}
     {#- A feed's owner holds all of its permissions: none is left to staff alone. -#}
-    {% call grant_fields("read", "Who can read it", form.read, groups.read, true, false, self.feed_hint(owner, "Nobody can post where they can’t read. Moderators and admins read every space for now.")) %}{% endcall %}
+    {% call grant_fields("read", "Who can read it", form.read, groups.read, true, false, self.feed_hint(owner, "Nobody can post where they can’t read. Moderators and admins read only what this lets them, like everyone else.")) %}{% endcall %}
     {% call grant_fields("reply", "Who can reply in its threads", form.reply, groups.reply, false, false, self.feed_hint(owner, "Of those who can read it.")) %}{% endcall %}
     {% call grant_fields("start", "Who can start threads", form.start, groups.start, false, false, self.feed_hint(owner, "Of those who can read it.")) %}{% endcall %}
     {% call grant_fields("administer", "Who runs it", form.administer, groups.administer, false, false, self.feed_runner_hint(owner)) %}{% endcall %}
     {% else %}
-    {% call grant_fields("read", "Who can read it", form.read, groups.read, true, true, "Nobody can post where they can’t read. Moderators and admins read every space for now.") %}{% endcall %}
+    {% call grant_fields("read", "Who can read it", form.read, groups.read, true, true, "Nobody can post where they can’t read. Moderators and admins read only what this lets them, like everyone else.") %}{% endcall %}
     {% call grant_fields("reply", "Who can reply in its threads", form.reply, groups.reply, false, true, "Of those who can read it.") %}{% endcall %}
     {% call grant_fields("start", "Who can start threads", form.start, groups.start, false, true, "Of those who can read it.") %}{% endcall %}
     {% call grant_fields("administer", "Who runs it", form.administer, groups.administer, false, true, "They change these settings, pin and lock threads, and can archive the space. Moderators and admins always can.") %}{% endcall %}

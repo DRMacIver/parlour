@@ -41,7 +41,7 @@ use crate::groups::{self, GroupChoice};
 use crate::layouts::{self, MuteOutcome, Section};
 use crate::mod_records::{self, NewAction};
 use crate::pages::well_formed_slug;
-use crate::permissions::{Grant, Level};
+use crate::permissions::{Grant, Level, user_can_read};
 use crate::ratelimit::{Action, Scope};
 use crate::settings::{self, SpaceCreation};
 use crate::store::{self, SpaceSettings};
@@ -743,7 +743,9 @@ async fn administered(
     if viewer.user().is_none() {
         return Ok(Err(web::login_first(&format!("/c/{slug}/settings"))));
     }
-    let Some(space) = content::space_target(state.db(), viewer, slug).await? else {
+    // Staff run every space, whether or not they can read it (DESIGN.md
+    // §3.1); its settings show nothing of its threads.
+    let Some(space) = content::administered_space(state.db(), viewer, slug).await? else {
         return Ok(Err(web::not_found(state, viewer).await?));
     };
     if !space.rules.may_administer(viewer) {
@@ -875,6 +877,22 @@ pub async fn save_settings(
     let mut settings = form
         .settings(&state, &choosable(&state, &viewer, &space).await?)
         .await?;
+    // Staff run spaces they can't read, but changing who may read one so
+    // that they could would be reading it by another way: breaking glass,
+    // which isn't done from here (DESIGN.md §3.1, §8). Someone the
+    // administer grant names, or whose group or list it names, runs it in
+    // their own right, staff or not; a grant to "staff" is the role again.
+    if let (Some(user), Ok(new)) = (viewer.user(), &settings)
+        && viewer.is_staff()
+        && !(space.rules.administer.level == Level::Listed
+            && space.rules.administers_by_grant(&viewer))
+        && !user_can_read(user, &space.rules.read.audience())
+        && user_can_read(user, &new.read.audience())
+    {
+        settings = Err(vec![
+            "You can’t read this space, and that would let you read it. Leave who can read it to someone who can, or choose an audience that still leaves you out.".to_owned(),
+        ]);
+    }
     // Where it goes on the default front page is for staff to say.
     let section = if viewer.is_staff() {
         match form.section(&default_sections(&state).await?) {

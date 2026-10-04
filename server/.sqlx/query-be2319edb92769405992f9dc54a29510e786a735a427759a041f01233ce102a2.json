@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.id AS \"id!\", c.slug AS \"slug!\", c.name AS \"name!\", c.description AS \"description!\",\n               c.essential AS \"essential!\",\n               c.visibility AS \"visibility!\", c.created_by AS \"created_by?\", c.created_at AS \"created_at!\",\n               c.archived_at AS \"archived_at?\",\n               c.read_level AS \"read_level!\", c.read_group_ids AS \"read_group_ids!\", c.read_user_ids AS \"read_user_ids!\",\n               c.reply_level AS \"reply_level!\", c.reply_group_ids AS \"reply_group_ids!\", c.reply_user_ids AS \"reply_user_ids!\",\n               c.start_level AS \"start_level!\", c.start_group_ids AS \"start_group_ids!\", c.start_user_ids AS \"start_user_ids!\",\n               c.administer_level AS \"administer_level!\", c.administer_group_ids AS \"administer_group_ids!\",\n               c.administer_user_ids AS \"administer_user_ids!\",\n               site_group_names(c.read_group_ids) AS \"group_names!\",\n               list_labels(c.read_group_ids, $5) AS \"list_names!\",\n               o.id AS \"owner_id?\", o.username::text AS \"owner_username?\",\n               o.display_name AS \"owner_display_name?\", o.deleted_at IS NOT NULL AS \"owner_deleted?\",\n               EXISTS (SELECT 1 FROM threads t\n                       WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                         AND thread_readable(t, $1, $2, $6, $7)) AS \"has_threads!\"\n        FROM space_targets c\n        LEFT JOIN users o ON o.id = c.owner_user_id\n        WHERE space_readable(c.visibility, c.id, $1, $2)\n          AND ($3::bigint IS NULL OR c.id = $3)\n          AND ($4::text IS NULL OR c.slug = $4)\n        ORDER BY lower(c.name), c.id\n        ",
+  "query": "\n        SELECT c.id AS \"id!\", c.slug AS \"slug!\", c.name AS \"name!\", c.description AS \"description!\",\n               c.essential AS \"essential!\",\n               c.visibility AS \"visibility!\", c.created_by AS \"created_by?\", c.created_at AS \"created_at!\",\n               c.archived_at AS \"archived_at?\",\n               c.read_level AS \"read_level!\", c.read_group_ids AS \"read_group_ids!\", c.read_user_ids AS \"read_user_ids!\",\n               c.reply_level AS \"reply_level!\", c.reply_group_ids AS \"reply_group_ids!\", c.reply_user_ids AS \"reply_user_ids!\",\n               c.start_level AS \"start_level!\", c.start_group_ids AS \"start_group_ids!\", c.start_user_ids AS \"start_user_ids!\",\n               c.administer_level AS \"administer_level!\", c.administer_group_ids AS \"administer_group_ids!\",\n               c.administer_user_ids AS \"administer_user_ids!\",\n               site_group_names(c.read_group_ids) AS \"group_names!\",\n               list_labels(c.read_group_ids, $5) AS \"list_names!\",\n               o.id AS \"owner_id?\", o.username::text AS \"owner_username?\",\n               o.display_name AS \"owner_display_name?\", o.deleted_at IS NOT NULL AS \"owner_deleted?\",\n               EXISTS (SELECT 1 FROM threads t\n                       WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                         AND thread_readable(t, $1, $2, $6, $7)) AS \"has_threads!\"\n        FROM space_targets c\n        LEFT JOIN users o ON o.id = c.owner_user_id\n        WHERE (space_readable(c.visibility, c.id, $1, $2) OR $8)\n          AND ($3::bigint IS NULL OR c.id = $3)\n          AND ($4::text IS NULL OR c.slug = $4)\n        ORDER BY lower(c.name), c.id\n        ",
   "describe": {
     "columns": [
       {
@@ -295,7 +295,8 @@
         "Text",
         "Int8",
         "Int8",
-        "Int8Array"
+        "Int8Array",
+        "Bool"
       ]
     },
     "nullable": [
@@ -329,5 +330,5 @@
       null
     ]
   },
-  "hash": "a7d5aa6ce3218befa453efe6c3fac1c784fd98b051f7f357cae3cafa1445584c"
+  "hash": "be2319edb92769405992f9dc54a29510e786a735a427759a041f01233ce102a2"
 }

@@ -131,8 +131,8 @@ struct Shown {
     refusal: Option<&'static str>,
     /// Whether the viewer is subscribed to it: told of each new message.
     subscribed: bool,
-    /// Whether the viewer is in it, rather than staff reading a reported
-    /// conversation.
+    /// Whether the viewer is in it, rather than staff reading it under a
+    /// break-glass grant (DESIGN.md §8).
     participant: bool,
     /// Whether the viewer may react to its messages: they are in it, and
     /// not silenced or suspended.
@@ -237,11 +237,17 @@ async fn render_conversation(
     if participant && let Some(last) = conversation.posts.last() {
         notify::seen_thread(state, user.id, id, last.seq).await?;
     }
-    // They may have left in the meantime (in another tab, say).
-    let Some(target) = content::thread_target(state.db(), viewer, id).await? else {
-        return web::not_found(state, viewer).await;
+    // Staff reading it under a break-glass grant aren't in it, and only
+    // those in it write in it.
+    let refusal = if participant {
+        // They may have left in the meantime (in another tab, say).
+        let Some(target) = content::thread_target(state.db(), viewer, id).await? else {
+            return web::not_found(state, viewer).await;
+        };
+        messages::send_refusal(state, viewer, &target).await?
+    } else {
+        Some("You aren’t in this conversation.")
     };
-    let refusal = messages::send_refusal(state, viewer, &target).await?;
     let others = conversation.conversation.others(Some(user.id));
     let blockable = match others.as_slice() {
         [other] if !other.staff && !conversation.conversation.staff_message => {

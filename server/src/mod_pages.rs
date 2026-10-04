@@ -955,6 +955,18 @@ struct ModDeletedThreadTemplate {
     notice: Option<&'static str>,
 }
 
+/// A thread the moderator can't read: what they may do to it, and
+/// nothing of what it says (DESIGN.md §3.1).
+#[derive(Template)]
+#[template(path = "mod_closed_thread.html")]
+struct ModClosedThreadTemplate {
+    layout: Layout,
+    thread: content::moderation::ClosedThread,
+    /// Where it may be moved: every space but its own.
+    spaces: Vec<SpaceTarget>,
+    notice: Option<&'static str>,
+}
+
 pub async fn thread_page(
     State(state): State<AppState>,
     viewer: Viewer,
@@ -977,15 +989,36 @@ pub async fn thread_page(
         .filter(|t| t.space().is_some())
     else {
         // A deleted thread can be restored from here.
-        return match content::moderation::deleted_thread(state.db(), &viewer, thread_id).await? {
-            Some(thread) => render(
+        if let Some(thread) =
+            content::moderation::deleted_thread(state.db(), &viewer, thread_id).await?
+        {
+            return render(
                 StatusCode::OK,
                 &ModDeletedThreadTemplate {
                     layout: Layout::load(&state, &viewer, Nav::Moderation).await?,
                     thread,
                     notice,
                 },
-            ),
+            );
+        }
+        // One they can't read, as staff run every space.
+        return match content::moderation::closed_thread(state.db(), &viewer, thread_id).await? {
+            Some(thread) => {
+                let spaces = content::administered_spaces(state.db(), &viewer)
+                    .await?
+                    .into_iter()
+                    .filter(|c| c.space.id != thread.space.space.id)
+                    .collect();
+                render(
+                    StatusCode::OK,
+                    &ModClosedThreadTemplate {
+                        layout: Layout::load(&state, &viewer, Nav::Moderation).await?,
+                        thread,
+                        spaces,
+                        notice,
+                    },
+                )
+            }
             None => web::not_found(&state, &viewer).await,
         };
     };

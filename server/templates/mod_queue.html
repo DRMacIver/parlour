@@ -58,6 +58,41 @@
     </form>
   </div>
 </article>
+{% when QueueKind::PostClosed { post, author, reports } %}
+<article class="panel queue-item" aria-labelledby="q-{{ n }}">
+  <header class="queue-head">
+    <span class="queue-kind" id="q-{{ n }}">{% if post.space.is_none() %}Report on a message{% else %}Report{% endif %}</span>
+    <span class="queue-where">{% if let Some(space) = post.space %}{{ space.name }} › a thread you can’t read{% else %}A conversation you aren’t in{% endif %}</span>
+    <span class="spacer"></span>
+    {% call m::time(item.first_at) %}{% endcall %}
+  </header>
+  <div class="queue-body">
+    <p class="queue-reason"><strong>{{ self.main_reason(reports) }}</strong> <span class="row-meta">· {{ self.reporters(reports) }}</span></p>
+    {% for r in reports %}{% if !r.details.is_empty() %}<p class="queue-detail">{% if let Some(who) = r.reporter %}{{ who.username }}: {% endif %}“{{ r.details }}”</p>{% endif %}{% endfor %}
+    <blockquote class="queue-excerpt">
+      <div class="row-meta"><strong><a href="/mod/users/{{ author.user.username }}">{{ author.user.username }}</a></strong> · joined {{ crate::format::date(author.created_at) }} · {{ crate::format::plural(author.posts, "post", "posts") }}{% if author.is_suspended() %} · <span class="flag">Suspended</span>{% else if author.is_silenced() %} · <span class="flag">Silenced</span>{% endif %}</div>
+      You can’t read {% if post.space.is_none() %}this conversation{% else %}this thread{% endif %}, so what the {% if post.space.is_none() %}message{% else %}post{% endif %} says isn’t shown here.
+    </blockquote>
+    {% if let Some(inviter) = author.invited_by %}<ul class="queue-context"><li>Invited by <a href="/mod/users/{{ inviter.username }}">{{ inviter.username }}</a></li></ul>{% endif %}
+    {% let report = reports[0].id %}
+    <form class="queue-actions" method="post" action="/mod/reports/{{ report }}/dismiss">
+      {% call md::no_enter() %}{% endcall %}
+      <input type="hidden" name="report" value="{{ report }}">
+      <input type="hidden" name="back" value="/mod/queue?done=1">
+      {% call md::reason_field(format!("reason-{}", n), self.main_reason(reports)) %}{% endcall %}
+      {% call md::days_field(format!("days-{}", n), durations, 7) %}{% endcall %}
+      <span class="queue-buttons">
+        {% if !author.role.is_staff() %}
+        <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ author.user.username }}/silence">Silence {{ author.user.username }}</button>
+        <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ author.user.username }}/suspend">Suspend</button>
+        {% if author.branch_below > 0 %}<button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ author.user.username }}/suspend-branch">Suspend invite branch ({{ author.branch_below + 1 }} accounts)</button>{% endif %}
+        <button class="button button-small button-danger" type="submit" formaction="/mod/users/{{ author.user.username }}/spammer">Delete as spammer</button>
+        {% endif %}
+        <button class="button button-small button-quiet" type="submit">Dismiss</button>
+      </span>
+    </form>
+  </div>
+</article>
 {% when QueueKind::PostGone { post_id, reports } %}
 <article class="panel queue-item">
   <header class="queue-head"><span class="queue-kind">Report</span><span class="queue-where">A post that has since been removed</span><span class="spacer"></span>{% call m::time(item.first_at) %}{% endcall %}</header>

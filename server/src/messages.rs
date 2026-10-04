@@ -234,8 +234,8 @@ pub async fn send_refusal(
     let (Some(user), Some(conversation)) = (viewer.user(), thread.conversation()) else {
         return Ok(Some("Log in to reply."));
     };
-    // Staff can read a reported conversation without being in it, but
-    // only those in it write in it.
+    // Only those in it write in it (staff reading it under a break-glass
+    // grant don't, DESIGN.md §8).
     if !conversation.includes(user.id) {
         return Ok(Some("You aren’t in this conversation."));
     }

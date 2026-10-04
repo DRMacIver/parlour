@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT t.id, t.title, c.name AS \"space_name?\", c.slug AS \"space_slug?\",\n                  d.id AS \"merged_id?\", d.title AS \"merged_title?\"\n           FROM threads t\n           JOIN spaces c ON c.id = t.space_id\n           LEFT JOIN threads d ON d.id = t.merged_into_thread_id\n           WHERE t.id = $1 AND t.deleted_at IS NOT NULL\n             AND thread_readable(t, $2, $3, $4, $5)",
+  "query": "SELECT t.id, t.title, c.name AS \"space_name?\", c.slug AS \"space_slug?\",\n                  d.id AS \"merged_id?\",\n                  CASE WHEN thread_readable(d, $2, $3, $4, $5) THEN d.title END AS \"merged_title?\"\n           FROM threads t\n           JOIN spaces c ON c.id = t.space_id\n           LEFT JOIN threads d ON d.id = t.merged_into_thread_id\n           WHERE t.id = $1 AND t.deleted_at IS NOT NULL\n             AND thread_readable(t, $2, $3, $4, $5)",
   "describe": {
     "columns": [
       {
@@ -62,12 +62,7 @@
         "ordinal": 5,
         "name": "merged_title?",
         "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "threads",
-            "name": "title"
-          }
-        }
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -85,8 +80,8 @@
       false,
       false,
       true,
-      true
+      null
     ]
   },
-  "hash": "0cbeb96c78f06f1dc5e740d258e90539cffc6aafa3861f52f79b9a7dc092ab1d"
+  "hash": "bece34d897b70e231bd88c758d1e6a921dcd52e62269bb970e424d0d7d4f520d"
 }

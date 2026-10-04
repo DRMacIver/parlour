@@ -247,7 +247,7 @@ async fn members_report_members(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn reporting_a_message_shows_that_conversation_and_no_other_to_staff(pool: PgPool) {
+async fn a_reported_conversation_stays_closed_to_staff(pool: PgPool) {
     let s = setup(pool).await;
     let start = |cookie: String, to: &'static str, title: &'static str, body: &'static str| {
         let f = &s.f;
@@ -300,10 +300,7 @@ async fn reporting_a_message_shows_that_conversation_and_no_other_to_staff(pool:
     let form =
         s.f.page_as(&format!("/p/{post}/report"), &s.ruth_cookie)
             .await;
-    assert!(
-        form.contains("lets the moderators read this conversation"),
-        "{form}"
-    );
+    assert!(form.contains("but not the conversation itself"), "{form}");
     let response = report(
         &s.f,
         &s.ruth_cookie,
@@ -315,50 +312,70 @@ async fn reporting_a_message_shows_that_conversation_and_no_other_to_staff(pool:
     assert_status(&response, StatusCode::OK);
 
     for cookie in [&s.mo_cookie, &s.sam_cookie] {
+        // The queue says who wrote what was reported, where, and why, but
+        // staff can't read the conversation (DESIGN.md §3.9, §8): a report
+        // carries no content.
         let queue = s.f.page_as("/mod/queue", cookie).await;
         assert!(queue.contains("Report on a message"), "{queue}");
-        assert!(queue.contains("why are you ignoring me"), "{queue}");
-        let page = s.f.page_as(&format!("/messages/{reported}"), cookie).await;
-        assert!(page.contains("why are you ignoring me"), "{page}");
-        assert!(page.contains("one of its messages was reported"), "{page}");
-        // Reading it doesn't put staff in it: they can't write there, and
-        // it isn't in their list.
-        assert!(!page.contains("id=\"reply-body\""), "{page}");
-        let response =
-            s.f.submit(
-                &format!("/messages/{reported}"),
-                &[("body", "staff butting in")],
-                Some(cookie),
-            )
-            .await;
-        assert_status(&response, StatusCode::FORBIDDEN);
-        let list = s.f.page_as("/messages", cookie).await;
-        assert!(!list.contains("why are you ignoring me"), "{list}");
-        // The other conversation stays private.
-        let response =
-            s.f.get_as(&format!("/messages/{other}"), Some(cookie))
-                .await;
-        assert_status(&response, StatusCode::NOT_FOUND);
-        assert!(!response.body.contains("an entirely private aside"));
+        assert!(queue.contains("Asked him to stop twice"), "{queue}");
+        assert!(queue.contains("A conversation you aren’t in"), "{queue}");
+        assert!(!queue.contains("why are you ignoring me"), "{queue}");
+        for path in [
+            format!("/messages/{reported}"),
+            format!("/messages/{other}"),
+            format!("/p/{post}"),
+            format!("/mod/p/{post}"),
+        ] {
+            let response = s.f.get_as(&path, Some(cookie)).await;
+            assert_status(&response, StatusCode::NOT_FOUND);
+            assert!(!response.body.contains("why are you ignoring me"));
+            assert!(!response.body.contains("an entirely private aside"));
+        }
     }
+    // Under a break-glass grant on it, a moderator reads that
+    // conversation and no other, without being in it: they can't write
+    // there, and it isn't in their list.
+    let mo: i64 = s.f.user_id("mo").await;
+    parlour::staff_access::open(
+        &s.f.db,
+        &parlour::staff_access::NewAccess {
+            actor_id: mo,
+            scope: parlour::staff_access::Scope::Thread(reported),
+            report_id: None,
+            reason: "The report",
+        },
+    )
+    .await
+    .unwrap();
+    let page =
+        s.f.page_as(&format!("/messages/{reported}"), &s.mo_cookie)
+            .await;
+    assert!(page.contains("why are you ignoring me"), "{page}");
+    assert!(page.contains("You aren’t in this conversation"), "{page}");
+    assert!(!page.contains("id=\"reply-body\""), "{page}");
+    let response =
+        s.f.submit(
+            &format!("/messages/{reported}"),
+            &[("body", "staff butting in")],
+            Some(&s.mo_cookie),
+        )
+        .await;
+    assert!(
+        response.status == StatusCode::FORBIDDEN || response.status == StatusCode::NOT_FOUND,
+        "{}",
+        response.body
+    );
+    let list = s.f.page_as("/messages", &s.mo_cookie).await;
+    assert!(!list.contains("why are you ignoring me"), "{list}");
+    let response =
+        s.f.get_as(&format!("/messages/{other}"), Some(&s.mo_cookie))
+            .await;
+    assert_status(&response, StatusCode::NOT_FOUND);
     // Other members still can't.
     let response =
         s.f.get_as(&format!("/messages/{reported}"), Some(&s.maya_cookie))
             .await;
     assert_status(&response, StatusCode::NOT_FOUND);
-    // Hiding the message is logged for staff only.
-    ok(
-        &s.f,
-        &format!("/mod/p/{post}"),
-        &[("action", "hide"), ("reason", "Unwanted contact")],
-        &s.mo_cookie,
-    )
-    .await;
-    let public = s.f.page("/moderation").await;
-    assert!(!public.contains("Unwanted contact"), "{public}");
-    let log = s.f.page_as("/mod/log", &s.mo_cookie).await;
-    assert!(log.contains("Unwanted contact"), "{log}");
-    assert!(log.contains("Staff only"), "{log}");
 }
 
 #[sqlx::test]
@@ -2483,9 +2500,9 @@ async fn the_restriction_notice_contests_the_one_in_force(pool: PgPool) {
 // ---------------------------------------------------------------------------
 // The moderators' pages
 
-/// Staff reading a reported conversation can't react in it either.
+/// Staff reading a conversation under a break-glass grant can't react in it.
 #[sqlx::test]
-async fn staff_dont_react_in_reported_conversations(pool: PgPool) {
+async fn staff_dont_react_in_conversations_they_read_under_a_grant(pool: PgPool) {
     let s = setup(pool).await;
     let response = ok(
         &s.f,
@@ -2502,6 +2519,17 @@ async fn staff_dont_react_in_reported_conversations(pool: PgPool) {
         .collect();
     let post = count(&s.f, "SELECT max(id) FROM posts").await;
     report(&s.f, &s.ruth_cookie, post, "harassment", "").await;
+    parlour::staff_access::open(
+        &s.f.db,
+        &parlour::staff_access::NewAccess {
+            actor_id: s.f.user_id("mo").await,
+            scope: parlour::staff_access::Scope::Thread(conversation.parse().unwrap()),
+            report_id: None,
+            reason: "The report",
+        },
+    )
+    .await
+    .unwrap();
     let page =
         s.f.page_as(&format!("/messages/{conversation}"), &s.mo_cookie)
             .await;
@@ -2517,7 +2545,8 @@ async fn staff_dont_react_in_reported_conversations(pool: PgPool) {
             Some(&s.mo_cookie),
         )
         .await;
-    assert_status(&response, StatusCode::FORBIDDEN);
+    // A grant opens the conversation's page to read, and nothing else.
+    assert_status(&response, StatusCode::NOT_FOUND);
     assert_eq!(count(&s.f, "SELECT count(*) FROM reactions").await, 0);
     // Those in it still can.
     ok(

@@ -78,11 +78,16 @@ impl Club {
 const WRITE_PAGES: [&str; 3] = ["/fork", "/reply", "/new"];
 
 #[sqlx::test]
-async fn only_group_members_and_staff_read_a_group_space(pool: PgPool) {
+async fn only_group_members_read_a_group_space(pool: PgPool) {
     let club = club(pool).await;
     // Visitors and members outside the group get a 404, not a 403, so the
-    // space's existence isn't revealed.
-    for cookie in [None, Some(club.jonah_cookie.as_str())] {
+    // space's existence isn't revealed. Staff outside it are no exception
+    // (DESIGN.md §3.1).
+    for cookie in [
+        None,
+        Some(club.jonah_cookie.as_str()),
+        Some(club.staff_cookie.as_str()),
+    ] {
         for path in club.private_paths() {
             let response = club.f.get_as(&path, cookie).await;
             if cookie.is_none() && WRITE_PAGES.iter().any(|end| path.ends_with(end)) {
@@ -111,7 +116,7 @@ async fn only_group_members_and_staff_read_a_group_space(pool: PgPool) {
             assert!(!page.contains("Budget for 2027"), "{path} {cookie:?}");
         }
     }
-    for cookie in [&club.ruth_cookie, &club.staff_cookie] {
+    for cookie in [&club.ruth_cookie] {
         let page = club.f.page_as(&club.thread_path(), cookie).await;
         assert!(page.contains("Secret plans"));
         let index = club.f.page_as("/", cookie).await;
@@ -149,14 +154,15 @@ async fn the_index_says_who_can_read_each_space(pool: PgPool) {
     let lounge = club.f.page_as("/c/lounge", &club.ruth_cookie).await;
     assert!(lounge.contains("Members only"));
     // A space whose read grant names nobody is for "chosen members" (none
-    // yet); one for staff says so.
+    // yet), which staff see in the list of spaces they run; one for staff
+    // says so.
     club.f.restrict(club.planning, &[], None).await;
     let index = club.f.page_as("/", &club.staff_cookie).await;
-    assert!(
-        access_flags(&index)
-            .iter()
-            .any(|flag| flag.ends_with(">Chosen members") && flag.contains(LOCK))
-    );
+    assert!(!index.contains("Planning"), "{index}");
+    let admin = club.f.member("ada", "admin", None).await;
+    let admin_cookie = club.f.session(admin).await;
+    let spaces = club.f.page_as("/admin/spaces", &admin_cookie).await;
+    assert!(spaces.contains("Chosen members"), "{spaces}");
     club.f
         .set_grant(club.planning, "read", Grant::staff())
         .await;

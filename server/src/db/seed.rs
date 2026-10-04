@@ -1261,8 +1261,8 @@ impl Seeder<'_> {
     /// The moderation queue in ModQueue.dc.html, and a history of actions:
     ///
     /// - a spammer's thread, reported by Maya and Kit;
-    /// - Hugo pestering Bea in a conversation, which Bea reported (so staff
-    ///   can read it);
+    /// - Hugo pestering Bea in a conversation, which Bea reported (staff
+    ///   break glass to read it);
     /// - Lin posting Ruth's address in the members' lounge, which Jonah
     ///   reported;
     /// - Wren, three days a member, whose first thread waits for approval;

@@ -9,7 +9,7 @@ use crate::AppState;
 use crate::accounts::Role;
 use crate::db::{Db, Handle, KEY};
 use crate::tokens;
-use crate::viewer::{SESSION_COOKIE, UserCtx, Viewer, session_cookie};
+use crate::viewer::{Glass, SESSION_COOKIE, StaffAccess, UserCtx, Viewer, session_cookie};
 use axum::extract::{Request, State};
 use axum::http::header::{SET_COOKIE, USER_AGENT};
 use axum::http::{HeaderMap, HeaderValue};
@@ -94,6 +94,9 @@ struct MemberRow {
     group_ids: Vec<i64>,
     restricted_space_ids: Vec<i64>,
     blocked_user_ids: Vec<i64>,
+    access_ids: Vec<i64>,
+    access_thread_ids: Vec<Option<i64>>,
+    access_space_ids: Vec<Option<i64>>,
 }
 
 impl From<MemberRow> for UserCtx {
@@ -111,6 +114,20 @@ impl From<MemberRow> for UserCtx {
             silenced_until: row.silenced_until,
             suspended_until: row.suspended_until,
             blocked_user_ids: row.blocked_user_ids,
+            glass: Box::new(Glass {
+                access: row
+                    .access_ids
+                    .into_iter()
+                    .zip(row.access_thread_ids)
+                    .zip(row.access_space_ids)
+                    .map(|((id, thread_id), space_id)| StaffAccess {
+                        id,
+                        thread_id,
+                        space_id,
+                    })
+                    .collect(),
+                page: None,
+            }),
         }
     }
 }
@@ -133,7 +150,10 @@ async fn session(db: &Db, token: &str) -> sqlx::Result<Option<SessionRow>> {
                   m.email::text AS "email!", m.verified AS "verified!", m.role AS "role!",
                   m.created_at AS "created_at!", m.silenced_until, m.suspended_until,
                   m.group_ids AS "group_ids!", m.restricted_space_ids AS "restricted_space_ids!",
-                  m.blocked_user_ids AS "blocked_user_ids!"
+                  m.blocked_user_ids AS "blocked_user_ids!",
+                  m.access_ids AS "access_ids!",
+                  m.access_thread_ids AS "access_thread_ids!: Vec<Option<i64>>",
+                  m.access_space_ids AS "access_space_ids!: Vec<Option<i64>>"
            FROM sessions s JOIN member_contexts m ON m.id = s.user_id
            WHERE s.token_hash = $1 AND s.last_seen_at > now() - make_interval(days => $2)"#,
         tokens::hash(token),
@@ -156,6 +176,9 @@ async fn session(db: &Db, token: &str) -> sqlx::Result<Option<SessionRow>> {
             group_ids: row.group_ids,
             restricted_space_ids: row.restricted_space_ids,
             blocked_user_ids: row.blocked_user_ids,
+            access_ids: row.access_ids,
+            access_thread_ids: row.access_thread_ids,
+            access_space_ids: row.access_space_ids,
         },
     }))
 }
@@ -204,7 +227,10 @@ pub async fn user_ctx(db: &Db, user_id: i64) -> sqlx::Result<Option<UserCtx>> {
                   m.email::text AS "email!", m.verified AS "verified!", m.role AS "role!",
                   m.created_at AS "created_at!", m.silenced_until, m.suspended_until,
                   m.group_ids AS "group_ids!", m.restricted_space_ids AS "restricted_space_ids!",
-                  m.blocked_user_ids AS "blocked_user_ids!"
+                  m.blocked_user_ids AS "blocked_user_ids!",
+                  m.access_ids AS "access_ids!",
+                  m.access_thread_ids AS "access_thread_ids!: Vec<Option<i64>>",
+                  m.access_space_ids AS "access_space_ids!: Vec<Option<i64>>"
            FROM member_contexts m WHERE m.id = $1"#,
         user_id,
     )
@@ -258,7 +284,13 @@ pub async fn middleware(
             .map(|axum::extract::ConnectInfo(addr)| *addr);
         let ip = crate::client::client_ip(state.config().trust_proxy, request.headers(), peer);
         match lookup(state.db(), &token, &ip).await {
-            Ok(Some(user)) => {
+            Ok(Some(mut user)) => {
+                // What a read under a break-glass grant is recorded
+                // against (DESIGN.md §8).
+                user.glass.page = Some(request.uri().path_and_query().map_or_else(
+                    || request.uri().path().to_owned(),
+                    |pq| pq.as_str().to_owned(),
+                ));
                 request.extensions_mut().insert(Viewer::User(user));
             }
             Ok(None) => clear = true,

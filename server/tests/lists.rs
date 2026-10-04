@@ -491,17 +491,27 @@ async fn a_list_in_a_grant_lets_its_owner_and_members_in(pool: PgPool) {
         assert!(page.contains("Ruth’s Book club (1)"), "{page}");
     }
     // Anyone else who can read the space sees whose choice it is, not the
-    // list: here, Maya because the grant names her too, and the admin.
+    // list: here, Maya because the grant names her too.
     club.f
         .set_grant(space, "read", Grant::listed([list], [club.maya]))
         .await;
-    for cookie in [&club.maya_cookie, &club.admin_cookie] {
-        for path in ["/c/books", "/", "/spaces"] {
-            let page = club.f.page_as(path, cookie).await;
-            assert!(!page.contains("Book club"), "{path}: {page}");
-            assert!(page.contains("People Ruth has chosen"), "{path}: {page}");
-        }
+    for path in ["/c/books", "/", "/spaces"] {
+        let page = club.f.page_as(path, &club.maya_cookie).await;
+        assert!(!page.contains("Book club"), "{path}: {page}");
+        assert!(page.contains("People Ruth has chosen"), "{path}: {page}");
     }
+    // The admin, who runs the space but isn't let in to read it, sees the
+    // same in the list of spaces, and can't read the space itself.
+    let page = club.f.page_as("/admin/spaces", &club.admin_cookie).await;
+    assert!(!page.contains("Book club"), "{page}");
+    assert!(page.contains("eople Ruth has chosen"), "{page}");
+    assert_eq!(
+        club.f
+            .get_as("/c/books", Some(&club.admin_cookie))
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[sqlx::test]
@@ -1430,9 +1440,9 @@ async fn the_audience_page_names_lists_only_to_their_people(pool: PgPool) {
         assert!(!page.contains("@pat"), "{page}");
         assert!(!page.contains("People Ruth has chosen"), "{page}");
     }
-    // Maya and Pat, organisers not on the list, and the admin, see
-    // whose choice it is and nothing more.
-    for cookie in [&club.maya_cookie, &pat_cookie, &club.admin_cookie] {
+    // Maya and Pat, organisers not on the list, see whose choice it is and
+    // nothing more.
+    for cookie in [&club.maya_cookie, &pat_cookie] {
         let page = club.f.page_as("/c/books/audience", cookie).await;
         assert!(page.contains("People Ruth has chosen"), "{page}");
         assert!(!page.contains("Book club"), "{page}");
@@ -1444,15 +1454,14 @@ async fn the_audience_page_names_lists_only_to_their_people(pool: PgPool) {
         let page = club.f.page_as("/c/books/audience", cookie).await;
         assert!(page.contains("@pat") && page.contains("@maya"), "{page}");
     }
-    let admin = club
-        .f
-        .page_as("/c/books/audience", &club.admin_cookie)
-        .await;
-    assert!(!admin.contains("@pat"), "{admin}");
-    // Someone who can't read the space finds nothing; visitors log in.
-    let response = club.f.get_as("/c/books/audience", Some(&lee_cookie)).await;
-    assert_eq!(response.status, StatusCode::NOT_FOUND);
-    assert!(!response.body.contains("Book club"));
+    // Someone who can't read the space finds nothing, the admin included
+    // (who reads only as their own groups and lists let them); visitors
+    // log in.
+    for cookie in [&lee_cookie, &club.admin_cookie] {
+        let response = club.f.get_as("/c/books/audience", Some(cookie)).await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND);
+        assert!(!response.body.contains("Book club"));
+    }
     let response = club.f.get("/c/books/audience").await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
     assert!(response.location().starts_with("/login"));

@@ -1,0 +1,185 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id, t.space_id AS \"space_id!\", t.created_at, t.last_seq, t.pinned, t.locked,\n                  t.deleted_at IS NOT NULL AS \"deleted!\", t.merged_into_thread_id IS NOT NULL AS \"merged!\",\n                  t.read_group_ids, t.read_user_ids, t.reply_group_ids, t.reply_user_ids,\n                  a.id AS author_id, a.username::text AS \"author_username!\", a.display_name AS author_name\n           FROM threads t JOIN users a ON a.id = t.author_id\n           WHERE t.id = $1 AND t.space_id IS NOT NULL\n             AND NOT thread_readable(t, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "space_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "space_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "last_seq",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "last_seq"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "pinned",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "pinned"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "locked",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "locked"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "deleted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "merged!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "read_group_ids",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "read_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "read_user_ids",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "read_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "reply_group_ids",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "reply_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "reply_user_ids",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "reply_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "author_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "author_username!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 14,
+        "name": "author_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      true,
+      true,
+      true,
+      true,
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "667d2a1127b3d49ea7c8445b03e81f40561fa89c8e546cc64f1bb2afc49625ac"
+}

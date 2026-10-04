@@ -1,9 +1,10 @@
 //! Conversations (direct messages, DESIGN.md §3.7), as the people in them
 //! see them. A conversation is a thread with no space whose visibility
 //! is `private`; only its current participants can read it, which the
-//! shared `dm_readable` SQL function checks. Staff are no exception, until
-//! a participant reports a message in it: then staff can read that
-//! conversation (and only that one) too.
+//! shared `dm_readable` SQL function checks. Staff are no exception: a
+//! staff member who isn't in one reads it only under a break-glass grant
+//! on it, through [`conversation_page`], which records every page of it
+//! they are shown (DESIGN.md §3.9, §8).
 //!
 //! Lists of space threads (the index, `/latest`, space pages,
 //! profiles' post counts) use `thread_readable`, which never matches a
@@ -305,7 +306,9 @@ pub struct ConversationPage {
     pub read_marker: Option<i64>,
 }
 
-/// One page of a conversation the viewer is in, or `None`.
+/// One page of a conversation the viewer is in, or `None`. A staff
+/// member who isn't in it may read it under a break-glass grant, which
+/// records the view (DESIGN.md §3.9, §8).
 pub async fn conversation_page(
     db: &Db,
     viewer: &Viewer,
@@ -313,26 +316,41 @@ pub async fn conversation_page(
     page: i64,
     deps: &mut Deps,
 ) -> sqlx::Result<Option<ConversationPage>> {
-    let Some(user_id) = viewer.filter().dm_viewer else {
+    let filter = viewer.filter();
+    let Some(user_id) = filter.dm_viewer else {
         return Ok(None);
     };
     let Some(row) = sqlx::query!(
         r#"
         SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,
                (SELECT tr.last_read_seq FROM thread_reads tr
-                WHERE tr.thread_id = t.id AND tr.user_id = $2) AS read_marker
+                WHERE tr.thread_id = t.id AND tr.user_id = $2) AS read_marker,
+               dm_readable(t.id, t.visibility, $2) AS "readable!"
         FROM threads t
         WHERE t.id = $1 AND t.deleted_at IS NULL AND t.space_id IS NULL
-          AND dm_readable(t.id, t.visibility, $2)
+          AND (dm_readable(t.id, t.visibility, $2)
+               OR (t.visibility = 'private' AND thread_granted(t, $3, '{}')))
         "#,
         thread_id,
         user_id,
+        &filter.granted_thread_ids,
     )
     .fetch_optional(db.pool())
     .await?
     else {
         return Ok(None);
     };
+    if !row.readable {
+        super::record_granted_view(
+            db,
+            viewer,
+            super::Granted::Thread {
+                thread_id: row.id,
+                space_id: None,
+            },
+        )
+        .await?;
+    }
     deps.add(Tag::Thread(row.id));
     let conversation = conversation_target(db, row.id).await?;
     let posts = posts_on_page(db, viewer, row.id, page, deps).await?;

@@ -34,6 +34,7 @@ pub mod seed;
 pub mod sessions;
 pub mod settings;
 pub mod social;
+pub mod staff_access;
 pub mod store;
 pub mod uploads;
 pub mod users;

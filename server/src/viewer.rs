@@ -7,11 +7,17 @@
 //! viewer from the session cookie and leaves it in the request's
 //! extensions, where the [`Viewer`] extractor finds it.
 //!
-//! Logged-in members can read public and members-only spaces; staff can
-//! read every space (DESIGN.md §3.1). Group membership adds the
-//! group-restricted spaces a member's groups may read to [`ReadFilter`],
-//! and the member's groups and lists, with who they are, decide which
-//! threads with their own restriction (§3.4) they read.
+//! Logged-in members can read public and members-only spaces. A listed
+//! space's read grant adds it to [`ReadFilter`] for the members it lets in
+//! (by name, by a group or list of theirs, or, for a grant to staff, by
+//! their role), and the member's groups and lists, with who they are,
+//! decide which threads with their own restriction (§3.4) they read.
+//!
+//! Staff roles grant powers, not readership (DESIGN.md §1, §3.1): a
+//! moderator reads what a member with the same memberships reads. Beyond
+//! that they read only under a break-glass grant (§8), whose threads and
+//! spaces [`ReadFilter`] carries for the content functions that serve a
+//! page under one, which record every such page in `staff_access_views`.
 
 use std::convert::Infallible;
 
@@ -57,6 +63,30 @@ pub struct UserCtx {
     /// The members whose posts they have asked not to see: those they
     /// blocked, unless they are staff now (staff can't be blocked).
     pub blocked_user_ids: Vec<i64>,
+    /// What reading under a break-glass grant needs (boxed, as most
+    /// viewers never use it).
+    pub glass: Box<Glass>,
+}
+
+/// The break-glass grants (DESIGN.md §8) a member holds now, while they
+/// are staff, and the page they are being shown.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Glass {
+    pub access: Vec<StaffAccess>,
+    /// The page being rendered, path and query, against which a read
+    /// under one of those grants is recorded. The session middleware sets
+    /// it; outside a request it is `None`, and grants then open nothing,
+    /// so that every read under a grant has a page to record.
+    pub page: Option<String>,
+}
+
+/// One break-glass grant: a thread (or conversation) or a whole space a
+/// staff member may read until it runs out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StaffAccess {
+    pub id: i64,
+    pub thread_id: Option<i64>,
+    pub space_id: Option<i64>,
 }
 
 impl UserCtx {
@@ -104,6 +134,13 @@ pub struct ReadFilter {
     /// for a thread's own restriction: empty for visitors and suspended
     /// members.
     pub group_ids: Vec<i64>,
+    /// The threads and spaces open to a staff member under break-glass
+    /// grants, for `thread_granted`: empty for everyone else, for staff
+    /// who are suspended, and outside a request. Only the content
+    /// functions that serve a page under a grant use them, and they
+    /// record the view (DESIGN.md §6, §8).
+    pub granted_thread_ids: Vec<i64>,
+    pub granted_space_ids: Vec<i64>,
 }
 
 impl Viewer {
@@ -113,8 +150,12 @@ impl Viewer {
         let user = self.user().filter(|user| !user.is_suspended());
         let levels: &[&str] = match user {
             None => &["public"],
-            Some(user) if user.role.is_staff() => &["public", "members", "restricted"],
             Some(_) => &["public", "members"],
+        };
+        // Grants open something only to staff, and only on a page.
+        let access: &[StaffAccess] = match user {
+            Some(user) if user.is_staff() && user.glass.page.is_some() => &user.glass.access,
+            _ => &[],
         };
         ReadFilter {
             visibilities: levels.iter().map(|level| (*level).to_owned()).collect(),
@@ -123,7 +164,15 @@ impl Viewer {
                 .unwrap_or_default(),
             dm_viewer: user.map(|user| user.id),
             group_ids: user.map(|user| user.group_ids.clone()).unwrap_or_default(),
+            granted_thread_ids: access.iter().filter_map(|a| a.thread_id).collect(),
+            granted_space_ids: access.iter().filter_map(|a| a.space_id).collect(),
         }
+    }
+
+    /// The page being rendered, if the viewer reads under a grant there:
+    /// what a read under one is recorded against.
+    pub fn page(&self) -> Option<&str> {
+        self.user()?.glass.page.as_deref()
     }
 
     pub fn user(&self) -> Option<&UserCtx> {
@@ -205,6 +254,7 @@ mod tests {
             silenced_until: None,
             suspended_until: None,
             blocked_user_ids: Vec::new(),
+            glass: Box::default(),
         })
     }
 
@@ -236,21 +286,16 @@ mod tests {
                 restricted_space_ids: vec![],
                 dm_viewer: None,
                 group_ids: vec![],
+                granted_thread_ids: vec![],
+                granted_space_ids: vec![],
             }
         );
     }
 
     #[test]
-    fn members_read_members_only_content_and_staff_read_everything() {
-        assert_eq!(
-            user(Role::User).filter().visibilities,
-            vec!["public", "members"]
-        );
-        for role in [Role::Moderator, Role::Admin] {
-            assert_eq!(
-                user(role).filter().visibilities,
-                vec!["public", "members", "restricted"]
-            );
+    fn members_read_members_only_content_and_staff_read_no_more() {
+        for role in [Role::User, Role::Moderator, Role::Admin] {
+            assert_eq!(user(role).filter().visibilities, vec!["public", "members"]);
         }
         assert!(!user(Role::User).is_staff());
         let Viewer::User(mut ctx) = user(Role::User) else {
@@ -265,11 +310,56 @@ mod tests {
                 restricted_space_ids: vec![7, 9],
                 dm_viewer: Some(1),
                 group_ids: vec![4],
+                granted_thread_ids: vec![],
+                granted_space_ids: vec![],
             }
         );
         assert!(user(Role::Moderator).is_staff());
         assert!(!user(Role::Moderator).is_admin());
         assert!(user(Role::Admin).is_admin());
+    }
+
+    fn with_access(role: Role, page: Option<&str>) -> UserCtx {
+        let Viewer::User(mut ctx) = user(role) else {
+            unreachable!()
+        };
+        ctx.glass.access = vec![
+            StaffAccess {
+                id: 10,
+                thread_id: Some(5),
+                space_id: None,
+            },
+            StaffAccess {
+                id: 11,
+                thread_id: None,
+                space_id: Some(8),
+            },
+        ];
+        ctx.glass.page = page.map(str::to_owned);
+        ctx
+    }
+
+    #[test]
+    fn grants_open_threads_and_spaces_to_staff_on_a_page() {
+        for role in [Role::Moderator, Role::Admin] {
+            let viewer = Viewer::User(with_access(role, Some("/t/5/x")));
+            let filter = viewer.filter();
+            assert_eq!(filter.granted_thread_ids, vec![5]);
+            assert_eq!(filter.granted_space_ids, vec![8]);
+            assert_eq!(filter.visibilities, vec!["public", "members"]);
+            assert_eq!(viewer.page(), Some("/t/5/x"));
+            // Outside a request there is no page to record a view against,
+            // so the grants open nothing.
+            let filter = Viewer::User(with_access(role, None)).filter();
+            assert!(filter.granted_thread_ids.is_empty() && filter.granted_space_ids.is_empty());
+            // Nor while suspended.
+            let mut ctx = with_access(role, Some("/t/5/x"));
+            ctx.suspended_until = Some(Utc::now() + chrono::Duration::days(1));
+            assert_eq!(Viewer::User(ctx).filter(), Viewer::Anonymous.filter());
+        }
+        // A member who isn't staff opens nothing with them.
+        let filter = Viewer::User(with_access(Role::User, Some("/t/5/x"))).filter();
+        assert!(filter.granted_thread_ids.is_empty() && filter.granted_space_ids.is_empty());
     }
 
     #[test]

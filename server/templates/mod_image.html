@@ -24,7 +24,7 @@
   <ul class="mod-links">
     {% for post in image.posts %}<li><a href="/mod/p/{{ post.post_id }}">№ {{ post.seq }}</a> in {{ post.thread_title }}{% if post.deleted %} <span class="flag">Deleted</span>{% endif %}</li>{% endfor %}
     {% for id in image.held_posts %}<li><a href="/held/{{ id }}">A post held for approval</a></li>{% endfor %}
-    {% if image.conversation_posts > 0 %}<li>{{ crate::format::plural(image.conversation_posts, "message", "messages") }} in conversations, which staff can’t read unless one is reported</li>{% endif %}
+    {% if image.conversation_posts > 0 %}<li>{{ crate::format::plural(image.conversation_posts, "message", "messages") }} in conversations, which staff can’t read without breaking glass</li>{% endif %}
   </ul>
   {% endif %}
 </section>

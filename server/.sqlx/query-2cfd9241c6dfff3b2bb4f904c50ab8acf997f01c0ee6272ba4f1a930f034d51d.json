@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT m.id AS \"id!\", m.username::text AS \"username!\", m.display_name AS \"display_name!\",\n                  m.email::text AS \"email!\", m.verified AS \"verified!\", m.role AS \"role!\",\n                  m.created_at AS \"created_at!\", m.silenced_until, m.suspended_until,\n                  m.group_ids AS \"group_ids!\", m.restricted_space_ids AS \"restricted_space_ids!\",\n                  m.blocked_user_ids AS \"blocked_user_ids!\"\n           FROM member_contexts m WHERE m.id = $1",
+  "query": "SELECT m.id AS \"id!\", m.username::text AS \"username!\", m.display_name AS \"display_name!\",\n                  m.email::text AS \"email!\", m.verified AS \"verified!\", m.role AS \"role!\",\n                  m.created_at AS \"created_at!\", m.silenced_until, m.suspended_until,\n                  m.group_ids AS \"group_ids!\", m.restricted_space_ids AS \"restricted_space_ids!\",\n                  m.blocked_user_ids AS \"blocked_user_ids!\",\n                  m.access_ids AS \"access_ids!\",\n                  m.access_thread_ids AS \"access_thread_ids!: Vec<Option<i64>>\",\n                  m.access_space_ids AS \"access_space_ids!: Vec<Option<i64>>\"\n           FROM member_contexts m WHERE m.id = $1",
   "describe": {
     "columns": [
       {
@@ -124,6 +124,39 @@
             "name": "blocked_user_ids"
           }
         }
+      },
+      {
+        "ordinal": 12,
+        "name": "access_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "member_contexts",
+            "name": "access_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "access_thread_ids!: Vec<Option<i64>>",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "member_contexts",
+            "name": "access_thread_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "access_space_ids!: Vec<Option<i64>>",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "member_contexts",
+            "name": "access_space_ids"
+          }
+        }
       }
     ],
     "parameters": {
@@ -143,8 +176,11 @@
       true,
       true,
       true,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "63cc7292b747a035400416f5e7b0dcd3e5234e21d1522c73102df12a93bfed84"
+  "hash": "2cfd9241c6dfff3b2bb4f904c50ab8acf997f01c0ee6272ba4f1a930f034d51d"
 }

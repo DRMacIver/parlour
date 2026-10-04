@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,\n               (SELECT tr.last_read_seq FROM thread_reads tr\n                WHERE tr.thread_id = t.id AND tr.user_id = $2) AS read_marker\n        FROM threads t\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.space_id IS NULL\n          AND dm_readable(t.id, t.visibility, $2)\n        ",
+  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,\n               (SELECT tr.last_read_seq FROM thread_reads tr\n                WHERE tr.thread_id = t.id AND tr.user_id = $2) AS read_marker,\n               dm_readable(t.id, t.visibility, $2) AS \"readable!\"\n        FROM threads t\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.space_id IS NULL\n          AND (dm_readable(t.id, t.visibility, $2)\n               OR (t.visibility = 'private' AND thread_granted(t, $3, '{}')))\n        ",
   "describe": {
     "columns": [
       {
@@ -63,12 +63,19 @@
         "name": "read_marker",
         "type_info": "Int4",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "readable!",
+        "type_info": "Bool",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
         "Int8",
-        "Int8"
+        "Int8",
+        "Int8Array"
       ]
     },
     "nullable": [
@@ -77,8 +84,9 @@
       false,
       false,
       false,
+      null,
       null
     ]
   },
-  "hash": "16de9aa9ea7c17613ef7ff192b936415f5353df447c91617c3333757f8756458"
+  "hash": "6178bdced8fe6919b9c1f6401f5fbce9df710d9fba5561a5e91250f98c153609"
 }

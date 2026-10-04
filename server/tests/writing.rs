@@ -1324,14 +1324,14 @@ async fn posting_is_rate_limited(pool: PgPool) {
 // ---------------------------------------------------------------------------
 // The "at most as visible" rule, over random forums
 
-/// Who can see something at a level, for the reference rule below. No
-/// member is in a group yet (M5), so only staff see listed spaces (staff
-/// read every space for now).
+/// Who can see something at a level, for the reference rule below. The
+/// listed spaces here name nobody, so nobody sees them: staff read only
+/// what a grant lets them, like anyone else (DESIGN.md §3.1).
 fn sees(who: &str, level: &str) -> bool {
     match level {
         "public" => true,
         "members" => who != "anonymous",
-        _ => who == "staff",
+        _ => false,
     }
 }
 

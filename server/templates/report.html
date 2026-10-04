@@ -11,7 +11,7 @@
 {% if let Some(post) = post %}{% if let Some(text) = post.body %}
 <section class="panel"><div class="post-body">{{ text.html|safe }}</div></section>
 {% endif %}{% endif %}
-{% if private %}<div class="notice" role="status"><p>Reporting a message lets the moderators read this conversation, so that they can see what happened. Your other conversations stay private.</p></div>{% endif %}
+{% if private %}<div class="notice" role="status"><p>The moderators will see your report and who wrote this message, but not the conversation itself, which only the people in it can read. Your other conversations stay private.</p></div>{% endif %}
 <form class="panel" method="post" action="{{ action }}">
   <h2 class="panel-bar">Report</h2>
   <div class="form">

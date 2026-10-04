@@ -66,11 +66,12 @@ test("a member reports a post, and a moderator works through the queue", async (
   await expect(moderator.getByText("Done.")).toBeVisible();
   await expect(moderator.locator(".queue-item", { hasText: secret })).toHaveCount(0);
 
-  // A reported message's conversation is open to moderators.
-  await moderator.locator(".queue-item", { hasText: "Report on a message" }).locator(".queue-where a").click();
-  await expect(moderator.getByText("one of its messages was reported")).toBeVisible();
-  await expect(moderator.locator("#reply-body")).toHaveCount(0);
-  await expectFits(moderator);
+  // A reported message stays private: the queue says who wrote it and
+  // where, but not what it says, and its conversation is still closed.
+  const message = moderator.locator(".queue-item", { hasText: "Report on a message" });
+  await expect(message).toContainText("A conversation you aren’t in");
+  await expect(message).not.toContainText("why are you ignoring me");
+  await expect(message.locator(".queue-excerpt")).toContainText("hugo");
   for (const path of ["/mod/log", "/mod/users", "/mod/users/hugo", "/moderation"]) {
     await moderator.goto(path);
     await expectFits(moderator);

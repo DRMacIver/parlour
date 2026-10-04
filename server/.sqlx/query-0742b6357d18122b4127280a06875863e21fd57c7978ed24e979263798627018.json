@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT s.last_seen_at < now() - interval '5 minutes' AS \"stale!\",\n                  m.id AS \"id!\", m.username::text AS \"username!\", m.display_name AS \"display_name!\",\n                  m.email::text AS \"email!\", m.verified AS \"verified!\", m.role AS \"role!\",\n                  m.created_at AS \"created_at!\", m.silenced_until, m.suspended_until,\n                  m.group_ids AS \"group_ids!\", m.restricted_space_ids AS \"restricted_space_ids!\",\n                  m.blocked_user_ids AS \"blocked_user_ids!\"\n           FROM sessions s JOIN member_contexts m ON m.id = s.user_id\n           WHERE s.token_hash = $1 AND s.last_seen_at > now() - make_interval(days => $2)",
+  "query": "SELECT s.last_seen_at < now() - interval '5 minutes' AS \"stale!\",\n                  m.id AS \"id!\", m.username::text AS \"username!\", m.display_name AS \"display_name!\",\n                  m.email::text AS \"email!\", m.verified AS \"verified!\", m.role AS \"role!\",\n                  m.created_at AS \"created_at!\", m.silenced_until, m.suspended_until,\n                  m.group_ids AS \"group_ids!\", m.restricted_space_ids AS \"restricted_space_ids!\",\n                  m.blocked_user_ids AS \"blocked_user_ids!\",\n                  m.access_ids AS \"access_ids!\",\n                  m.access_thread_ids AS \"access_thread_ids!: Vec<Option<i64>>\",\n                  m.access_space_ids AS \"access_space_ids!: Vec<Option<i64>>\"\n           FROM sessions s JOIN member_contexts m ON m.id = s.user_id\n           WHERE s.token_hash = $1 AND s.last_seen_at > now() - make_interval(days => $2)",
   "describe": {
     "columns": [
       {
@@ -130,6 +130,39 @@
             "name": "blocked_user_ids"
           }
         }
+      },
+      {
+        "ordinal": 13,
+        "name": "access_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "member_contexts",
+            "name": "access_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "access_thread_ids!: Vec<Option<i64>>",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "member_contexts",
+            "name": "access_thread_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "access_space_ids!: Vec<Option<i64>>",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "member_contexts",
+            "name": "access_space_ids"
+          }
+        }
       }
     ],
     "parameters": {
@@ -151,8 +184,11 @@
       true,
       true,
       true,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "d2b61fa737b7ea177899eb6704c2bf3326e2ac4fe6ff49f4092f4963920f202e"
+  "hash": "0742b6357d18122b4127280a06875863e21fd57c7978ed24e979263798627018"
 }

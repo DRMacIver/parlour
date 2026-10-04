@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO staff_access_views (access_id, path)\n           SELECT a.id, $4 FROM staff_access a\n           WHERE a.id = ANY ($1) AND a.actor_id = $5\n             AND (a.thread_id = $2 OR a.space_id = $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int8",
+        "Int8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0d52114dd3b34ab75cc8d3164ff9fc853f76587ede686d96ddd3e46239e2f42d"
+}

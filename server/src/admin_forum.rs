@@ -84,7 +84,8 @@ pub async fn spaces_page(
             layout: Layout::load(&state, &viewer, Nav::Admin).await?,
             notice: notice_for(&query.done),
             // Feeds without threads are left out (DESIGN.md §3.2).
-            spaces: content::readable_spaces(state.db(), &viewer)
+            // Staff run every space, readable to them or not.
+            spaces: content::administered_spaces(state.db(), &viewer)
                 .await?
                 .into_iter()
                 .filter(|c| c.listed())
@@ -114,7 +115,7 @@ pub async fn space_page(
     let Some(id) = parse_id(&id) else {
         return web::not_found(&state, &viewer).await;
     };
-    let Some(space) = content::space_by_id(state.db(), &viewer, id).await? else {
+    let Some(space) = content::administered_space_by_id(state.db(), &viewer, id).await? else {
         return web::not_found(&state, &viewer).await;
     };
     Ok(see_other(&format!("/c/{}/settings", space.space.slug)))

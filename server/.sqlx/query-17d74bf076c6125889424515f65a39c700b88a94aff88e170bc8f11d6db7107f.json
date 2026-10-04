@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,\n               c.archived_at IS NOT NULL AS \"archived!\",\n               site_group_names(r.group_ids) AS \"group_names!\",\n               list_labels(r.group_ids, $4) AS \"list_names!\",\n               (SELECT count(*) FROM threads t\n                WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                  AND thread_readable(t, $2, $3, $5, $6)) AS \"thread_count!\",\n               o.id AS \"owner_id?\", o.username::text AS \"owner_username?\",\n               o.display_name AS \"owner_display_name?\"\n        FROM spaces c\n        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'\n        LEFT JOIN users o ON o.id = c.owner_user_id AND o.deleted_at IS NULL\n        WHERE c.slug = $1 AND space_readable(c.visibility, c.id, $2, $3)\n        ",
+  "query": "\n        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,\n               c.archived_at IS NOT NULL AS \"archived!\",\n               site_group_names(r.group_ids) AS \"group_names!\",\n               list_labels(r.group_ids, $4) AS \"list_names!\",\n               (SELECT count(*) FROM threads t\n                WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                  AND (thread_readable(t, $2, $3, $5, $6) OR c.id = ANY ($7))) AS \"thread_count!\",\n               (SELECT count(*) FROM threads t\n                WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                  AND NOT thread_readable(t, $2, $3, $5, $6)) AS \"unreadable_threads!\",\n               space_readable(c.visibility, c.id, $2, $3) AS \"readable!\",\n               o.id AS \"owner_id?\", o.username::text AS \"owner_username?\",\n               o.display_name AS \"owner_display_name?\"\n        FROM spaces c\n        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'\n        LEFT JOIN users o ON o.id = c.owner_user_id AND o.deleted_at IS NULL\n        WHERE c.slug = $1 AND (space_readable(c.visibility, c.id, $2, $3) OR c.id = ANY ($7))\n        ",
   "describe": {
     "columns": [
       {
@@ -84,6 +84,18 @@
       },
       {
         "ordinal": 9,
+        "name": "unreadable_threads!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "readable!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
         "name": "owner_id?",
         "type_info": "Int8",
         "origin": {
@@ -94,13 +106,13 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 12,
         "name": "owner_username?",
         "type_info": "Text",
         "origin": "Expression"
       },
       {
-        "ordinal": 11,
+        "ordinal": 13,
         "name": "owner_display_name?",
         "type_info": "Text",
         "origin": {
@@ -118,6 +130,7 @@
         "Int8Array",
         "Int8",
         "Int8",
+        "Int8Array",
         "Int8Array"
       ]
     },
@@ -131,10 +144,12 @@
       null,
       null,
       null,
+      null,
+      null,
       false,
       null,
       false
     ]
   },
-  "hash": "deb76d2380c78f2430d7a4fc1ec9d5597559b0bae2256d54b81fd21a7521944f"
+  "hash": "17d74bf076c6125889424515f65a39c700b88a94aff88e170bc8f11d6db7107f"
 }

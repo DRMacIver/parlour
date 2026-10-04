@@ -673,7 +673,10 @@ async fn admins_manage_groups_and_who_is_in_them(db: PgPool) {
         .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     assert!(a.page("/admin/groups").await.contains("Committee"));
-    assert!(a.page("/").await.contains("Committee group"));
+    // The admin isn't in it, so doesn't read the space (DESIGN.md §3.1),
+    // but runs it, and sees whom it is for in the list of spaces.
+    assert!(!a.page("/").await.contains("Committee group"));
+    assert!(a.page("/admin/spaces").await.contains("Committee group"));
 
     // A group that a space's settings name can't be deleted.
     let response = a.submit(&format!("{path}/delete"), &[]).await;

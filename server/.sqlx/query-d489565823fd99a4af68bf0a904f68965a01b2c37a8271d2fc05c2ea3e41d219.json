@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM staff_access WHERE space_id = $1) AS \"accessed!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "accessed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d489565823fd99a4af68bf0a904f68965a01b2c37a8271d2fc05c2ea3e41d219"
+}

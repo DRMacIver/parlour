@@ -12,6 +12,7 @@
   {% if let Some(Embed::Available(source)) = thread.embed %}· started from a post in <a href="{{ crate::format::thread_href(source.thread.id, source.thread.slug) }}">{{ source.thread.title }}</a>{% endif %}
 </p>
 {% call m::thread_lock(thread.read_label, thread.reply_label, thread.thread.id) %}{% endcall %}
+{% if thread.granted %}<div class="notice" role="status"><p>You can’t read this thread yourself. You can read it for now because you broke glass, and every page of it you open is recorded.</p></div>{% endif %}
 {% if pagination.is_multi_page() || self.logged_in() %}
 <div class="toolbar">
   {% if self.can_reply() %}<a class="button" href="#reply">Post reply</a>{% endif %}

@@ -331,7 +331,7 @@ async fn sessions_record_activity_without_writing_on_every_request(db: PgPool) {
 // Visibility for logged-in members
 
 #[sqlx::test]
-async fn members_see_members_only_spaces_and_staff_see_everything(db: PgPool) {
+async fn members_see_members_only_spaces_and_staff_see_no_more(db: PgPool) {
     let forum = Forum::new(db);
     let author = forum.user("author").await;
     let member = forum.member("ruth", "user", None).await;
@@ -356,9 +356,11 @@ async fn members_see_members_only_spaces_and_staff_see_everything(db: PgPool) {
     assert!(index.contains("Back room"));
     assert!(index.contains("Members only"));
     assert!(!index.contains("Committee"));
+    // Staff read what their memberships let them, like anyone else
+    // (DESIGN.md §3.1): not a space for a group they aren't in.
     let staff_cookie = forum.session(moderator).await;
     let index = forum.page_as("/", &staff_cookie).await;
-    assert!(index.contains("Back room") && index.contains("Committee"));
+    assert!(index.contains("Back room") && !index.contains("Committee"));
 
     for (thread, member_sees, anon_sees) in [
         (t_public.thread_id, true, true),
@@ -376,8 +378,8 @@ async fn members_see_members_only_spaces_and_staff_see_everything(db: PgPool) {
             member_sees
         );
         assert_eq!(
-            forum.get_as(&path, Some(&staff_cookie)).await.status,
-            StatusCode::PERMANENT_REDIRECT
+            forum.get_as(&path, Some(&staff_cookie)).await.status == StatusCode::PERMANENT_REDIRECT,
+            member_sees
         );
     }
     // A member's page never ends up in the anonymous cache.

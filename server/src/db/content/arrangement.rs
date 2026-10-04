@@ -3,7 +3,9 @@
 //! they could add, and (for a member's own layout) the spaces they have
 //! muted. Spaces the viewer can't read are left out of everything here,
 //! but stay where they are in the layout: the editor's writes place a
-//! space relative to the ones the viewer can see.
+//! space relative to the ones the viewer can see. The default layout is
+//! the exception: staff run every space, readable to them or not
+//! (DESIGN.md §3.1), so its editor shows them every space, by name.
 
 use serde::Serialize;
 
@@ -11,7 +13,7 @@ use crate::db::Db;
 use crate::layouts;
 use crate::viewer::Viewer;
 
-use super::readable_spaces;
+use super::{administered_spaces, readable_spaces};
 
 /// A space as the editor shows it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -81,7 +83,11 @@ pub async fn arrangement(
     let Some(layout) = layouts::read(db, layout_id).await? else {
         return Ok(None);
     };
-    let readable = readable_spaces(db, viewer).await?;
+    let readable = if layout.user_id.is_none() {
+        administered_spaces(db, viewer).await?
+    } else {
+        readable_spaces(db, viewer).await?
+    };
     let muted_ids = match layout.user_id {
         Some(user_id) => layouts::muted_space_ids(db, user_id).await?,
         None => Vec::new(),

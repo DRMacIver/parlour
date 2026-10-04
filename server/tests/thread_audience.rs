@@ -248,7 +248,24 @@ async fn a_lock_shows_only_where_a_thread_is_narrower_than_its_space(pool: PgPoo
         let list = f.page_as(list_page, &club.jonah_cookie).await;
         assert!(list.contains("flag-restricted"), "{list_page}: {list}");
     }
-    // Staff, who read it without being named, see whose choice it is.
+    // Staff can't read it, not being named (DESIGN.md §3.1); under a
+    // break-glass grant they read it, and see whose choice it is, not the
+    // list.
+    assert_eq!(
+        f.get_as(&path, Some(&club.staff_cookie)).await.status,
+        StatusCode::NOT_FOUND
+    );
+    parlour::staff_access::open(
+        &f.db,
+        &parlour::staff_access::NewAccess {
+            actor_id: f.user_id("sam").await,
+            scope: parlour::staff_access::Scope::Thread(thread),
+            report_id: None,
+            reason: "Checking",
+        },
+    )
+    .await
+    .unwrap();
     let page = f.page_as(&path, &club.staff_cookie).await;
     assert!(page.contains("people Ruth has chosen"), "{page}");
     assert!(!page.contains("Friends"), "{page}");
