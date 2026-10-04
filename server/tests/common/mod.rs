@@ -294,10 +294,11 @@ impl Forum {
     pub async fn section(&self, name: &str, position: i32) -> i64 {
         let default = layouts::default_id(&self.db).await.unwrap();
         let id = layouts::add_section(&self.db, default, name).await.unwrap();
-        assert!(
+        assert_ne!(
             layouts::move_section(&self.db, default, id, position)
                 .await
-                .unwrap()
+                .unwrap(),
+            layouts::Step::NotFound
         );
         id
     }

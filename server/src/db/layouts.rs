@@ -10,7 +10,9 @@
 //! their layout again, by `layout_copy_default` (migration 0024, first
 //! written in 0023), which keeps their own "Feeds" section and what is in
 //! it, and leaves out the spaces they have muted. Any change a member
-//! makes to their sections marks the layout edited; muting doesn't.
+//! makes to their sections marks the layout edited; muting doesn't, and
+//! nor does a step that leaves the layout as it was (a [`Step`] that is
+//! `Unchanged`), which writes nothing.
 //! `layout_propagate_default` checks each follower again once it has
 //! their row lock, so a first edit that lands while a change to the
 //! default is being copied out isn't copied over.
@@ -357,6 +359,18 @@ async fn section_in_layout(
     .await
 }
 
+/// What a step in arranging a layout did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    Changed,
+    /// The layout already was as asked, so nothing was written: a
+    /// member's layout isn't marked as edited, and the default isn't
+    /// copied out again (docs/v02-decisions.md, 30).
+    Unchanged,
+    /// The layout has no such section, or there is no such space.
+    NotFound,
+}
+
 // ---------------------------------------------------------------------------
 // Sections
 
@@ -379,18 +393,18 @@ pub async fn add_section<'c>(db: impl Handle<'c>, layout_id: i64, name: &str) ->
     Ok(id)
 }
 
-/// Renames a section of the layout. False if the layout has no such
-/// section.
+/// Renames a section of the layout; giving it the name it has changes
+/// nothing.
 pub async fn rename_section<'c>(
     db: impl Handle<'c>,
     layout_id: i64,
     section_id: i64,
     name: &str,
-) -> sqlx::Result<bool> {
+) -> sqlx::Result<Step> {
     let mut tx = db.open(KEY).begin().await?;
     lock_layout(&mut tx, layout_id).await?;
     let done = sqlx::query!(
-        "UPDATE layout_sections SET name = $3 WHERE id = $1 AND layout_id = $2",
+        "UPDATE layout_sections SET name = $3 WHERE id = $1 AND layout_id = $2 AND name <> $3",
         section_id,
         layout_id,
         name
@@ -398,26 +412,41 @@ pub async fn rename_section<'c>(
     .execute(&mut *tx)
     .await?;
     if done.rows_affected() == 0 {
-        return Ok(false);
+        return unchanged_or_missing(&mut tx, layout_id, section_id).await;
     }
     after_write(&mut tx, layout_id).await?;
     tx.commit().await?;
-    Ok(true)
+    Ok(Step::Changed)
+}
+
+/// What a write to a section that changed no row did: nothing, if the
+/// layout has the section.
+async fn unchanged_or_missing(
+    conn: &mut PgConnection,
+    layout_id: i64,
+    section_id: i64,
+) -> sqlx::Result<Step> {
+    Ok(if section_in_layout(conn, layout_id, section_id).await? {
+        Step::Unchanged
+    } else {
+        Step::NotFound
+    })
 }
 
 /// Gives a section of the layout a position among its sections (lower
-/// first; equal positions keep their order of creation). False if the
-/// layout has no such section.
+/// first; equal positions keep their order of creation). Giving it the
+/// position it has changes nothing.
 pub async fn move_section<'c>(
     db: impl Handle<'c>,
     layout_id: i64,
     section_id: i64,
     position: i32,
-) -> sqlx::Result<bool> {
+) -> sqlx::Result<Step> {
     let mut tx = db.open(KEY).begin().await?;
     lock_layout(&mut tx, layout_id).await?;
     let done = sqlx::query!(
-        "UPDATE layout_sections SET position = $3 WHERE id = $1 AND layout_id = $2",
+        "UPDATE layout_sections SET position = $3
+         WHERE id = $1 AND layout_id = $2 AND position <> $3",
         section_id,
         layout_id,
         position
@@ -425,11 +454,11 @@ pub async fn move_section<'c>(
     .execute(&mut *tx)
     .await?;
     if done.rows_affected() == 0 {
-        return Ok(false);
+        return unchanged_or_missing(&mut tx, layout_id, section_id).await;
     }
     after_write(&mut tx, layout_id).await?;
     tx.commit().await?;
-    Ok(true)
+    Ok(Step::Changed)
 }
 
 /// Deletes a section of the layout, and so unfollows the spaces in it.
@@ -458,12 +487,13 @@ pub async fn delete_section<'c>(
 
 /// Puts the sections named first, in this order, before any others of
 /// the layout (which keep their order after them), renumbering them all
-/// from 0. False if any of them isn't a section of the layout.
+/// from 0. Not found if any of them isn't a section of the layout; the
+/// order they already have changes nothing.
 pub async fn reorder_sections<'c>(
     db: impl Handle<'c>,
     layout_id: i64,
     first: &[i64],
-) -> sqlx::Result<bool> {
+) -> sqlx::Result<Step> {
     let mut tx = db.open(KEY).begin().await?;
     lock_layout(&mut tx, layout_id).await?;
     let current = sqlx::query_scalar!(
@@ -473,13 +503,16 @@ pub async fn reorder_sections<'c>(
     .fetch_all(&mut *tx)
     .await?;
     if first.iter().any(|id| !current.contains(id)) {
-        return Ok(false);
+        return Ok(Step::NotFound);
     }
     let mut order: Vec<i64> = Vec::with_capacity(current.len());
     for id in first.iter().chain(current.iter()) {
         if !order.contains(id) {
             order.push(*id);
         }
+    }
+    if order == current {
+        return Ok(Step::Unchanged);
     }
     sqlx::query!(
         "UPDATE layout_sections s SET position = o.ord - 1
@@ -492,7 +525,7 @@ pub async fn reorder_sections<'c>(
     .await?;
     after_write(&mut tx, layout_id).await?;
     tx.commit().await?;
-    Ok(true)
+    Ok(Step::Changed)
 }
 
 /// How many members follow the default: have a layout they haven't
@@ -627,29 +660,37 @@ pub async fn unfollow<'c>(
 /// Puts a space at `index` (from 0; past the end means last) in a section
 /// of the layout, moving it from wherever in the layout it was, and
 /// renumbers that section's spaces; for a member's layout, this also
-/// unmutes it, as following does. False if the layout has no such
-/// section, or there is no such space.
+/// unmutes it, as following does. Putting it where it already is
+/// changes nothing.
 pub async fn move_space<'c>(
     db: impl Handle<'c>,
     layout_id: i64,
     space_id: i64,
     section_id: i64,
     index: i32,
-) -> sqlx::Result<bool> {
+) -> sqlx::Result<Step> {
     let mut tx = db.open(KEY).begin().await?;
     lock_layout(&mut tx, layout_id).await?;
     if !section_in_layout(&mut tx, layout_id, section_id).await? {
-        return Ok(false);
+        return Ok(Step::NotFound);
     }
-    remove_placement(&mut tx, layout_id, space_id).await?;
-    let mut order = sqlx::query_scalar!(
+    let before = sqlx::query_scalar!(
         "SELECT space_id FROM layout_section_spaces WHERE section_id = $1 ORDER BY position, space_id",
         section_id
     )
     .fetch_all(&mut *tx)
     .await?;
+    let mut order: Vec<i64> = before
+        .iter()
+        .copied()
+        .filter(|&id| id != space_id)
+        .collect();
     let index = usize::try_from(index).unwrap_or(0).min(order.len());
     order.insert(index, space_id);
+    if order == before {
+        return Ok(Step::Unchanged);
+    }
+    remove_placement(&mut tx, layout_id, space_id).await?;
     let inserted = sqlx::query!(
         "INSERT INTO layout_section_spaces (section_id, space_id, position) VALUES ($1, $2, $3)",
         section_id,
@@ -660,7 +701,7 @@ pub async fn move_space<'c>(
     .await;
     match inserted {
         Ok(_) => {}
-        Err(err) if no_such_space(&err) => return Ok(false),
+        Err(err) if no_such_space(&err) => return Ok(Step::NotFound),
         Err(err) => return Err(err),
     }
     sqlx::query!(
@@ -675,7 +716,7 @@ pub async fn move_space<'c>(
     unmute_for_owner(&mut tx, layout_id, space_id).await?;
     after_write(&mut tx, layout_id).await?;
     tx.commit().await?;
-    Ok(true)
+    Ok(Step::Changed)
 }
 
 // ---------------------------------------------------------------------------

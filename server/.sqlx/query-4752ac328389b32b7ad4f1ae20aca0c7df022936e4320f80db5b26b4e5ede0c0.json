@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE layout_sections SET position = $3\n         WHERE id = $1 AND layout_id = $2 AND position <> $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4752ac328389b32b7ad4f1ae20aca0c7df022936e4320f80db5b26b4e5ede0c0"
+}

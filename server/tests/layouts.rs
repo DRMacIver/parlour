@@ -212,10 +212,11 @@ async fn changing_the_default_reaches_members_who_havent_edited_theirs(pool: PgP
             .unwrap()
     );
     assert!(layouts::follow(&f.db, default, forum, games).await.unwrap());
-    assert!(
+    assert_eq!(
         layouts::rename_section(&f.db, default, forum, "The forum")
             .await
-            .unwrap()
+            .unwrap(),
+        layouts::Step::Changed
     );
 
     // Ruth's copy follows; Jonah's is left alone, Feeds and all. (`games`
@@ -307,12 +308,16 @@ async fn sections_and_spaces_are_arranged_in_order(pool: PgPool) {
 
     // Following a space again puts it where asked and nowhere else.
     assert!(layouts::follow(&f.db, layout, b, books).await.unwrap());
-    assert!(
+    assert_eq!(
         layouts::move_space(&f.db, layout, films, a, 0)
             .await
-            .unwrap()
+            .unwrap(),
+        layouts::Step::Changed
     );
-    assert!(layouts::move_section(&f.db, layout, b, -1).await.unwrap());
+    assert_eq!(
+        layouts::move_section(&f.db, layout, b, -1).await.unwrap(),
+        layouts::Step::Changed
+    );
     assert_eq!(
         shape(&f, layout).await,
         vec![
@@ -341,16 +346,18 @@ async fn sections_and_spaces_are_arranged_in_order(pool: PgPool) {
         .await
         .unwrap();
     assert!(!layouts::follow(&f.db, layout, his, games).await.unwrap());
-    assert!(
-        !layouts::rename_section(&f.db, layout, his, "Mine")
+    assert_eq!(
+        layouts::rename_section(&f.db, layout, his, "Mine")
             .await
-            .unwrap()
+            .unwrap(),
+        layouts::Step::NotFound
     );
     assert!(!layouts::delete_section(&f.db, layout, his).await.unwrap());
-    assert!(
-        !layouts::move_space(&f.db, layout, films, his, 0)
+    assert_eq!(
+        layouts::move_space(&f.db, layout, films, his, 0)
             .await
-            .unwrap()
+            .unwrap(),
+        layouts::Step::NotFound
     );
     assert_eq!(
         shape(&f, jonah_layout).await,
@@ -695,10 +702,11 @@ async fn a_default_change_doesnt_put_a_muted_space_back_in_the_sections(pool: Pg
         MuteOutcome::Muted
     );
     let default = layouts::default_id(&f.db).await.unwrap();
-    assert!(
+    assert_eq!(
         layouts::rename_section(&f.db, default, forum, "The forum")
             .await
-            .unwrap()
+            .unwrap(),
+        layouts::Step::Changed
     );
     // Ruth still follows the default (the rename reached her), but the
     // space she muted isn't in her copy of it.
@@ -858,4 +866,86 @@ async fn changes_to_the_default_are_serialised(pool: PgPool) {
         assert_eq!(copy.pop(), Some(section("Feeds", &[])), "{name}");
         assert_eq!(copy, expected, "{name}");
     }
+}
+
+#[sqlx::test]
+async fn steps_that_leave_a_layout_as_it_was_write_nothing(pool: PgPool) {
+    let f = Forum::new(pool);
+    let forum = f.section("Forum", 1).await;
+    let general = f.space("general", "public", Some(forum), 0).await;
+    let games = f.space("games", "public", Some(forum), 1).await;
+    let ruth = f.user("ruth").await;
+    let layout = member_layout(&f, ruth).await;
+    let read = |f: &Forum| {
+        let db = f.db.clone();
+        async move { layouts::read(&db, layout).await.unwrap().unwrap() }
+    };
+    let before = read(&f).await;
+    let mine = before.sections[0].id;
+    let feeds = before.sections[1].id;
+    let unchanged = layouts::Step::Unchanged;
+
+    assert_eq!(
+        layouts::rename_section(&f.db, layout, mine, "Forum")
+            .await
+            .unwrap(),
+        unchanged
+    );
+    assert_eq!(
+        layouts::move_section(&f.db, layout, mine, before.sections[0].position)
+            .await
+            .unwrap(),
+        unchanged
+    );
+    assert_eq!(
+        layouts::reorder_sections(&f.db, layout, &[mine, feeds])
+            .await
+            .unwrap(),
+        unchanged
+    );
+    assert_eq!(
+        layouts::move_space(&f.db, layout, general, mine, 0)
+            .await
+            .unwrap(),
+        unchanged
+    );
+    assert_eq!(
+        layouts::move_space(&f.db, layout, games, mine, 9)
+            .await
+            .unwrap(),
+        unchanged
+    );
+    assert_eq!(read(&f).await, before);
+    assert_eq!(before.edited_at, None);
+
+    // The same steps on the default change nothing either, and a section
+    // that isn't the layout's is still not found.
+    let default = layouts::default_id(&f.db).await.unwrap();
+    assert_eq!(
+        layouts::rename_section(&f.db, default, forum, "Forum")
+            .await
+            .unwrap(),
+        unchanged
+    );
+    assert_eq!(
+        layouts::rename_section(&f.db, layout, forum, "Forum")
+            .await
+            .unwrap(),
+        layouts::Step::NotFound
+    );
+    assert_eq!(
+        layouts::move_section(&f.db, layout, forum, 0)
+            .await
+            .unwrap(),
+        layouts::Step::NotFound
+    );
+
+    // Moving a space from another section is a change, wherever it goes.
+    assert_eq!(
+        layouts::move_space(&f.db, layout, games, feeds, 0)
+            .await
+            .unwrap(),
+        layouts::Step::Changed
+    );
+    assert!(read(&f).await.edited_at.is_some());
 }

@@ -772,7 +772,7 @@ async fn visitors_tab_pages_come_from_the_cache_and_clear_with_what_they_show(po
     .await;
     assert!(!f.page(&path).await.contains("Le Guin"));
     // Changing the default layout reaches the tab.
-    assert!(
+    assert_eq!(
         layouts::rename_section(
             &f.db,
             layouts::default_id(&f.db).await.unwrap(),
@@ -780,7 +780,8 @@ async fn visitors_tab_pages_come_from_the_cache_and_clear_with_what_they_show(po
             "The forum"
         )
         .await
-        .unwrap()
+        .unwrap(),
+        layouts::Step::Changed
     );
     f.changed(Change::SiteChanged).await;
     assert!(f.page(&path).await.contains(">The forum<"));

@@ -22,7 +22,9 @@
 //! made.
 //!
 //! Any change to a member's layout makes it theirs (`edited_at`), so the
-//! default stops reaching it. Changes to the default clear every cached
+//! default stops reaching it; a step that would leave the layout as it
+//! was (renaming a section to its name, dropping a space where it is)
+//! changes nothing, and so doesn't. Changes to the default clear every cached
 //! page that shows it; a member's own layout is only ever shown to them,
 //! on pages that are never cached.
 
@@ -192,6 +194,19 @@ impl Editor {
         Ok(())
     }
 
+    /// Ends a step: one that changed the layout ends as every change
+    /// does; one that left it as it was wrote nothing, and clears nothing.
+    async fn stepped(&self, state: &AppState, step: layouts::Step) -> Result<Edit, AppError> {
+        match step {
+            layouts::Step::Changed => {
+                self.changed(state).await?;
+                Ok(Ok(()))
+            }
+            layouts::Step::Unchanged => Ok(Ok(())),
+            layouts::Step::NotFound => Ok(Err(Failure::NotFound)),
+        }
+    }
+
     async fn add_section(&self, state: &AppState, name: &str) -> Result<Edit, AppError> {
         let name = match layouts::clean_section_name(name) {
             Ok(name) => name,
@@ -212,11 +227,8 @@ impl Editor {
             Ok(name) => name,
             Err(why) => return Ok(Err(Failure::Invalid(why))),
         };
-        if !layouts::rename_section(state.db(), self.layout_id, section_id, &name).await? {
-            return Ok(Err(Failure::NotFound));
-        }
-        self.changed(state).await?;
-        Ok(Ok(()))
+        let step = layouts::rename_section(state.db(), self.layout_id, section_id, &name).await?;
+        self.stepped(state, step).await
     }
 
     async fn delete_section(&self, state: &AppState, section_id: i64) -> Result<Edit, AppError> {
@@ -230,11 +242,8 @@ impl Editor {
     /// Puts the sections in this order (any left out keep their order
     /// after them).
     async fn order_sections(&self, state: &AppState, order: &[i64]) -> Result<Edit, AppError> {
-        if !layouts::reorder_sections(state.db(), self.layout_id, order).await? {
-            return Ok(Err(Failure::NotFound));
-        }
-        self.changed(state).await?;
-        Ok(Ok(()))
+        let step = layouts::reorder_sections(state.db(), self.layout_id, order).await?;
+        self.stepped(state, step).await
     }
 
     /// Swaps a section with the one before it (`up`) or after it. At the
@@ -301,11 +310,9 @@ impl Editor {
             _ => others.len(),
         };
         let target = i32::try_from(target).unwrap_or(i32::MAX);
-        if !layouts::move_space(state.db(), self.layout_id, space_id, section_id, target).await? {
-            return Ok(Err(Failure::NotFound));
-        }
-        self.changed(state).await?;
-        Ok(Ok(()))
+        let step =
+            layouts::move_space(state.db(), self.layout_id, space_id, section_id, target).await?;
+        self.stepped(state, step).await
     }
 
     /// Moves a space before the previous space the viewer can see in its
@@ -347,11 +354,9 @@ impl Editor {
             return Ok(Ok(()));
         }
         let target = i32::try_from(target).unwrap_or(i32::MAX);
-        if !layouts::move_space(state.db(), self.layout_id, space_id, section.id, target).await? {
-            return Ok(Err(Failure::NotFound));
-        }
-        self.changed(state).await?;
-        Ok(Ok(()))
+        let step =
+            layouts::move_space(state.db(), self.layout_id, space_id, section.id, target).await?;
+        self.stepped(state, step).await
     }
 
     /// Takes a space the viewer can read off the front page.

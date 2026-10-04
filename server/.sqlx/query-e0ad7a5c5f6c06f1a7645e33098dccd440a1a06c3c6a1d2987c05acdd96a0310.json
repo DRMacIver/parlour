@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE layout_sections SET name = $3 WHERE id = $1 AND layout_id = $2",
+  "query": "UPDATE layout_sections SET name = $3 WHERE id = $1 AND layout_id = $2 AND name <> $3",
   "describe": {
     "columns": [],
     "parameters": {
@@ -12,5 +12,5 @@
     },
     "nullable": []
   },
-  "hash": "5bcdbf287ed0805a4b9e041b543b4140357d9a192367598a0a84ae7625014857"
+  "hash": "e0ad7a5c5f6c06f1a7645e33098dccd440a1a06c3c6a1d2987c05acdd96a0310"
 }

@@ -3382,14 +3382,16 @@ impl Access {
         let section = self
             .block(layouts::add_section(&self.db, layout, "Arranged"))
             .unwrap();
-        assert!(
+        assert_eq!(
             self.block(layouts::move_space(&self.db, layout, space_id, section, 0))
-                .unwrap()
+                .unwrap(),
+            layouts::Step::Changed
         );
         let sections: Vec<i64> = vec![section];
-        assert!(
+        assert_ne!(
             self.block(layouts::reorder_sections(&self.db, layout, &sections))
-                .unwrap()
+                .unwrap(),
+            layouts::Step::NotFound
         );
         self.users[u].sections.insert(c);
         self.users[u].muted.remove(&c);

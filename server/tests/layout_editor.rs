@@ -453,10 +453,11 @@ async fn members_arrange_their_own_front_page_with_plain_forms(pool: PgPool) {
     // The layout is the member's own now: a change to the default doesn't
     // reach it.
     let default = layouts::default_id(&f.db).await.unwrap();
-    assert!(
+    assert_eq!(
         layouts::rename_section(&f.db, default, forum, "The forum")
             .await
-            .unwrap()
+            .unwrap(),
+        layouts::Step::Changed
     );
     assert_eq!(shape(&f, layout).await[0].0, "Home");
 }
@@ -1364,4 +1365,175 @@ async fn moves_place_a_space_among_the_ones_the_member_can_see(pool: PgPool) {
         forum_spaces(&f).await,
         ["secret", "games", "films", "general"]
     );
+}
+
+/// Asserts that an island endpoint answered with the layout.
+async fn api_ok(f: &Forum, path: &str, body: Value, cookie: &str) {
+    let (status, body) = post_json(f, path, body, Some(cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{path}: {body}");
+}
+
+#[sqlx::test]
+async fn a_step_that_changes_nothing_leaves_the_layout_following_the_default(pool: PgPool) {
+    let f = Forum::new(pool);
+    let forum = f.section("Forum", 1).await;
+    let general = f.space("general", "public", Some(forum), 0).await;
+    let games = f.space("games", "public", Some(forum), 1).await;
+    let ruth = f.user("ruth").await;
+    let cookie = f.session(ruth).await;
+    let layout = member_layout(&f, ruth).await;
+    let my_forum = section_named(&f, layout, "Forum").await;
+    let feeds = section_named(&f, layout, "Feeds").await;
+    let before = shape(&f, layout).await;
+    assert_eq!(
+        before,
+        vec![
+            section("Forum", &["general", "games"]),
+            section("Feeds", &[])
+        ]
+    );
+
+    // Renaming a section to the name it has (pressing Enter in its field),
+    // through the form and through the island.
+    for name in ["Forum", "  Forum "] {
+        let response = f
+            .submit(
+                &format!("{MINE}/sections/{my_forum}"),
+                &[("name", name)],
+                Some(&cookie),
+            )
+            .await;
+        assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    }
+    api_ok(
+        &f,
+        &format!("/api/layout/sections/{my_forum}"),
+        json!({"name": "Forum"}),
+        &cookie,
+    )
+    .await;
+    assert!(!edited(&f, layout).await);
+
+    // Dropping a space where it already is: before the space just after
+    // it, or at the end of its section when it is last there; adding a
+    // space to the section it is last in.
+    api_ok(
+        &f,
+        &format!("/api/layout/spaces/{general}/move"),
+        json!({"section": my_forum, "index": 0}),
+        &cookie,
+    )
+    .await;
+    api_ok(
+        &f,
+        &format!("/api/layout/spaces/{games}/move"),
+        json!({"section": my_forum}),
+        &cookie,
+    )
+    .await;
+    api_ok(
+        &f,
+        &format!("/api/layout/spaces/{games}/move"),
+        json!({"section": my_forum, "index": 1}),
+        &cookie,
+    )
+    .await;
+    let response = f
+        .submit(
+            &format!("{MINE}/sections/{my_forum}/spaces"),
+            &[("space", &games.to_string())],
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert!(!edited(&f, layout).await);
+
+    // Putting the sections in the order they have.
+    api_ok(
+        &f,
+        "/api/layout/sections/order",
+        json!({"sections": [my_forum, feeds]}),
+        &cookie,
+    )
+    .await;
+    api_ok(
+        &f,
+        "/api/layout/sections/order",
+        json!({"sections": [my_forum]}),
+        &cookie,
+    )
+    .await;
+    assert!(!edited(&f, layout).await);
+    assert_eq!(shape(&f, layout).await, before);
+
+    // A real change still counts.
+    api_ok(
+        &f,
+        &format!("/api/layout/spaces/{games}/move"),
+        json!({"section": my_forum, "index": 0}),
+        &cookie,
+    )
+    .await;
+    assert!(edited(&f, layout).await);
+}
+
+#[sqlx::test]
+async fn a_step_that_changes_nothing_in_the_default_keeps_the_cached_front_page(pool: PgPool) {
+    let a = admin(pool).await;
+    let f = &a.f;
+    let forum = f.section("Forum", 1).await;
+    let general = f.space("general", "public", Some(forum), 0).await;
+    let games = f.space("games", "public", Some(forum), 1).await;
+    let reading = f.section("Reading", 2).await;
+    f.space("books", "public", Some(reading), 0).await;
+    let ruth = f.user("ruth").await;
+    let ruth_layout = member_layout(f, ruth).await;
+    let cached = |f: &Forum| f.state.cache().get("/").is_some();
+    f.page("/").await;
+    assert!(cached(f));
+
+    let response = a
+        .submit(&format!("{DEFAULT}/sections/{forum}"), &[("name", "Forum")])
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    api_ok(
+        f,
+        &format!("/api/admin/layout/sections/{reading}"),
+        json!({"name": "Reading"}),
+        &a.cookie,
+    )
+    .await;
+    api_ok(
+        f,
+        &format!("/api/admin/layout/spaces/{general}/move"),
+        json!({"section": forum, "index": 0}),
+        &a.cookie,
+    )
+    .await;
+    api_ok(
+        f,
+        &format!("/api/admin/layout/spaces/{games}/move"),
+        json!({"section": forum}),
+        &a.cookie,
+    )
+    .await;
+    api_ok(
+        f,
+        "/api/admin/layout/sections/order",
+        json!({"sections": [forum, reading]}),
+        &a.cookie,
+    )
+    .await;
+    assert!(cached(f), "a step that changed nothing cleared the cache");
+    assert!(!edited(f, ruth_layout).await);
+
+    // A real change clears it.
+    api_ok(
+        f,
+        "/api/admin/layout/sections/order",
+        json!({"sections": [reading, forum]}),
+        &a.cookie,
+    )
+    .await;
+    assert!(!cached(f));
 }
