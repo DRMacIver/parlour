@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO thread_subscriptions (user_id, thread_id)\n         SELECT user_id, thread_id FROM private_thread_participants WHERE thread_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "123865dbd8081dfc74fd1d497b53476b5bf01736450ddfe318b339b44d80b3cd"
+}

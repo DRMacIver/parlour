@@ -37,10 +37,17 @@
 //!   only text its recipient may read now; the notification badge, both
 //!   counted directly and as the live badge stream sends it, counts exactly
 //!   the unread notifications about posts the viewer may read.
+//! - Who is notified of each new post is exactly what DESIGN.md §9 says,
+//!   judged by a model of thread subscriptions: those mentioned in it, then
+//!   those subscribed to its thread (authors to the threads they start,
+//!   everyone in a conversation to it, anyone to what they subscribe to
+//!   with the toggle on its page, which the viewers use), who may read it
+//!   and didn't write it. Replying subscribes nobody. The toggle on each
+//!   thread and conversation page shows the viewer's subscription.
 
 mod common;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use axum::http::StatusCode;
 use common::{Forum, Response};
@@ -158,6 +165,8 @@ struct PostModel {
     seq: i64,
     author: i64,
     body_token: String,
+    /// Whether it mentions both logged-in viewers.
+    mentions: bool,
     deleted: bool,
     hidden: bool,
     /// Tokens of earlier versions kept in the post's history.
@@ -242,6 +251,9 @@ struct World {
     /// The default layout and its one section, where new spaces go.
     default_layout: i64,
     default_section: i64,
+    /// Who is subscribed to which thread or conversation, as (user id,
+    /// thread id).
+    subscriptions: BTreeSet<(i64, i64)>,
 }
 
 impl World {
@@ -290,6 +302,7 @@ impl World {
             held: Vec::new(),
             default_layout: 0,
             default_section: 0,
+            subscriptions: BTreeSet::new(),
         };
         world.default_layout = world.block(layouts::default_id(world.db())).unwrap();
         world.default_section = world
@@ -413,7 +426,7 @@ impl World {
         });
     }
 
-    fn add_post(&mut self, thread: usize, author: i64, reply_to: Option<usize>) {
+    fn add_post(&mut self, thread: usize, author: i64, reply_to: Option<usize>, mentions: bool) {
         let token = self.token();
         let id = self
             .block(store::create_post(
@@ -421,7 +434,11 @@ impl World {
                 &NewPost {
                     thread_id: self.threads[thread].id,
                     author_id: author,
-                    body_md: format!("Post {token}"),
+                    body_md: if mentions {
+                        format!("Post {token} for @viewer and @watcher")
+                    } else {
+                        format!("Post {token}")
+                    },
                     reply_to_post_id: reply_to.map(|p| self.posts[p].id),
                     created_at: None,
                 },
@@ -434,6 +451,7 @@ impl World {
             seq: self.threads[thread].last_seq,
             author,
             body_token: token,
+            mentions,
             deleted: false,
             hidden: false,
             history: Vec::new(),
@@ -443,10 +461,75 @@ impl World {
         self.notify(id);
     }
 
-    /// Runs the notification fan-out for a new post, as its job would.
+    /// Runs the notification fan-out for a new post, as its job would, and
+    /// checks that exactly the right people were told, in the right way.
     fn notify(&self, post_id: i64) {
         self.block(parlour::notify::post_created(&self.cached.state, post_id))
             .unwrap();
+        let made: Vec<(i64, String)> = self
+            .block(
+                sqlx::query_as(
+                    "SELECT user_id, kind FROM notifications WHERE post_id = $1 ORDER BY user_id",
+                )
+                .bind(post_id)
+                .fetch_all(self.db()),
+            )
+            .unwrap();
+        let expected: Vec<(i64, String)> = self
+            .expected_notified(post_id)
+            .into_iter()
+            .map(|(user, kind)| (user, kind.to_owned()))
+            .collect();
+        assert_eq!(made, expected, "notifications about post {post_id}");
+    }
+
+    /// DESIGN.md §9: who should be told about a new post, and how. Someone
+    /// mentioned hears of it as a mention; otherwise someone subscribed to
+    /// its thread hears of it as a new post there, or in a conversation as
+    /// a message. Nobody hears of their own posts or of what they can't
+    /// read. (The model has no blocks.)
+    fn expected_notified(&self, post_id: i64) -> BTreeMap<i64, &'static str> {
+        let mut told = BTreeMap::new();
+        if let Some(p) = self.posts.iter().find(|p| p.id == post_id) {
+            let t = &self.threads[p.thread];
+            if t.deleted || p.deleted || p.hidden {
+                return told;
+            }
+            for user in self.dm_people() {
+                if user == p.author || !self.space_readable_by(t.space, user) {
+                    continue;
+                }
+                if p.mentions && (user == self.member_id || user == self.staff_id) {
+                    told.insert(user, "mention");
+                } else if self.subscriptions.contains(&(user, t.id)) {
+                    told.insert(user, "subscription");
+                }
+            }
+        } else {
+            let m = self
+                .messages
+                .iter()
+                .find(|m| m.id == post_id)
+                .expect("a post the test made");
+            let c = &self.conversations[m.conversation];
+            let author: i64 = self
+                .block(
+                    sqlx::query_scalar("SELECT author_id FROM posts WHERE id = $1")
+                        .bind(post_id)
+                        .fetch_one(self.db()),
+                )
+                .unwrap();
+            for &user in &c.participants {
+                if user != author
+                    && !m.deleted
+                    && self.conversation_readable_by(m.conversation, user)
+                    && self.subscriptions.contains(&(user, c.id))
+                {
+                    told.insert(user, "message");
+                }
+            }
+        }
+        told
     }
 
     /// Everyone who can be in a conversation: the members and both viewers.
@@ -749,6 +832,28 @@ impl World {
         tokens
     }
 
+    /// The subscription toggle on a thread or conversation page: for a
+    /// logged-in viewer who `may` use it, it offers the opposite of what
+    /// they have; otherwise it isn't there.
+    fn check_toggle(&self, who: Who, thread_id: i64, may: bool, body: &str) {
+        let subscribe = format!("action=\"/t/{thread_id}/subscribe\"");
+        let unsubscribe = format!("action=\"/t/{thread_id}/unsubscribe\"");
+        let subscribed = self
+            .viewer_id(who)
+            .is_some_and(|id| self.subscriptions.contains(&(id, thread_id)));
+        let shown = who != Who::Anonymous && may;
+        assert_eq!(
+            body.contains(&subscribe),
+            shown && !subscribed,
+            "{who:?}'s subscribe toggle for {thread_id}"
+        );
+        assert_eq!(
+            body.contains(&unsubscribe),
+            shown && subscribed,
+            "{who:?}'s unsubscribe toggle for {thread_id}"
+        );
+    }
+
     fn cookie(&self, who: Who) -> Option<&str> {
         match who {
             Who::Anonymous => None,
@@ -1038,6 +1143,7 @@ impl World {
             if self.thread_readable(i, who) {
                 assert_eq!(response.status, StatusCode::OK);
                 assert!(response.body.contains(&t.title_token));
+                self.check_toggle(who, t.id, true, &response.body);
             } else if let Some(into) = t.merged_into.filter(|&into| {
                 t.deleted && self.space_readable(t.space, who) && self.thread_readable(into, who)
             }) {
@@ -1115,6 +1221,12 @@ impl World {
             assert_eq!(response.status, expected, "{who:?} conversation {i}");
             if expected == StatusCode::OK {
                 assert!(response.body.contains(&c.title_token));
+                // Staff reading a reported conversation they aren't in
+                // have nothing to subscribe to.
+                let participant = self
+                    .viewer_id(who)
+                    .is_some_and(|id| c.participants.contains(&id));
+                self.check_toggle(who, c.id, participant, &response.body);
             }
         }
         if who != Who::Anonymous {
@@ -1201,12 +1313,15 @@ impl World {
             old_titles: Vec::new(),
             merged_into: None,
         });
+        // Starting a thread subscribes its author to it.
+        self.subscriptions.insert((author, created.thread_id));
         self.posts.push(PostModel {
             id: created.first_post_id,
             thread: self.threads.len() - 1,
             seq: 1,
             author,
             body_token,
+            mentions: false,
             deleted: false,
             hidden: false,
             history: Vec::new(),
@@ -1232,7 +1347,10 @@ impl World {
         } else {
             None
         };
-        self.add_post(thread, author, reply_to);
+        let mentions = tc.draw(gs::booleans());
+        // Replying subscribes nobody: the model's subscriptions stay as
+        // they are.
+        self.add_post(thread, author, reply_to, mentions);
     }
 
     /// Enough posts to spill onto further pages.
@@ -1242,7 +1360,7 @@ impl World {
         let thread = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
         let count = tc.draw(gs::integers::<usize>().min_value(1).max_value(60));
         for i in 0..count {
-            self.add_post(thread, self.users[i % self.users.len()], None);
+            self.add_post(thread, self.users[i % self.users.len()], None, false);
         }
     }
 
@@ -1578,6 +1696,10 @@ impl World {
             .unwrap();
         let mut participants = others;
         participants.insert(author);
+        // Everyone in a conversation is subscribed to it.
+        for &user in &participants {
+            self.subscriptions.insert((user, created.thread_id));
+        }
         self.conversations.push(ConversationModel {
             id: created.thread_id,
             title_token,
@@ -1616,11 +1738,14 @@ impl World {
         let c = tc.draw(gs::integers::<usize>().max_value(self.conversations.len() - 1));
         let user = tc.draw(gs::sampled_from(self.dm_people()));
         let id = self.conversations[c].id;
+        // Leaving a conversation unsubscribes you from it; being added
+        // (back) subscribes you.
         if self.conversations[c].participants.remove(&user) {
             assert!(
                 self.block(store::leave_conversation(self.db(), id, user))
                     .unwrap()
             );
+            self.subscriptions.remove(&(user, id));
         } else {
             let adder = *self.dm_people().first().unwrap();
             assert!(
@@ -1628,6 +1753,72 @@ impl World {
                     .unwrap()
             );
             self.conversations[c].participants.insert(user);
+            self.subscriptions.insert((user, id));
+        }
+    }
+
+    /// Someone subscribes to a thread or conversation, or unsubscribes.
+    /// The logged-in viewers use the toggle on its page, which is there for
+    /// threads they can read and conversations they are in; everyone else
+    /// is subscribed directly, wherever it is (being subscribed to
+    /// something you can't read tells you nothing about it).
+    #[rule]
+    fn toggle_subscription(&mut self, tc: TestCase) {
+        let in_conversation =
+            !self.conversations.is_empty() && (self.threads.is_empty() || tc.draw(gs::booleans()));
+        tc.assume(in_conversation || !self.threads.is_empty());
+        let user = tc.draw(gs::sampled_from(self.dm_people()));
+        let (thread_id, page_has_toggle) = if in_conversation {
+            let c = tc.draw(gs::integers::<usize>().max_value(self.conversations.len() - 1));
+            let conversation = &self.conversations[c];
+            (
+                conversation.id,
+                conversation.participants.contains(&user) && self.conversation_readable_by(c, user),
+            )
+        } else {
+            let t = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
+            let thread = &self.threads[t];
+            (
+                thread.id,
+                !thread.deleted && self.space_readable_by(thread.space, user),
+            )
+        };
+        let on = !self.subscriptions.contains(&(user, thread_id));
+        let who = if user == self.member_id {
+            Some(Who::Member)
+        } else if user == self.staff_id {
+            Some(Who::Staff)
+        } else {
+            None
+        };
+        match who {
+            Some(who) => {
+                let action = if on { "subscribe" } else { "unsubscribe" };
+                let response = self.block(self.cached.submit(
+                    &format!("/t/{thread_id}/{action}"),
+                    &[],
+                    self.cookie(who),
+                ));
+                if !page_has_toggle {
+                    assert_eq!(response.status, StatusCode::NOT_FOUND, "{who:?} {action}");
+                    return;
+                }
+                assert_eq!(response.status, StatusCode::SEE_OTHER, "{who:?} {action}");
+            }
+            None => {
+                self.block(parlour::social::set_subscribed(
+                    self.db(),
+                    user,
+                    thread_id,
+                    on,
+                ))
+                .unwrap();
+            }
+        }
+        if on {
+            self.subscriptions.insert((user, thread_id));
+        } else {
+            self.subscriptions.remove(&(user, thread_id));
         }
     }
 
@@ -1907,12 +2098,15 @@ impl World {
                     old_titles: Vec::new(),
                     merged_into: None,
                 });
+                // An approved thread is its author's, who is subscribed.
+                self.subscriptions.insert((author, thread_id));
                 self.posts.push(PostModel {
                     id: post_id,
                     thread: self.threads.len() - 1,
                     seq: 1,
                     author,
                     body_token,
+                    mentions: false,
                     deleted: false,
                     hidden: false,
                     history: Vec::new(),

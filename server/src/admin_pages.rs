@@ -540,6 +540,11 @@ pub async fn change_role(
         )
         .await?;
         state.changed(Change::ModLogged).await?;
+        // A notice about them (DESIGN.md §9), unless they did it themselves.
+        if id != user.id {
+            crate::notify::moderation(&state, id, Some(user.id), &role_notice(from, role), None)
+                .await?;
+        }
     }
     // Profiles and the invite tree show staff badges.
     state.changed(Change::UserChanged { user_id: id }).await?;
@@ -549,9 +554,52 @@ pub async fn change_role(
     Ok(see_other("/admin/users?done=role"))
 }
 
+/// What a member is told when an admin changes their role.
+fn role_notice(from: Role, to: Role) -> String {
+    fn named(role: Role) -> &'static str {
+        match role {
+            Role::User => "a member",
+            Role::Moderator => "a moderator",
+            Role::Admin => "an admin",
+        }
+    }
+    match to {
+        Role::User => format!(
+            "An admin made you a member again: you are no longer {}.",
+            named(from)
+        ),
+        _ if to < from => format!(
+            "An admin made you {}: you are no longer {}.",
+            named(to),
+            named(from)
+        ),
+        _ => format!("An admin made you {}.", named(to)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn role_notices_say_what_changed() {
+        assert_eq!(
+            role_notice(Role::User, Role::Moderator),
+            "An admin made you a moderator."
+        );
+        assert_eq!(
+            role_notice(Role::Moderator, Role::Admin),
+            "An admin made you an admin."
+        );
+        assert_eq!(
+            role_notice(Role::Admin, Role::Moderator),
+            "An admin made you a moderator: you are no longer an admin."
+        );
+        assert_eq!(
+            role_notice(Role::Admin, Role::User),
+            "An admin made you a member again: you are no longer an admin."
+        );
+    }
 
     #[test]
     fn smtp_fields_parse() {

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "DELETE FROM watches WHERE user_id = $1",
+  "query": "DELETE FROM thread_subscriptions WHERE user_id = $1",
   "describe": {
     "columns": [],
     "parameters": {
@@ -10,5 +10,5 @@
     },
     "nullable": []
   },
-  "hash": "5db186d07c96b3727fd22dd97b124d6583a7efe85de148c6c583ba4adba4b9a3"
+  "hash": "ee4184fe383c5b3c0eb466c57f630387f38cf79bf29f7aa9534343faa22818a4"
 }

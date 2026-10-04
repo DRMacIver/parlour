@@ -1054,17 +1054,11 @@ impl Seeder<'_> {
         Ok(())
     }
 
-    /// Priya watches the September thread, as its author would, and has
+    /// Priya has subscribed to the September thread from its page, and has
     /// notifications about the posts since she last read it.
     async fn notifications(&mut self, september: i64) -> sqlx::Result<()> {
         let priya = self.user("priya");
-        crate::social::set_watch(
-            &mut *self.db,
-            priya,
-            crate::social::Watched::Thread(september),
-            crate::social::WatchLevel::Watching,
-        )
-        .await?;
+        crate::social::set_subscribed(&mut *self.db, priya, september, true).await?;
         let unread = sqlx::query!(
             r#"SELECT p.id, p.author_id FROM posts p JOIN thread_reads r ON r.thread_id = p.thread_id
                WHERE p.thread_id = $1 AND r.user_id = $2 AND p.seq > r.last_read_seq
@@ -1079,7 +1073,7 @@ impl Seeder<'_> {
             crate::notifications::insert(
                 &mut *self.db,
                 priya,
-                crate::content::notifications::Kind::WatchedThread,
+                crate::content::notifications::Kind::Subscription,
                 post.author_id,
                 september,
                 post.id,

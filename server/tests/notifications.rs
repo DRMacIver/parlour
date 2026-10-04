@@ -1,5 +1,6 @@
-//! Notifications (milestone 6, DESIGN.md §9): who is told about what,
-//! watching and muting, the notifications page and badge, email for
+//! Notifications (milestones 6 and 11, DESIGN.md §9): who is told about
+//! what (mentions, new posts in subscribed threads, messages and notices),
+//! subscribing to threads, the notifications page and badge, email for
 //! members who are away with one-click unsubscribe, and live updates over
 //! server-sent events.
 
@@ -139,18 +140,36 @@ async fn kinds(f: &Forum, user: i64) -> Vec<String> {
     .unwrap()
 }
 
-async fn watch(f: &Forum, cookie: &str, path: &str, level: &str) {
-    let response = f.submit(path, &[("level", level)], Some(cookie)).await;
+/// Subscribes to a thread or conversation (`yes`) or unsubscribes from it,
+/// with the toggle on its page.
+async fn subscribe(f: &Forum, cookie: &str, thread: i64, yes: bool) {
+    let action = if yes { "subscribe" } else { "unsubscribe" };
+    let response = f
+        .submit(&format!("/t/{thread}/{action}"), &[], Some(cookie))
+        .await;
     assert_status(&response, StatusCode::SEE_OTHER);
+}
+
+async fn subscribed(f: &Forum, user: i64, thread: i64) -> bool {
+    count(
+        f,
+        &format!(
+            "SELECT count(*) FROM thread_subscriptions WHERE user_id = {user} AND thread_id = {thread}"
+        ),
+    )
+    .await
+        == 1
 }
 
 // ---------------------------------------------------------------------------
 // Who is told
 
 #[sqlx::test]
-async fn replies_and_mentions_notify(pool: PgPool) {
+async fn subscriptions_and_mentions_notify(pool: PgPool) {
     let s = setup(pool).await;
+    // Ruth starts a thread, and so is subscribed to it.
     let (thread, first) = new_thread(&s.f, &s.ruth_cookie, "games", "Brass", "Who's in?").await;
+    assert!(subscribed(&s.f, s.ruth, thread).await);
     let answer = reply(
         &s.f,
         &s.jonah_cookie,
@@ -159,19 +178,36 @@ async fn replies_and_mentions_notify(pool: PgPool) {
         Some(first),
     )
     .await;
-    assert_eq!(kinds(&s.f, s.ruth).await, vec![format!("reply:{answer}")]);
+    assert_eq!(
+        kinds(&s.f, s.ruth).await,
+        vec![format!("subscription:{answer}")]
+    );
     assert_eq!(kinds(&s.f, s.maya).await, vec![format!("mention:{answer}")]);
     // Nobody hears about their own posts.
     assert!(kinds(&s.f, s.jonah).await.is_empty());
-    // One notification a post, of the most specific kind.
+    // Replying doesn't subscribe Jonah, and quoting him tells him nothing:
+    // he hears only when he is mentioned.
+    assert!(!subscribed(&s.f, s.jonah, thread).await);
+    reply(&s.f, &s.maya_cookie, thread, "Quoting you", Some(answer)).await;
+    assert!(kinds(&s.f, s.jonah).await.is_empty());
+    // One notification a post, the mention rather than the subscription.
     let both = reply(&s.f, &s.jonah_cookie, thread, "Right, @ruth?", Some(first)).await;
-    assert_eq!(
-        kinds(&s.f, s.ruth).await,
-        vec![format!("reply:{answer}"), format!("mention:{both}")]
-    );
+    let ruth = kinds(&s.f, s.ruth).await;
+    assert_eq!(ruth.len(), 3, "{ruth:?}");
+    assert_eq!(ruth[2], format!("mention:{both}"));
     // Running the jobs again changes nothing.
     s.f.exec("UPDATE jobs SET run_at = now()").await;
-    assert_eq!(kinds(&s.f, s.ruth).await.len(), 2);
+    assert_eq!(kinds(&s.f, s.ruth).await.len(), 3);
+    // Only the four kinds are ever made.
+    assert_eq!(
+        count(
+            &s.f,
+            "SELECT count(*) FROM notifications
+             WHERE kind NOT IN ('mention', 'subscription', 'message', 'moderation')"
+        )
+        .await,
+        0
+    );
     let _ = (s.games, s.lounge);
 }
 
@@ -198,86 +234,142 @@ async fn nobody_is_told_about_posts_they_cannot_read(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn watching_and_muting_threads(pool: PgPool) {
+async fn subscribing_to_threads(pool: PgPool) {
     let s = setup(pool).await;
-    let (thread, _) = new_thread(&s.f, &s.ruth_cookie, "games", "Brass", "Who's in?").await;
-    // The author watches what they start; others hear nothing by default.
+    let (thread, first) = new_thread(&s.f, &s.ruth_cookie, "games", "Brass", "Who's in?").await;
+    // The author is subscribed to what they start; others hear nothing.
     let one = reply(&s.f, &s.jonah_cookie, thread, "Me", None).await;
     assert_eq!(
         kinds(&s.f, s.ruth).await,
-        vec![format!("watched_thread:{one}")]
+        vec![format!("subscription:{one}")]
     );
     assert!(kinds(&s.f, s.maya).await.is_empty());
-    // Maya watches it.
+    let page =
+        s.f.page_as(&format!("/t/{thread}/brass"), &s.ruth_cookie)
+            .await;
+    assert!(
+        page.contains(&format!("action=\"/t/{thread}/unsubscribe\"")),
+        "{page}"
+    );
+    // Maya subscribes from the thread's page.
     let page =
         s.f.page_as(&format!("/t/{thread}/brass"), &s.maya_cookie)
             .await;
     assert!(
-        page.contains(&format!("action=\"/t/{thread}/watch\"")),
+        page.contains(&format!("action=\"/t/{thread}/subscribe\"")),
         "{page}"
     );
-    watch(
-        &s.f,
-        &s.maya_cookie,
-        &format!("/t/{thread}/watch"),
-        "watching",
-    )
-    .await;
+    assert!(!page.contains("watch"), "{page}");
+    subscribe(&s.f, &s.maya_cookie, thread, true).await;
+    let page =
+        s.f.page_as(&format!("/t/{thread}/brass"), &s.maya_cookie)
+            .await;
+    assert!(
+        page.contains(&format!("action=\"/t/{thread}/unsubscribe\"")),
+        "{page}"
+    );
     let two = reply(&s.f, &s.jonah_cookie, thread, "Still me", None).await;
     assert_eq!(
         kinds(&s.f, s.maya).await,
-        vec![format!("watched_thread:{two}")]
+        vec![format!("subscription:{two}")]
     );
-    // Ruth mutes it: not even replies to her reach her.
-    watch(&s.f, &s.ruth_cookie, &format!("/t/{thread}/watch"), "muted").await;
-    let first = count(
-        &s.f,
-        &format!("SELECT min(id) FROM posts WHERE thread_id = {thread}"),
-    )
-    .await;
-    assert_eq!(kinds(&s.f, s.ruth).await.len(), 2);
-    reply(&s.f, &s.jonah_cookie, thread, "@ruth?", Some(first)).await;
-    assert_eq!(kinds(&s.f, s.ruth).await.len(), 2);
+    // Subscribing twice is the same as once.
+    subscribe(&s.f, &s.maya_cookie, thread, true).await;
+    assert!(subscribed(&s.f, s.maya, thread).await);
+    // Ruth unsubscribes: new posts no longer reach her, but a mention does.
+    subscribe(&s.f, &s.ruth_cookie, thread, false).await;
+    assert!(!subscribed(&s.f, s.ruth, thread).await);
+    reply(&s.f, &s.jonah_cookie, thread, "Anyone?", Some(first)).await;
+    assert_eq!(
+        kinds(&s.f, s.ruth).await,
+        vec![format!("subscription:{one}"), format!("subscription:{two}")]
+    );
+    let mention = reply(&s.f, &s.jonah_cookie, thread, "@ruth?", Some(first)).await;
+    assert_eq!(
+        kinds(&s.f, s.ruth).await,
+        vec![
+            format!("subscription:{one}"),
+            format!("subscription:{two}"),
+            format!("mention:{mention}")
+        ]
+    );
+    // Visitors are asked to log in; nobody subscribes to what they can't
+    // read, or to nothing.
+    let response =
+        s.f.submit(&format!("/t/{thread}/subscribe"), &[], None)
+            .await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+    assert!(
+        response.location().starts_with("/login"),
+        "{}",
+        response.location()
+    );
+    let (council, _) = new_thread(&s.f, &s.ruth_cookie, "council", "Agenda", "Hi").await;
+    for path in [
+        format!("/t/{council}/subscribe"),
+        "/t/999999/subscribe".to_owned(),
+        "/t/x/subscribe".to_owned(),
+    ] {
+        let response = s.f.submit(&path, &[], Some(&s.maya_cookie)).await;
+        assert_status(&response, StatusCode::NOT_FOUND);
+    }
+    assert!(!subscribed(&s.f, s.maya, council).await);
+    // The old watch form is gone.
     let response =
         s.f.submit(
             &format!("/t/{thread}/watch"),
-            &[("level", "loud")],
-            Some(&s.ruth_cookie),
+            &[("level", "watching")],
+            Some(&s.maya_cookie),
         )
         .await;
-    assert_status(&response, StatusCode::BAD_REQUEST);
+    assert!(
+        response.status == StatusCode::NOT_FOUND
+            || response.status == StatusCode::METHOD_NOT_ALLOWED,
+        "{}",
+        response.status
+    );
 }
 
 #[sqlx::test]
-async fn watching_and_muting_spaces(pool: PgPool) {
+async fn nothing_subscribes_anyone_to_a_space(pool: PgPool) {
     let s = setup(pool).await;
     let page = s.f.page_as("/c/games", &s.maya_cookie).await;
-    assert!(page.contains("action=\"/c/games/watch\""), "{page}");
-    watch(&s.f, &s.maya_cookie, "/c/games/watch", "watching").await;
-    let (thread, first) = new_thread(&s.f, &s.jonah_cookie, "games", "Heat", "Racing").await;
-    assert_eq!(
-        kinds(&s.f, s.maya).await,
-        vec![format!("watched_space:{first}")]
+    assert!(!page.contains("watch"), "{page}");
+    assert!(!page.contains("subscribe"), "{page}");
+    let response =
+        s.f.submit(
+            "/c/games/watch",
+            &[("level", "watching")],
+            Some(&s.maya_cookie),
+        )
+        .await;
+    assert!(
+        response.status == StatusCode::NOT_FOUND
+            || response.status == StatusCode::METHOD_NOT_ALLOWED,
+        "{}",
+        response.status
     );
-    // Watching a space means new threads, not every reply.
-    reply(&s.f, &s.ruth_cookie, thread, "Vroom", None).await;
-    assert_eq!(kinds(&s.f, s.maya).await.len(), 1);
-    // Muting a space silences its threads, mentions included...
-    watch(&s.f, &s.ruth_cookie, "/c/lounge/watch", "muted").await;
-    let (lounge_thread, _) = new_thread(&s.f, &s.jonah_cookie, "lounge", "Chat", "Hi @ruth").await;
+    // A new thread tells nobody but those it mentions, however much they
+    // post in the space.
+    let (old, _) = new_thread(&s.f, &s.maya_cookie, "games", "Old", "Mine").await;
+    let (thread, first) = new_thread(&s.f, &s.jonah_cookie, "games", "Heat", "Racing").await;
+    assert!(kinds(&s.f, s.maya).await.is_empty());
     assert!(kinds(&s.f, s.ruth).await.is_empty());
-    // ...unless the member watches a thread there themselves.
-    watch(
-        &s.f,
-        &s.ruth_cookie,
-        &format!("/t/{lounge_thread}/watch"),
-        "watching",
-    )
-    .await;
-    let post = reply(&s.f, &s.jonah_cookie, lounge_thread, "More", None).await;
+    let _ = old;
+    // Muting a space takes it off a member's lists, not out of their
+    // notifications: a mention there still reaches them, and so do new
+    // posts in a thread there they are subscribed to.
+    s.f.submit("/c/games/mute", &[], Some(&s.ruth_cookie)).await;
+    let mention = reply(&s.f, &s.jonah_cookie, thread, "Hi @ruth", Some(first)).await;
     assert_eq!(
         kinds(&s.f, s.ruth).await,
-        vec![format!("watched_thread:{post}")]
+        vec![format!("mention:{mention}")]
+    );
+    subscribe(&s.f, &s.ruth_cookie, thread, true).await;
+    let post = reply(&s.f, &s.maya_cookie, thread, "More", None).await;
+    assert_eq!(
+        kinds(&s.f, s.ruth).await,
+        vec![format!("mention:{mention}"), format!("subscription:{post}")]
     );
     let _ = s.lounge;
 }
@@ -306,14 +398,27 @@ async fn messages_notify_the_others_in_the_conversation(pool: PgPool) {
     assert_eq!(kinds(&s.f, s.jonah).await, vec![format!("message:{first}")]);
     assert_eq!(kinds(&s.f, s.maya).await, vec![format!("message:{first}")]);
     assert!(kinds(&s.f, s.ruth).await.is_empty());
-    // Maya mutes it; Jonah leaves.
-    watch(
-        &s.f,
-        &s.maya_cookie,
-        &format!("/t/{conversation}/watch"),
-        "muted",
-    )
-    .await;
+    // Everyone in it is subscribed to it, and its page offers to turn
+    // notifications off.
+    for who in [s.ruth, s.jonah, s.maya] {
+        assert!(subscribed(&s.f, who, conversation).await);
+    }
+    let page =
+        s.f.page_as(&format!("/messages/{conversation}"), &s.maya_cookie)
+            .await;
+    assert!(
+        page.contains(&format!("action=\"/t/{conversation}/unsubscribe\"")),
+        "{page}"
+    );
+    // Maya turns them off; Jonah leaves.
+    subscribe(&s.f, &s.maya_cookie, conversation, false).await;
+    let page =
+        s.f.page_as(&format!("/messages/{conversation}"), &s.maya_cookie)
+            .await;
+    assert!(
+        page.contains(&format!("action=\"/t/{conversation}/subscribe\"")),
+        "{page}"
+    );
     s.f.submit(
         &format!("/messages/{conversation}/leave"),
         &[],
@@ -343,6 +448,39 @@ async fn messages_notify_the_others_in_the_conversation(pool: PgPool) {
     // Jonah's notification about the first message went when he left.
     let page = s.f.page_as("/notifications", &s.jonah_cookie).await;
     assert!(!page.contains("Brass"), "{page}");
+    assert!(!subscribed(&s.f, s.jonah, conversation).await);
+    // Someone added to it is subscribed to it.
+    let response =
+        s.f.submit(
+            &format!("/messages/{conversation}/people"),
+            &[("username", "kit")],
+            Some(&s.ruth_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+    assert!(subscribed(&s.f, kit, conversation).await);
+    let third = anchored_post(
+        s.f.submit(
+            &format!("/messages/{conversation}"),
+            &[("body", "Welcome")],
+            Some(&s.ruth_cookie),
+        )
+        .await
+        .location(),
+    );
+    assert_eq!(kinds(&s.f, kit).await, vec![format!("message:{third}")]);
+    assert_eq!(kinds(&s.f, s.maya).await.len(), 1);
+    // Outsiders can't subscribe to it.
+    let outsider = s.f.member("lee", "user", None).await;
+    let outsider_cookie = s.f.session(outsider).await;
+    let response =
+        s.f.submit(
+            &format!("/t/{conversation}/subscribe"),
+            &[],
+            Some(&outsider_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::NOT_FOUND);
     let _ = second;
 }
 
@@ -380,7 +518,7 @@ async fn the_notifications_page_and_badge(pool: PgPool) {
     assert!(index.contains("data-count=\"notifications\">1<"), "{index}");
     let page = s.f.page_as("/notifications", &s.ruth_cookie).await;
     assert!(page.contains("Jonah"), "{page}");
-    assert!(page.contains("replied to you in"), "{page}");
+    assert!(page.contains("posted in"), "{page}");
     let id = count(&s.f, "SELECT id FROM notifications").await;
     // Following it marks it read and goes to the post.
     let response =
@@ -554,9 +692,10 @@ async fn email_jobs_running_together_send_one_email(pool: PgPool) {
 }
 
 /// Regression: the email job didn't look again at blocks and mutes made
-/// after the notification, though the notifications page does.
+/// after the notification, though the notifications page does. (Mutes
+/// were per thread and space then; now unsubscribing does the same.)
 #[sqlx::test]
-async fn blocks_and_mutes_made_before_the_email_stop_it(pool: PgPool) {
+async fn blocks_and_unsubscribing_before_the_email_stop_it(pool: PgPool) {
     let s = setup(pool).await;
     settings::set(
         &s.f.db,
@@ -582,43 +721,77 @@ async fn blocks_and_mutes_made_before_the_email_stop_it(pool: PgPool) {
         s.f.emails().await.is_empty(),
         "emailed a blocked member's post"
     );
-    // Maya replies; Ruth mutes the thread before the email is due.
-    reply(&s.f, &s.maya_cookie, thread, "Muted words", Some(first)).await;
+    // Maya replies; Ruth unsubscribes before the email is due.
+    reply(
+        &s.f,
+        &s.maya_cookie,
+        thread,
+        "Unsubscribed words",
+        Some(first),
+    )
+    .await;
     s.f.run_jobs().await;
-    watch(&s.f, &s.ruth_cookie, &format!("/t/{thread}/watch"), "muted").await;
+    subscribe(&s.f, &s.ruth_cookie, thread, false).await;
     s.f.exec(away).await;
     s.f.exec(due).await;
     s.f.exec("UPDATE jobs SET run_at = now()").await;
-    assert!(s.f.emails().await.is_empty(), "emailed a muted thread");
-    // Muting the space does the same for a thread with no setting of
-    // its own.
-    let (other, other_first) = new_thread(&s.f, &s.ruth_cookie, "games", "Other", "Hi").await;
-    watch(&s.f, &s.ruth_cookie, &format!("/t/{other}/watch"), "normal").await;
+    assert!(
+        s.f.emails().await.is_empty(),
+        "emailed a thread she unsubscribed from"
+    );
+    // The same for a conversation.
+    let response =
+        s.f.submit(
+            "/messages/new",
+            &[
+                ("to", "ruth"),
+                ("title", "Plans"),
+                ("body", "Quiet message"),
+            ],
+            Some(&s.maya_cookie),
+        )
+        .await;
+    let conversation = count(
+        &s.f,
+        &format!(
+            "SELECT thread_id FROM posts WHERE id = {}",
+            anchored_post(response.location())
+        ),
+    )
+    .await;
+    s.f.run_jobs().await;
+    subscribe(&s.f, &s.ruth_cookie, conversation, false).await;
+    s.f.exec(away).await;
+    s.f.exec(due).await;
+    s.f.exec("UPDATE jobs SET run_at = now()").await;
+    assert!(
+        s.f.emails().await.is_empty(),
+        "emailed a quiet conversation"
+    );
+    // A mention still comes, though she is subscribed to neither: she
+    // was asked for by name.
+    let (other, other_first) = new_thread(&s.f, &s.jonah_cookie, "games", "Other", "Hi").await;
     reply(
         &s.f,
         &s.maya_cookie,
         other,
-        "Space words",
+        "Loud words for @ruth",
         Some(other_first),
     )
     .await;
     s.f.run_jobs().await;
-    watch(&s.f, &s.ruth_cookie, "/c/games/watch", "muted").await;
     s.f.exec(away).await;
     s.f.exec(due).await;
     s.f.exec("UPDATE jobs SET run_at = now()").await;
-    assert!(s.f.emails().await.is_empty(), "emailed a muted space");
-    // Unmuted, a new reply is emailed as usual (and only that one).
-    watch(&s.f, &s.ruth_cookie, "/c/games/watch", "normal").await;
-    reply(&s.f, &s.maya_cookie, other, "Loud words", Some(other_first)).await;
-    s.f.run_jobs().await;
-    s.f.exec(away).await;
-    s.f.exec(due).await;
-    s.f.exec("UPDATE jobs SET run_at = now()").await;
-    let emails = s.f.emails().await;
+    let emails: Vec<_> =
+        s.f.emails()
+            .await
+            .into_iter()
+            .filter(|e| e.to == "ruth@example.com")
+            .collect();
     assert_eq!(emails.len(), 1, "{emails:?}");
     assert!(emails[0].body.contains("Loud words"));
-    for quiet in ["Blocked words", "Muted words", "Space words"] {
+    for quiet in ["Blocked words", "Unsubscribed words", "Quiet message"] {
         assert!(!emails[0].body.contains(quiet), "{}", emails[0].body);
     }
 }
@@ -727,15 +900,34 @@ async fn email_preferences_and_one_click_unsubscribe(pool: PgPool) {
         page.contains("action=\"/settings/notifications\""),
         "{page}"
     );
-    // Ruth turns off emails about replies.
+    // The choices are the kinds there are.
+    for name in ["mentions", "subscriptions", "messages", "moderation"] {
+        assert!(page.contains(&format!("name=\"{name}\"")), "{page}");
+    }
+    for gone in ["replies", "watching"] {
+        assert!(!page.contains(&format!("name=\"{gone}\"")), "{page}");
+    }
+    assert!(page.contains("Threads you subscribe to"), "{page}");
+    // Ruth turns off emails about threads she subscribes to.
     let response =
         s.f.submit(
             "/settings/notifications",
-            &[("mentions", "on"), ("messages", "on"), ("watching", "on")],
+            &[("mentions", "on"), ("messages", "on"), ("moderation", "on")],
             Some(&s.ruth_cookie),
         )
         .await;
     assert_status(&response, StatusCode::SEE_OTHER);
+    assert_eq!(
+        parlour::social::email_prefs(s.f.state.db(), s.ruth)
+            .await
+            .unwrap(),
+        parlour::social::EmailPrefs {
+            mentions: true,
+            messages: true,
+            subscriptions: false,
+            moderation: true,
+        }
+    );
     let (thread, first) = new_thread(&s.f, &s.ruth_cookie, "games", "Brass", "Hi").await;
     reply(&s.f, &s.jonah_cookie, thread, "A reply", Some(first)).await;
     assert!(s.f.emails().await.is_empty());

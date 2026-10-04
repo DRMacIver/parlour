@@ -81,6 +81,38 @@ async fn admins_give_members_roles(db: PgPool) {
     assert_eq!(response.status, StatusCode::SEE_OTHER);
     assert_eq!(role_of(&forum, ruth).await, "user");
     assert!(!forum.page("/u/ruth").await.contains("Moderator"));
+    // Ruth is told each time (DESIGN.md §9: a notice about you), and
+    // emailed under the usual rules.
+    let notices: Vec<String> = sqlx::query_scalar(
+        "SELECT message FROM notifications WHERE user_id = $1 AND kind = 'moderation' ORDER BY id",
+    )
+    .bind(ruth)
+    .fetch_all(&forum.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        notices,
+        [
+            "An admin made you a moderator.",
+            "An admin made you a member again: you are no longer a moderator.",
+        ]
+    );
+    let page = forum.page_as("/notifications", &ruth_cookie).await;
+    assert!(page.contains("An admin made you a moderator."), "{page}");
+    // Choosing the role someone already has tells them nothing.
+    forum
+        .submit(
+            &format!("/admin/users/{ruth}/role"),
+            &[("role", "user")],
+            Some(&sam_cookie),
+        )
+        .await;
+    let notices: i64 = sqlx::query_scalar("SELECT count(*) FROM notifications WHERE user_id = $1")
+        .bind(ruth)
+        .fetch_one(&forum.db)
+        .await
+        .unwrap();
+    assert_eq!(notices, 2);
 }
 
 #[sqlx::test]

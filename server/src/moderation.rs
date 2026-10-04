@@ -34,7 +34,7 @@ use crate::notify;
 use crate::permissions::{Audience, at_most_as_visible};
 use crate::ratelimit::{Action, Scope};
 use crate::sessions;
-use crate::social::{self, WatchLevel, Watched};
+use crate::social;
 use crate::store::{self, NewPost, NewThread};
 use crate::viewer::{UserCtx, Viewer};
 use crate::writing::{self, Outcome, Refused};
@@ -1731,13 +1731,6 @@ async fn publish_held(
                     locked: false,
                     created_at: None,
                 },
-            )
-            .await?;
-            social::set_watch(
-                &mut *tx,
-                author.id,
-                Watched::Thread(created.thread_id),
-                WatchLevel::Watching,
             )
             .await?;
             (

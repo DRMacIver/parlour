@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, p.thread_id, t.space_id, p.seq, p.author_id, a.role <> 'user' AS \"staff!\",\n                  r.author_id AS \"replied_to?\", p.body_md,\n                  p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL AS \"live!\"\n           FROM posts p\n           JOIN threads t ON t.id = p.thread_id\n           JOIN users a ON a.id = p.author_id\n           LEFT JOIN posts r ON r.id = p.reply_to_post_id\n           WHERE p.id = $1",
+  "query": "SELECT p.id, p.thread_id, t.space_id, p.author_id, a.role <> 'user' AS \"staff!\", p.body_md,\n                  p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL AS \"live!\"\n           FROM posts p\n           JOIN threads t ON t.id = p.thread_id\n           JOIN users a ON a.id = p.author_id\n           WHERE p.id = $1",
   "describe": {
     "columns": [
       {
@@ -38,17 +38,6 @@
       },
       {
         "ordinal": 3,
-        "name": "seq",
-        "type_info": "Int4",
-        "origin": {
-          "Table": {
-            "table": "posts",
-            "name": "seq"
-          }
-        }
-      },
-      {
-        "ordinal": 4,
         "name": "author_id",
         "type_info": "Int8",
         "origin": {
@@ -59,24 +48,13 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 4,
         "name": "staff!",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 6,
-        "name": "replied_to?",
-        "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "posts",
-            "name": "author_id"
-          }
-        }
-      },
-      {
-        "ordinal": 7,
+        "ordinal": 5,
         "name": "body_md",
         "type_info": "Text",
         "origin": {
@@ -87,7 +65,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 6,
         "name": "live!",
         "type_info": "Bool",
         "origin": "Expression"
@@ -103,12 +81,10 @@
       false,
       true,
       false,
-      false,
       null,
-      true,
       false,
       null
     ]
   },
-  "hash": "3ce1934fdd468559c9692f6249e98a5b2852c6f681396b9b2826c83ca7fd2a84"
+  "hash": "211c39020f5993f8c6aee942f71bd419770d0c6ea20147029ebb627ff85c601f"
 }

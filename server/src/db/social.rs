@@ -1,6 +1,6 @@
 //! How members relate to each other and to what they read: blocks, who
-//! may message them, what they watch, and which emails they want
-//! (DESIGN.md §3.7, §9).
+//! may message them, the threads they are subscribed to, and which emails
+//! they want (DESIGN.md §3.9, §9).
 
 use serde::{Deserialize, Serialize};
 
@@ -243,99 +243,49 @@ pub async fn blocked_members(db: &Db, user_id: i64) -> sqlx::Result<Vec<UserRef>
 }
 
 // ---------------------------------------------------------------------------
-// Watching
+// Thread subscriptions
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum WatchLevel {
-    /// Notify about every new post (in a thread) or thread (in a space).
-    Watching,
-    /// Notify about replies and mentions only.
-    #[default]
-    Normal,
-    /// Never notify.
-    Muted,
-}
-
-impl WatchLevel {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            WatchLevel::Watching => "watching",
-            WatchLevel::Normal => "normal",
-            WatchLevel::Muted => "muted",
-        }
-    }
-
-    /// The level a stored choice means: the default if there is none.
-    pub fn from_stored(level: Option<&str>) -> WatchLevel {
-        level.and_then(WatchLevel::parse).unwrap_or_default()
-    }
-
-    pub fn parse(s: &str) -> Option<WatchLevel> {
-        match s {
-            "watching" => Some(WatchLevel::Watching),
-            "normal" => Some(WatchLevel::Normal),
-            "muted" => Some(WatchLevel::Muted),
-            _ => None,
-        }
-    }
-}
-
-/// What a watch is on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Watched {
-    Thread(i64),
-    Space(i64),
-}
-
-pub async fn set_watch<'c>(
+/// Subscribes a member to a thread or conversation (`on`), or
+/// unsubscribes them. Returns whether that changed anything. Doesn't check
+/// that they may read it: being subscribed to something you can't read
+/// tells you nothing, since every notification is checked as its member.
+pub async fn set_subscribed<'c>(
     db: impl Handle<'c>,
     user_id: i64,
-    on: Watched,
-    level: WatchLevel,
-) -> sqlx::Result<()> {
-    let mut tx = db.open(KEY).begin().await?;
-    let (thread_id, space_id) = match on {
-        Watched::Thread(id) => (Some(id), None),
-        Watched::Space(id) => (None, Some(id)),
-    };
-    sqlx::query!(
-        "DELETE FROM watches WHERE user_id = $1 AND thread_id IS NOT DISTINCT FROM $2
-         AND space_id IS NOT DISTINCT FROM $3",
-        user_id,
-        thread_id,
-        space_id
-    )
-    .execute(&mut *tx)
-    .await?;
-    if level != WatchLevel::Normal {
+    thread_id: i64,
+    on: bool,
+) -> sqlx::Result<bool> {
+    let mut conn = db.open(KEY).acquire().await?;
+    let done = if on {
         sqlx::query!(
-            "INSERT INTO watches (user_id, thread_id, space_id, level) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO thread_subscriptions (user_id, thread_id) VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
             user_id,
-            thread_id,
-            space_id,
-            level.as_str()
+            thread_id
         )
-        .execute(&mut *tx)
-        .await?;
-    }
-    tx.commit().await
+        .execute(&mut *conn)
+        .await?
+    } else {
+        sqlx::query!(
+            "DELETE FROM thread_subscriptions WHERE user_id = $1 AND thread_id = $2",
+            user_id,
+            thread_id
+        )
+        .execute(&mut *conn)
+        .await?
+    };
+    Ok(done.rows_affected() == 1)
 }
 
-pub async fn watch_level(db: &Db, user_id: i64, on: Watched) -> sqlx::Result<WatchLevel> {
-    let (thread_id, space_id) = match on {
-        Watched::Thread(id) => (Some(id), None),
-        Watched::Space(id) => (None, Some(id)),
-    };
-    let level = sqlx::query_scalar!(
-        "SELECT level FROM watches WHERE user_id = $1 AND thread_id IS NOT DISTINCT FROM $2
-         AND space_id IS NOT DISTINCT FROM $3",
+pub async fn is_subscribed(db: &Db, user_id: i64, thread_id: i64) -> sqlx::Result<bool> {
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM thread_subscriptions
+                          WHERE user_id = $1 AND thread_id = $2) AS "subscribed!""#,
         user_id,
-        thread_id,
-        space_id
+        thread_id
     )
-    .fetch_optional(db.pool())
-    .await?;
-    Ok(WatchLevel::from_stored(level.as_deref()))
+    .fetch_one(db.pool())
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -346,21 +296,19 @@ pub async fn watch_level(db: &Db, user_id: i64, on: Watched) -> sqlx::Result<Wat
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EmailPrefs {
-    pub replies: bool,
     pub mentions: bool,
     pub messages: bool,
-    /// New posts in watched threads, and new threads in watched spaces.
-    pub watching: bool,
+    /// New posts in threads the member is subscribed to.
+    pub subscriptions: bool,
     pub moderation: bool,
 }
 
 impl Default for EmailPrefs {
     fn default() -> Self {
         EmailPrefs {
-            replies: true,
             mentions: true,
             messages: true,
-            watching: true,
+            subscriptions: true,
             moderation: true,
         }
     }
@@ -369,47 +317,51 @@ impl Default for EmailPrefs {
 /// A kind of email a member can turn off, as named in unsubscribe links.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EmailTopic {
-    Replies,
     Mentions,
     Messages,
-    Watching,
+    Subscriptions,
     Moderation,
     /// Every notification email.
     All,
 }
 
 impl EmailTopic {
-    pub const ALL: [EmailTopic; 6] = [
-        EmailTopic::Replies,
+    pub const ALL: [EmailTopic; 5] = [
         EmailTopic::Mentions,
         EmailTopic::Messages,
-        EmailTopic::Watching,
+        EmailTopic::Subscriptions,
         EmailTopic::Moderation,
         EmailTopic::All,
     ];
 
     pub fn as_str(self) -> &'static str {
         match self {
-            EmailTopic::Replies => "replies",
             EmailTopic::Mentions => "mentions",
             EmailTopic::Messages => "messages",
-            EmailTopic::Watching => "watching",
+            EmailTopic::Subscriptions => "subscriptions",
             EmailTopic::Moderation => "moderation",
             EmailTopic::All => "all",
         }
     }
 
+    /// The topic a name in an unsubscribe link means. Links in emails sent
+    /// before milestone 11 may name "watching" (threads and spaces watched)
+    /// or "replies" (replies to the member's posts): both mean the
+    /// subscriptions that took their place, so that an old link still
+    /// stops the emails most like the ones it was in.
     pub fn parse(s: &str) -> Option<EmailTopic> {
-        EmailTopic::ALL.into_iter().find(|t| t.as_str() == s)
+        match s {
+            "watching" | "replies" => Some(EmailTopic::Subscriptions),
+            _ => EmailTopic::ALL.into_iter().find(|t| t.as_str() == s),
+        }
     }
 
     /// What it covers, as in "emails about …".
     pub fn describe(self) -> &'static str {
         match self {
-            EmailTopic::Replies => "replies to your posts",
             EmailTopic::Mentions => "mentions of you",
             EmailTopic::Messages => "new messages",
-            EmailTopic::Watching => "threads and spaces you watch",
+            EmailTopic::Subscriptions => "threads you subscribe to",
             EmailTopic::Moderation => "notes from the moderators",
             EmailTopic::All => "anything",
         }
@@ -419,29 +371,26 @@ impl EmailTopic {
 impl EmailPrefs {
     pub fn wants(&self, topic: EmailTopic) -> bool {
         match topic {
-            EmailTopic::Replies => self.replies,
             EmailTopic::Mentions => self.mentions,
             EmailTopic::Messages => self.messages,
-            EmailTopic::Watching => self.watching,
+            EmailTopic::Subscriptions => self.subscriptions,
             EmailTopic::Moderation => self.moderation,
-            EmailTopic::All => self.replies || self.mentions || self.messages || self.watching,
+            EmailTopic::All => self.mentions || self.messages || self.subscriptions,
         }
     }
 
     /// These preferences with `topic` turned off.
     pub fn without(mut self, topic: EmailTopic) -> EmailPrefs {
         match topic {
-            EmailTopic::Replies => self.replies = false,
             EmailTopic::Mentions => self.mentions = false,
             EmailTopic::Messages => self.messages = false,
-            EmailTopic::Watching => self.watching = false,
+            EmailTopic::Subscriptions => self.subscriptions = false,
             EmailTopic::Moderation => self.moderation = false,
             EmailTopic::All => {
                 self = EmailPrefs {
-                    replies: false,
                     mentions: false,
                     messages: false,
-                    watching: false,
+                    subscriptions: false,
                     moderation: false,
                 }
             }
@@ -478,19 +427,25 @@ mod tests {
         for policy in [DmPolicy::Everyone, DmPolicy::Interacted, DmPolicy::Nobody] {
             assert_eq!(DmPolicy::parse(policy.as_str()), Some(policy));
         }
-        for level in [WatchLevel::Watching, WatchLevel::Normal, WatchLevel::Muted] {
-            assert_eq!(WatchLevel::parse(level.as_str()), Some(level));
-        }
         for topic in EmailTopic::ALL {
             assert_eq!(EmailTopic::parse(topic.as_str()), Some(topic));
         }
         assert_eq!(DmPolicy::parse("anyone"), None);
+        // Names from before milestone 11, in links already sent.
+        assert_eq!(
+            EmailTopic::parse("watching"),
+            Some(EmailTopic::Subscriptions)
+        );
+        assert_eq!(
+            EmailTopic::parse("replies"),
+            Some(EmailTopic::Subscriptions)
+        );
     }
 
     #[test]
     fn missing_preferences_are_on() {
-        let prefs: EmailPrefs = serde_json::from_str(r#"{"replies": false}"#).unwrap();
-        assert!(!prefs.replies && prefs.mentions && prefs.messages && prefs.watching);
+        let prefs: EmailPrefs = serde_json::from_str(r#"{"mentions": false}"#).unwrap();
+        assert!(!prefs.mentions && prefs.messages && prefs.subscriptions && prefs.moderation);
         for topic in EmailTopic::ALL {
             let off = EmailPrefs::default().without(topic);
             assert!(!off.wants(topic), "{topic:?}");

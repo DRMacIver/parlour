@@ -132,10 +132,9 @@
     <p class="form-note">When you have notifications you haven’t seen and you haven’t been on the forum for a while, we can email them to you. Email us about:</p>
     <fieldset class="field">
       <legend class="visually-hidden">Emails you get</legend>
-      <label class="choice"><input type="checkbox" name="replies" value="on"{% if email_prefs.replies %} checked{% endif %}> Replies to your posts</label>
       <label class="choice"><input type="checkbox" name="mentions" value="on"{% if email_prefs.mentions %} checked{% endif %}> Mentions of you</label>
+      <label class="choice"><input type="checkbox" name="subscriptions" value="on"{% if email_prefs.subscriptions %} checked{% endif %}> Threads you subscribe to: new posts in the threads you started, and in any you subscribed to from their pages</label>
       <label class="choice"><input type="checkbox" name="messages" value="on"{% if email_prefs.messages %} checked{% endif %}> New messages</label>
-      <label class="choice"><input type="checkbox" name="watching" value="on"{% if email_prefs.watching %} checked{% endif %}> Threads and spaces you watch</label>
       <label class="choice"><input type="checkbox" name="moderation" value="on"{% if email_prefs.moderation %} checked{% endif %}> Notes from the moderators</label>
     </fieldset>
     <div class="form-actions"><button class="button button-quiet" type="submit">Save</button></div>

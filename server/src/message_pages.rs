@@ -24,7 +24,7 @@ use crate::notify;
 use crate::pages::parse_id;
 use crate::pagination::{PageItem, Pagination};
 use crate::settings;
-use crate::social::{self, DmPolicy, WatchLevel, Watched};
+use crate::social::{self, DmPolicy};
 use crate::store;
 use crate::viewer::Viewer;
 use crate::web::{self, Layout, Nav, render, see_other};
@@ -129,7 +129,8 @@ struct Shown {
     reaction_types: Vec<ReactionType>,
     /// Why the viewer can't send here, if they can't.
     refusal: Option<&'static str>,
-    muted: bool,
+    /// Whether the viewer is subscribed to it: told of each new message.
+    subscribed: bool,
     /// Whether the viewer is in it, rather than staff reading a reported
     /// conversation.
     participant: bool,
@@ -248,15 +249,14 @@ async fn render_conversation(
         }
         _ => None,
     };
-    let muted =
-        social::watch_level(state.db(), user.id, Watched::Thread(id)).await? == WatchLevel::Muted;
+    let subscribed = social::is_subscribed(state.db(), user.id, id).await?;
     let shown = Shown {
         pagination: Pagination::new(format!("/messages/{id}"), page, total),
         page: conversation,
         divider_before,
         reaction_types: content::reaction_types(state.db(), true).await?,
         refusal,
-        muted,
+        subscribed,
         participant,
         can_react: participant && crate::writing::restriction(user).is_none(),
         staff: viewer.is_staff(),

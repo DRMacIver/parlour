@@ -18,7 +18,7 @@ use crate::mod_records::{self, HeldPlace};
 use crate::notify;
 use crate::permissions::at_most_as_visible;
 use crate::ratelimit::{Action, Scope};
-use crate::social::{self, WatchLevel, Watched};
+use crate::social;
 use crate::store::{self, Edited, NewPost, NewThread};
 use crate::viewer::{UserCtx, Viewer};
 
@@ -627,21 +627,14 @@ pub async fn fork(
     })))
 }
 
-/// Creates a space thread with its first post, has its author watch it,
-/// and queues the notifications about it.
+/// Creates a space thread with its first post (which subscribes its
+/// author to it), and queues the notifications about it.
 pub(crate) async fn create_thread(
     state: &AppState,
     thread: &NewThread,
 ) -> Result<store::CreatedThread, AppError> {
     let mut tx = state.db().begin().await?;
     let created = store::create_thread(&mut tx, thread).await?;
-    social::set_watch(
-        &mut tx,
-        thread.author_id,
-        Watched::Thread(created.thread_id),
-        WatchLevel::Watching,
-    )
-    .await?;
     notify::queue_post(&mut tx, created.first_post_id).await?;
     tx.commit().await?;
     state.jobs().wake();

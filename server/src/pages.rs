@@ -18,7 +18,6 @@ use crate::format;
 use crate::layouts;
 use crate::notify;
 use crate::pagination::{PageItem, Pagination, page_href, thread_list_pages};
-use crate::social::{self, WatchLevel, Watched};
 use crate::viewer::Viewer;
 use crate::web::{self, Layout, Nav, cacheable, redirect_unless_canonical, see_other};
 use crate::writing;
@@ -298,8 +297,6 @@ struct SpaceTemplate {
     can_post: bool,
     /// Whether the viewer may change the space's settings.
     can_administer: bool,
-    /// How closely a logged-in viewer follows the space.
-    watch: Option<WatchLevel>,
     /// The section of a member's layout the space is in, if it is in one.
     following: Option<String>,
     /// Whether the member has muted the space.
@@ -309,10 +306,6 @@ struct SpaceTemplate {
 }
 
 impl SpaceTemplate {
-    fn watch_action(&self) -> String {
-        format!("/c/{}/watch", self.space.space.slug)
-    }
-
     fn action(&self, what: &str) -> String {
         format!("/c/{}/{what}", self.space.space.slug)
     }
@@ -352,20 +345,17 @@ pub async fn space(
     let can_administer = target
         .as_ref()
         .is_some_and(|target| target.rules.may_administer(&viewer));
-    let (watch, following, muted) = match viewer.user() {
+    let (following, muted) = match viewer.user() {
         Some(user) => {
             let layout = layouts::id_for(&state.db, Some(user.id)).await?;
             (
-                Some(
-                    social::watch_level(&state.db, user.id, Watched::Space(space.space.id)).await?,
-                ),
                 layouts::placement(&state.db, layout, space.space.id)
                     .await?
                     .map(|p| p.section_name),
                 layouts::is_muted(&state.db, user.id, space.space.id).await?,
             )
         }
-        None => (None, None, false),
+        None => (None, false),
     };
     let essential = target.as_ref().is_some_and(|target| target.essential);
     cacheable(
@@ -378,7 +368,6 @@ pub async fn space(
             logged_in: viewer.user().is_some(),
             can_post,
             can_administer,
-            watch,
             following,
             muted,
             essential,
@@ -419,17 +408,14 @@ struct ThreadTemplate {
     can_react: bool,
     /// The post the "new since your last visit" divider goes before.
     divider_before: Option<i64>,
-    /// How closely a logged-in viewer follows the thread.
-    watch: Option<WatchLevel>,
+    /// Whether a logged-in viewer is subscribed to the thread (`None` for
+    /// visitors, who have no toggle).
+    subscribed: Option<bool>,
     /// Whether the viewer is staff, who see moderation links.
     staff: bool,
 }
 
 impl ThreadTemplate {
-    fn watch_action(&self) -> String {
-        format!("/t/{}/watch", self.thread.thread.id)
-    }
-
     fn logged_in(&self) -> bool {
         self.viewer_id.is_some()
     }
@@ -501,7 +487,7 @@ pub async fn thread(
         return web::not_found(&state, &viewer).await;
     }
     let base = format::thread_href(&id, &thread.thread.slug);
-    let (reply_box, can_edit, reaction_types, divider_before, watch) = match viewer.user() {
+    let (reply_box, can_edit, reaction_types, divider_before, subscribed) = match viewer.user() {
         None => (ReplyBox::LogIn, false, Vec::new(), None, None),
         Some(user) => {
             let reply_box = match writing::reply_refusal(&state, &viewer, &thread.target()).await? {
@@ -523,7 +509,7 @@ pub async fn thread(
                 !thread.locked || viewer.is_staff(),
                 content::reaction_types(&state.db, true).await?,
                 divider_before,
-                Some(WatchLevel::from_stored(thread.watch_level.as_deref())),
+                Some(thread.subscribed),
             )
         }
     };
@@ -541,7 +527,7 @@ pub async fn thread(
             reaction_types,
             can_react,
             divider_before,
-            watch,
+            subscribed,
             staff: viewer.is_staff(),
         },
         &deps,

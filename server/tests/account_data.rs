@@ -181,6 +181,24 @@ async fn members_download_their_data(pool: PgPool) {
         ]
     );
     assert_eq!(data["muted_spaces"], serde_json::json!(["secret"]));
+    // The threads she is subscribed to: the two she started, one of which
+    // she can't read now and so isn't named, and the conversation she is
+    // in.
+    let mut subscribed: Vec<(i64, Value)> = data["thread_subscriptions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["thread_id"].as_i64().unwrap(), s["title"].clone()))
+        .collect();
+    subscribed.sort_by_key(|(id, _)| *id);
+    let mut expected = vec![
+        (thread.thread_id, Value::from("Heat")),
+        (conversation.thread_id, Value::from("Gift ideas")),
+        (secret.thread_id, Value::Null),
+    ];
+    expected.sort_by_key(|(id, _)| *id);
+    assert_eq!(subscribed, expected);
+    assert!(data.get("watches").is_none());
 }
 
 #[sqlx::test]

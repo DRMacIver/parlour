@@ -10,55 +10,45 @@ use super::*;
 
 pub const NOTIFICATIONS_PER_PAGE: i64 = 30;
 
-/// What a notification is about.
+/// What a notification is about: the only kinds there are (DESIGN.md §9).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// Someone replied to one of the member's posts.
-    Reply,
-    /// Someone mentioned the member.
+    /// Someone mentioned the member in a post they can read.
     Mention,
+    /// A new post in a thread the member is subscribed to.
+    Subscription,
     /// A new message in one of the member's conversations.
     Message,
-    /// A new post in a thread the member watches.
-    WatchedThread,
-    /// A new thread in a space the member watches.
-    WatchedSpace,
-    /// A note from the moderators.
+    /// A notice about the member or their posts.
     Moderation,
 }
 
 impl Kind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Kind::Reply => "reply",
             Kind::Mention => "mention",
+            Kind::Subscription => "subscription",
             Kind::Message => "message",
-            Kind::WatchedThread => "watched_thread",
-            Kind::WatchedSpace => "watched_space",
             Kind::Moderation => "moderation",
         }
     }
 
     pub fn parse(s: &str) -> Option<Kind> {
         Some(match s {
-            "reply" => Kind::Reply,
             "mention" => Kind::Mention,
+            "subscription" => Kind::Subscription,
             "message" => Kind::Message,
-            "watched_thread" => Kind::WatchedThread,
-            "watched_space" => Kind::WatchedSpace,
             "moderation" => Kind::Moderation,
             _ => return None,
         })
     }
 
-    /// How it reads after the actor's name, as in "Ruth replied to you in".
+    /// How it reads after the actor's name, as in "Ruth posted in".
     pub fn verb(self) -> &'static str {
         match self {
-            Kind::Reply => "replied to you in",
             Kind::Mention => "mentioned you in",
+            Kind::Subscription => "posted in",
             Kind::Message => "sent you a message in",
-            Kind::WatchedThread => "posted in",
-            Kind::WatchedSpace => "started a new thread,",
             Kind::Moderation => "",
         }
     }

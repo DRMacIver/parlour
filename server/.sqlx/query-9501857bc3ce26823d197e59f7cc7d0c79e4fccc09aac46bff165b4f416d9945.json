@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM thread_subscriptions WHERE user_id = $1 AND thread_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9501857bc3ce26823d197e59f7cc7d0c79e4fccc09aac46bff165b4f416d9945"
+}

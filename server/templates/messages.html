@@ -54,10 +54,8 @@
         <button class="button button-small button-quiet" type="submit">Add person</button>
       </form>
       {% endif %}
-      <form class="form-inline" method="post" action="/t/{{ shown.page.thread.id }}/watch">
-        {% if shown.muted %}<input type="hidden" name="level" value="normal"><button class="button button-small button-quiet" type="submit">Unmute</button>
-        {% else %}<input type="hidden" name="level" value="muted"><button class="button button-small button-quiet" type="submit">Mute</button>{% endif %}
-      </form>
+      {% if shown.subscribed %}<form class="form-inline" method="post" action="/t/{{ shown.page.thread.id }}/unsubscribe"><button class="button button-small button-quiet" type="submit">Turn off notifications</button></form>
+      {% else %}<form class="form-inline" method="post" action="/t/{{ shown.page.thread.id }}/subscribe"><button class="button button-small button-quiet" type="submit">Turn on notifications</button></form>{% endif %}
       <form class="form-inline" method="post" action="/messages/{{ shown.page.thread.id }}/leave"><button class="button button-small button-quiet" type="submit">Leave</button></form>
       {% if let Some(other) = shown.blockable %}<a class="button button-small button-quiet" href="/u/{{ other.username }}/block">Block…</a>{% endif %}
     </div>

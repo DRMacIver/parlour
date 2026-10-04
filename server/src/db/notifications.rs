@@ -7,7 +7,6 @@ use chrono::{DateTime, Utc};
 
 use crate::content::notifications::Kind;
 use crate::db::{Db, Handle, KEY};
-use crate::social::WatchLevel;
 
 /// What a new post means for notifications.
 #[derive(Clone, Debug)]
@@ -16,11 +15,8 @@ pub struct PostFacts {
     pub thread_id: i64,
     /// `None` for a conversation.
     pub space_id: Option<i64>,
-    pub seq: i64,
     pub author_id: i64,
     pub author_is_staff: bool,
-    /// The author of the post this one replies to.
-    pub replied_to: Option<i64>,
     pub body_md: String,
     /// Whether the post is still there to notify about.
     pub live: bool,
@@ -28,13 +24,11 @@ pub struct PostFacts {
 
 pub async fn post_facts(db: &Db, post_id: i64) -> sqlx::Result<Option<PostFacts>> {
     let row = sqlx::query!(
-        r#"SELECT p.id, p.thread_id, t.space_id, p.seq, p.author_id, a.role <> 'user' AS "staff!",
-                  r.author_id AS "replied_to?", p.body_md,
+        r#"SELECT p.id, p.thread_id, t.space_id, p.author_id, a.role <> 'user' AS "staff!", p.body_md,
                   p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL AS "live!"
            FROM posts p
            JOIN threads t ON t.id = p.thread_id
            JOIN users a ON a.id = p.author_id
-           LEFT JOIN posts r ON r.id = p.reply_to_post_id
            WHERE p.id = $1"#,
         post_id
     )
@@ -44,43 +38,21 @@ pub async fn post_facts(db: &Db, post_id: i64) -> sqlx::Result<Option<PostFacts>
         post_id: row.id,
         thread_id: row.thread_id,
         space_id: row.space_id,
-        seq: i64::from(row.seq),
         author_id: row.author_id,
         author_is_staff: row.staff,
-        replied_to: row.replied_to,
         body_md: row.body_md,
         live: row.live,
     }))
 }
 
-/// The members watching a thread or space at some level other than
-/// normal, with their levels.
-pub async fn watchers(
-    db: &Db,
-    thread_id: i64,
-    space_id: Option<i64>,
-) -> sqlx::Result<Vec<(i64, Option<WatchLevel>, Option<WatchLevel>)>> {
-    let rows = sqlx::query!(
-        r#"SELECT u AS "user_id!",
-                  (SELECT level FROM watches w WHERE w.user_id = u AND w.thread_id = $1) AS thread_level,
-                  (SELECT level FROM watches w WHERE w.user_id = u AND w.space_id = $2) AS space_level
-           FROM (SELECT user_id FROM watches WHERE thread_id = $1
-                 UNION SELECT user_id FROM watches WHERE space_id = $2) AS w(u)"#,
-        thread_id,
-        space_id,
+/// The members subscribed to a thread or conversation.
+pub async fn subscribers(db: &Db, thread_id: i64) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar!(
+        "SELECT user_id FROM thread_subscriptions WHERE thread_id = $1 ORDER BY user_id",
+        thread_id
     )
     .fetch_all(db.pool())
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            (
-                row.user_id,
-                row.thread_level.and_then(|l| WatchLevel::parse(&l)),
-                row.space_level.and_then(|l| WatchLevel::parse(&l)),
-            )
-        })
-        .collect())
+    .await
 }
 
 /// The current participants of a conversation.
@@ -278,8 +250,9 @@ pub struct Due {
     pub post_id: Option<i64>,
     pub message: Option<String>,
     pub created_at: DateTime<Utc>,
-    /// The member has since blocked whoever it is from, or muted where it
-    /// happened, so it isn't to be emailed (nor shown, for a block).
+    /// The member has since blocked whoever it is from, or (for a new post
+    /// in a thread or a message) unsubscribed from where it happened, so it
+    /// isn't to be emailed (nor shown, for a block).
     pub quiet: bool,
 }
 
@@ -305,12 +278,10 @@ pub async fn claim_for_email<'c>(
         SELECT c.id, c.kind, c.post_id, c.message, c.created_at,
                (EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id
                         WHERE b.user_id = $1 AND b.blocked_user_id = c.actor_id AND bu.role = 'user')
-                OR coalesce((SELECT coalesce(tw.level, cw.level) = 'muted'
-                             FROM posts p
-                             JOIN threads t ON t.id = p.thread_id
-                             LEFT JOIN watches tw ON tw.user_id = $1 AND tw.thread_id = t.id
-                             LEFT JOIN watches cw ON cw.user_id = $1 AND cw.space_id = t.space_id
-                             WHERE p.id = c.post_id), false)) AS "quiet!"
+                OR (c.kind IN ('subscription', 'message')
+                    AND NOT EXISTS (SELECT 1 FROM posts p
+                                    JOIN thread_subscriptions s ON s.thread_id = p.thread_id
+                                    WHERE p.id = c.post_id AND s.user_id = $1))) AS "quiet!"
         FROM claimed c
         ORDER BY c.created_at, c.id
         "#,

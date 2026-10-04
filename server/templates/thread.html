@@ -16,7 +16,7 @@
   {% if self.can_reply() %}<a class="button" href="#reply">Post reply</a>{% endif %}
   {% if self.logged_in() %}<a href="/t/{{ thread.thread.id }}/unread">First unread</a>{% endif %}
   {% if staff %}<a href="/mod/t/{{ thread.thread.id }}">Moderate thread</a>{% endif %}
-  {% if let Some(level) = watch %}{% call m::watch_form(self.watch_action(), level, "thread") %}{% endcall %}{% endif %}
+  {% if let Some(subscribed) = subscribed %}{% call m::subscription_toggle(thread.thread.id, subscribed) %}{% endcall %}{% endif %}
   <span class="spacer"></span>
   {% call m::pagination(pagination, "Pages") %}{% endcall %}
 </div>

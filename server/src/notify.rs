@@ -4,26 +4,27 @@
 //! A new post queues a `notify` job in the same transaction that writes
 //! it. The job works out who might want to know:
 //!
-//! - in a conversation, everyone else in it (a `message`);
-//! - in a space thread, the author of the post replied to (`reply`),
-//!   members mentioned (`mention`), members watching the thread
-//!   (`watched_thread`), and for a thread's first post members watching its
-//!   space (`watched_space`).
+//! - in a conversation, everyone else in it who is subscribed to it (a
+//!   `message`): everyone in a conversation is, until they unsubscribe;
+//! - in a space thread, members mentioned (`mention`) and members
+//!   subscribed to the thread (`subscription`): its author, and anyone who
+//!   subscribed from its page. Replying subscribes nobody, and nothing
+//!   subscribes anyone to a space.
 //!
-//! Each member gets at most one notification per post, of the most
-//! specific kind. Nobody is notified of their own posts, of posts in
-//! threads (or spaces) they have muted, or of posts by someone they
-//! blocked (unless that someone is staff). And nobody is notified of a post
-//! they can't read: each candidate is checked by asking the access layer
-//! for the post as them.
+//! Each member gets at most one notification per post, a mention rather
+//! than a subscription. Nobody is notified of their own posts, or of posts
+//! by someone they blocked (unless that someone is staff). And nobody is
+//! notified of a post they can't read: each candidate is checked by asking
+//! the access layer for the post as them. Muting a space takes it off a
+//! member's lists (DESIGN.md §3.5), not out of their notifications.
 //!
 //! Each new notification also queues an email job, due once the site's
 //! delay has passed. When it runs it sends one email covering all of the
 //! member's notifications that are still unread, haven't been emailed, are
 //! about posts they can still read, aren't from someone they have since
-//! blocked or somewhere they have since muted, are of kinds they want
-//! emailed, and are newer than the last time the member was seen on the
-//! site.
+//! blocked or (for new posts and messages) in a thread they have since
+//! unsubscribed from, are of kinds they want emailed, and are newer than the
+//! last time the member was seen on the site.
 
 use std::collections::BTreeMap;
 
@@ -43,7 +44,7 @@ use crate::mail;
 use crate::notifications::{self as stored, PostFacts};
 use crate::sessions;
 use crate::settings;
-use crate::social::{self, EmailTopic, WatchLevel};
+use crate::social::{self, EmailTopic};
 use crate::store;
 use crate::tokens;
 use crate::viewer::Viewer;
@@ -69,11 +70,9 @@ pub async fn run_post_job(state: AppState, payload: serde_json::Value) -> anyhow
 /// Which kind wins when one post concerns a member in several ways.
 fn rank(kind: Kind) -> u8 {
     match kind {
-        Kind::Message => 5,
-        Kind::Mention => 4,
-        Kind::Reply => 3,
-        Kind::WatchedThread => 2,
-        Kind::WatchedSpace => 1,
+        Kind::Message => 3,
+        Kind::Mention => 2,
+        Kind::Subscription => 1,
         Kind::Moderation => 0,
     }
 }
@@ -93,48 +92,24 @@ fn consider(candidates: &mut BTreeMap<i64, Kind>, user_id: i64, kind: Kind) {
 async fn candidates(state: &AppState, post: &PostFacts) -> sqlx::Result<BTreeMap<i64, Kind>> {
     let db = state.db();
     let mut candidates = BTreeMap::new();
-    let watchers = stored::watchers(db, post.thread_id, post.space_id).await?;
-    let mut muted = Vec::new();
+    let subscribers = stored::subscribers(db, post.thread_id).await?;
     match post.space_id {
         None => {
             for user in stored::participants(db, post.thread_id).await? {
-                consider(&mut candidates, user, Kind::Message);
-            }
-            for (user, thread, _) in &watchers {
-                if *thread == Some(WatchLevel::Muted) {
-                    muted.push(*user);
+                if subscribers.contains(&user) {
+                    consider(&mut candidates, user, Kind::Message);
                 }
             }
         }
         Some(_) => {
-            if let Some(author) = post.replied_to {
-                consider(&mut candidates, author, Kind::Reply);
+            for user in subscribers {
+                consider(&mut candidates, user, Kind::Subscription);
             }
             let mentioned = store::render_post(db, &post.body_md).await?.mentions;
             for user in stored::ids_named(db, &mentioned).await? {
                 consider(&mut candidates, user, Kind::Mention);
             }
-            for (user, thread, space) in watchers {
-                // A thread's own setting wins over its space's.
-                let level = thread.or(match space {
-                    Some(WatchLevel::Muted) => Some(WatchLevel::Muted),
-                    _ => None,
-                });
-                match level {
-                    Some(WatchLevel::Muted) => muted.push(user),
-                    Some(WatchLevel::Watching) => {
-                        consider(&mut candidates, user, Kind::WatchedThread)
-                    }
-                    _ => {}
-                }
-                if post.seq == 1 && space == Some(WatchLevel::Watching) {
-                    consider(&mut candidates, user, Kind::WatchedSpace);
-                }
-            }
         }
-    }
-    for user in muted {
-        candidates.remove(&user);
     }
     candidates.remove(&post.author_id);
     if !post.author_is_staff {
@@ -243,10 +218,9 @@ pub async fn seen_thread(
 /// The email preference that covers a kind of notification.
 pub fn topic(kind: Kind) -> EmailTopic {
     match kind {
-        Kind::Reply => EmailTopic::Replies,
         Kind::Mention => EmailTopic::Mentions,
+        Kind::Subscription => EmailTopic::Subscriptions,
         Kind::Message => EmailTopic::Messages,
-        Kind::WatchedThread | Kind::WatchedSpace => EmailTopic::Watching,
         Kind::Moderation => EmailTopic::Moderation,
     }
 }
@@ -311,8 +285,8 @@ pub async fn email_if_away(state: &AppState, id: i64) -> anyhow::Result<bool> {
     let mut items = Vec::new();
     let mut topics = Vec::new();
     for due in &due {
-        // They have since blocked whoever it's from, or muted where it
-        // happened.
+        // They have since blocked whoever it's from, or unsubscribed from
+        // where it happened.
         if due.quiet {
             continue;
         }
@@ -393,13 +367,14 @@ pub async fn email_if_away(state: &AppState, id: i64) -> anyhow::Result<bool> {
 /// The token in an unsubscribe link: who and what, signed with the site's
 /// secret so it can't be made up, and needing nothing stored.
 pub fn unsubscribe_token(secret: &[u8], user_id: i64, topic: EmailTopic) -> String {
-    let message = format!("unsubscribe:{user_id}:{}", topic.as_str());
+    signed_token(secret, user_id, topic.as_str())
+}
+
+/// A token for a topic by the name it had when the link was made.
+fn signed_token(secret: &[u8], user_id: i64, topic: &str) -> String {
+    let message = format!("unsubscribe:{user_id}:{topic}");
     let mac = tokens::sign(secret, &message);
-    format!(
-        "{user_id}.{}.{}",
-        topic.as_str(),
-        URL_SAFE_NO_PAD.encode(&mac[..16])
-    )
+    format!("{user_id}.{topic}.{}", URL_SAFE_NO_PAD.encode(&mac[..16]))
 }
 
 /// The member and topic an unsubscribe token names, if it is genuine.
@@ -412,9 +387,11 @@ pub fn check_unsubscribe_token(secret: &[u8], token: &str) -> Option<(i64, Email
     if user != user_id.to_string() {
         return None;
     }
-    let topic = EmailTopic::parse(topic)?;
-    let expected = unsubscribe_token(secret, user_id, topic);
-    tokens::same(expected.as_bytes(), token.as_bytes()).then_some((user_id, topic))
+    // Checked against the name in the link, which may be one a topic had
+    // before (see `EmailTopic::parse`).
+    let parsed = EmailTopic::parse(topic)?;
+    let expected = signed_token(secret, user_id, topic);
+    tokens::same(expected.as_bytes(), token.as_bytes()).then_some((user_id, parsed))
 }
 
 #[cfg(test)]
@@ -426,13 +403,50 @@ mod tests {
     #[test]
     fn the_most_specific_kind_wins() {
         let mut c = BTreeMap::new();
-        consider(&mut c, 1, Kind::WatchedThread);
+        consider(&mut c, 1, Kind::Subscription);
         consider(&mut c, 1, Kind::Mention);
-        consider(&mut c, 1, Kind::Reply);
+        consider(&mut c, 1, Kind::Subscription);
         assert_eq!(c[&1], Kind::Mention);
-        consider(&mut c, 2, Kind::WatchedSpace);
-        consider(&mut c, 2, Kind::WatchedThread);
-        assert_eq!(c[&2], Kind::WatchedThread);
+        consider(&mut c, 2, Kind::Mention);
+        consider(&mut c, 2, Kind::Message);
+        assert_eq!(c[&2], Kind::Message);
+    }
+
+    #[test]
+    fn every_kind_has_an_email_topic_of_its_own() {
+        let kinds = [
+            Kind::Mention,
+            Kind::Subscription,
+            Kind::Message,
+            Kind::Moderation,
+        ];
+        for kind in kinds {
+            assert_eq!(Kind::parse(kind.as_str()), Some(kind));
+            assert_ne!(topic(kind), EmailTopic::All);
+        }
+        assert_eq!(topic(Kind::Subscription), EmailTopic::Subscriptions);
+        for old in ["reply", "watched_thread", "watched_space"] {
+            assert_eq!(Kind::parse(old), None);
+        }
+    }
+
+    /// Unsubscribe links in emails sent before milestone 11 name topics
+    /// that have since been renamed or folded into subscriptions; they
+    /// still work, and turn off the emails about subscribed threads.
+    #[test]
+    fn links_from_before_subscriptions_still_unsubscribe() {
+        let secret = b"secret";
+        for old in ["watching", "replies"] {
+            let mac = tokens::sign(secret, &format!("unsubscribe:7:{old}"));
+            let token = format!("7.{old}.{}", URL_SAFE_NO_PAD.encode(&mac[..16]));
+            assert_eq!(
+                check_unsubscribe_token(secret, &token),
+                Some((7, EmailTopic::Subscriptions))
+            );
+            // And can't be turned into a link for another member.
+            let forged = format!("8.{old}.{}", URL_SAFE_NO_PAD.encode(&mac[..16]));
+            assert_eq!(check_unsubscribe_token(secret, &forged), None);
+        }
     }
 
     #[hegel::test(test_cases = 300)]

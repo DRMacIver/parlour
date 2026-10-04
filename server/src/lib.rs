@@ -288,12 +288,18 @@ pub fn app(state: AppState) -> Router {
         .route("/c/{slug}/archive", post(space_pages::archive))
         .route("/c/{slug}/unarchive", post(space_pages::unarchive))
         .route("/c/{slug}/delete", post(space_pages::delete))
-        .route("/c/{slug}/watch", post(notification_pages::watch_space))
         .route("/c/{slug}/follow", post(space_pages::follow))
         .route("/c/{slug}/unfollow", post(space_pages::unfollow))
         .route("/c/{slug}/mute", post(space_pages::mute))
         .route("/c/{slug}/unmute", post(space_pages::unmute))
-        .route("/t/{id}/watch", post(notification_pages::watch_thread))
+        .route(
+            "/t/{id}/subscribe",
+            post(notification_pages::subscribe_thread),
+        )
+        .route(
+            "/t/{id}/unsubscribe",
+            post(notification_pages::unsubscribe_thread),
+        )
         .route(
             "/t/{id}/reply",
             get(write_pages::reply_page).post(write_pages::reply),

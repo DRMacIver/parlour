@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq, t.pinned, t.locked, t.forked_from_post_id,\n               c.id AS \"space_id!\", c.slug AS \"space_slug!\", c.name AS \"space_name!\",\n               c.description AS \"space_description!\", c.essential AS \"essential!\",\n               c.visibility AS \"visibility!\", c.created_by AS \"created_by?\",\n               c.created_at AS \"space_created_at!\", c.archived_at AS \"archived_at?\",\n               c.read_level AS \"read_level!\", c.read_group_ids AS \"read_group_ids!\", c.read_user_ids AS \"read_user_ids!\",\n               c.reply_level AS \"reply_level!\", c.reply_group_ids AS \"reply_group_ids!\", c.reply_user_ids AS \"reply_user_ids!\",\n               c.start_level AS \"start_level!\", c.start_group_ids AS \"start_group_ids!\", c.start_user_ids AS \"start_user_ids!\",\n               c.administer_level AS \"administer_level!\", c.administer_group_ids AS \"administer_group_ids!\",\n               c.administer_user_ids AS \"administer_user_ids!\",\n               c.read_group_names AS \"group_names!\",\n               (SELECT tr.last_read_seq FROM thread_reads tr\n                WHERE tr.thread_id = t.id AND tr.user_id = $4) AS read_marker,\n               (SELECT w.level FROM watches w\n                WHERE w.user_id = $5 AND w.thread_id = t.id AND w.space_id IS NULL) AS \"watch_level?\",\n               a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name\n        FROM threads t\n        JOIN space_targets c ON c.id = t.space_id\n        JOIN users a ON a.id = t.author_id\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.space_id, $2, $3)\n        ",
+  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq, t.pinned, t.locked, t.forked_from_post_id,\n               c.id AS \"space_id!\", c.slug AS \"space_slug!\", c.name AS \"space_name!\",\n               c.description AS \"space_description!\", c.essential AS \"essential!\",\n               c.visibility AS \"visibility!\", c.created_by AS \"created_by?\",\n               c.created_at AS \"space_created_at!\", c.archived_at AS \"archived_at?\",\n               c.read_level AS \"read_level!\", c.read_group_ids AS \"read_group_ids!\", c.read_user_ids AS \"read_user_ids!\",\n               c.reply_level AS \"reply_level!\", c.reply_group_ids AS \"reply_group_ids!\", c.reply_user_ids AS \"reply_user_ids!\",\n               c.start_level AS \"start_level!\", c.start_group_ids AS \"start_group_ids!\", c.start_user_ids AS \"start_user_ids!\",\n               c.administer_level AS \"administer_level!\", c.administer_group_ids AS \"administer_group_ids!\",\n               c.administer_user_ids AS \"administer_user_ids!\",\n               c.read_group_names AS \"group_names!\",\n               (SELECT tr.last_read_seq FROM thread_reads tr\n                WHERE tr.thread_id = t.id AND tr.user_id = $4) AS read_marker,\n               EXISTS (SELECT 1 FROM thread_subscriptions s\n                       WHERE s.user_id = $5 AND s.thread_id = t.id) AS \"subscribed!\",\n               a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name\n        FROM threads t\n        JOIN space_targets c ON c.id = t.space_id\n        JOIN users a ON a.id = t.author_id\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.space_id, $2, $3)\n        ",
   "describe": {
     "columns": [
       {
@@ -341,8 +341,8 @@
       },
       {
         "ordinal": 31,
-        "name": "watch_level?",
-        "type_info": "Text",
+        "name": "subscribed!",
+        "type_info": "Bool",
         "origin": "Expression"
       },
       {
@@ -431,5 +431,5 @@
       false
     ]
   },
-  "hash": "6f39308ec9863aa1182b64ef8166a3b85e7abc725b276a6cfa12372587e71074"
+  "hash": "cdbd6caa9ed0db5c628cad0fe63c90704750b7b58e5be0d918df4a11c12eeddb"
 }

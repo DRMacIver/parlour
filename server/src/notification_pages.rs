@@ -3,8 +3,9 @@
 //! - `/notifications`: the member's notifications, newest first, each
 //!   linking (through `/notifications/{id}`, which marks it read) to its
 //!   post; "Mark all read".
-//! - `POST /t/{id}/watch` and `POST /c/{slug}/watch`: watch, follow
-//!   normally or mute a thread, conversation or space.
+//! - `POST /t/{id}/subscribe` and `POST /t/{id}/unsubscribe`: the toggle on
+//!   a thread's page, and on a conversation's for the people in it. Nothing
+//!   subscribes anyone to a space.
 //! - `POST /settings/messages` and `POST /settings/notifications`: who may
 //!   message the member, and which notifications they want emailed.
 //! - `/unsubscribe/{token}`: the one-click unsubscribe link in notification
@@ -32,7 +33,7 @@ use crate::notify::{self, EmailItem};
 use crate::pages::parse_id;
 use crate::pagination::{PageItem, Pagination};
 use crate::settings::{self, MessageSettings, NotificationSettings};
-use crate::social::{self, DmPolicy, EmailPrefs, EmailTopic, WatchLevel, Watched};
+use crate::social::{self, DmPolicy, EmailPrefs, EmailTopic};
 use crate::viewer::Viewer;
 use crate::web::{self, Layout, Nav, render, see_other};
 
@@ -133,68 +134,51 @@ pub async fn mark_all_read(
 }
 
 // ---------------------------------------------------------------------------
-// Watching
+// Subscribing
 
-fn watch_level(fields: &Fields) -> Option<WatchLevel> {
-    field(fields, "level").and_then(WatchLevel::parse)
-}
-
-pub async fn watch_thread(
+pub async fn subscribe_thread(
     State(state): State<AppState>,
     viewer: Viewer,
     Path(id): Path<String>,
-    Form(fields): Form<Fields>,
+) -> Result<Response, AppError> {
+    set_subscribed(&state, &viewer, &id, true).await
+}
+
+pub async fn unsubscribe_thread(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    set_subscribed(&state, &viewer, &id, false).await
+}
+
+/// Subscribes the viewer to a thread they can read, or a conversation they
+/// are in, or unsubscribes them, and goes back to its page.
+async fn set_subscribed(
+    state: &AppState,
+    viewer: &Viewer,
+    id: &str,
+    on: bool,
 ) -> Result<Response, AppError> {
     let Some(user) = viewer.user() else {
         return Ok(web::login_first(&format!("/t/{id}")));
     };
-    let Some(thread_id) = parse_id(&id) else {
-        return web::not_found(&state, &viewer).await;
+    let Some(thread_id) = parse_id(id) else {
+        return web::not_found(state, viewer).await;
     };
-    let Some(thread) = content::thread_target(state.db(), &viewer, thread_id).await? else {
-        return web::not_found(&state, &viewer).await;
+    let Some(thread) = content::thread_target(state.db(), viewer, thread_id).await? else {
+        return web::not_found(state, viewer).await;
     };
-    let Some(level) = watch_level(&fields) else {
-        return web::message(
-            &state,
-            &viewer,
-            StatusCode::BAD_REQUEST,
-            "That didn’t work",
-            &["Choose watching, normal or muted."],
-            Some((&thread.href(), "Go back")),
-        )
-        .await;
-    };
-    social::set_watch(state.db(), user.id, Watched::Thread(thread_id), level).await?;
+    // Staff reading a reported conversation aren't in it, and have nothing
+    // to be told about.
+    if thread
+        .conversation()
+        .is_some_and(|conversation| !conversation.includes(user.id))
+    {
+        return web::not_found(state, viewer).await;
+    }
+    social::set_subscribed(state.db(), user.id, thread_id, on).await?;
     Ok(see_other(&thread.href()))
-}
-
-pub async fn watch_space(
-    State(state): State<AppState>,
-    viewer: Viewer,
-    Path(slug): Path<String>,
-    Form(fields): Form<Fields>,
-) -> Result<Response, AppError> {
-    let Some(user) = viewer.user() else {
-        return Ok(web::login_first(&format!("/c/{slug}")));
-    };
-    let Some(space) = content::space_target(state.db(), &viewer, &slug).await? else {
-        return web::not_found(&state, &viewer).await;
-    };
-    let back = format!("/c/{}", space.space.slug);
-    let Some(level) = watch_level(&fields) else {
-        return web::message(
-            &state,
-            &viewer,
-            StatusCode::BAD_REQUEST,
-            "That didn’t work",
-            &["Choose watching, normal or muted."],
-            Some((&back, "Go back")),
-        )
-        .await;
-    };
-    social::set_watch(state.db(), user.id, Watched::Space(space.space.id), level).await?;
-    Ok(see_other(&back))
 }
 
 // ---------------------------------------------------------------------------
@@ -233,10 +217,9 @@ pub async fn save_email_prefs(
     };
     let on = |name: &str| field(&fields, name).is_some();
     let prefs = EmailPrefs {
-        replies: on("replies"),
         mentions: on("mentions"),
         messages: on("messages"),
-        watching: on("watching"),
+        subscriptions: on("subscriptions"),
         moderation: on("moderation"),
     };
     social::set_email_prefs(state.db(), user.id, &prefs).await?;

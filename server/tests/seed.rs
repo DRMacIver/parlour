@@ -368,6 +368,20 @@ async fn seed_has_conversations_and_notifications(pool: PgPool) {
         notifications.contains("Tuesday 7th: Brass"),
         "{notifications}"
     );
+    // She subscribed to the September thread, and hears of its new posts.
+    let subscribed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM thread_subscriptions s JOIN threads t ON t.id = s.thread_id
+         JOIN users u ON u.id = s.user_id
+         WHERE u.username = 'priya' AND t.title = 'What did you play this week? (September)'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(subscribed, 1);
+    assert!(
+        notifications.contains("posted in <a href=\"/notifications/"),
+        "{notifications}"
+    );
     // Jonah is in none of them.
     let jonah = f.session(id("jonah").await).await;
     let list = f.page_as("/messages", &jonah).await;

@@ -15,6 +15,7 @@ use chrono::{DateTime, Utc};
 use crate::layouts;
 use crate::markdown;
 use crate::permissions::{Grant, Level};
+use crate::social;
 
 /// Turns a title into the readable part of a thread URL.
 pub fn slugify(title: &str) -> String {
@@ -37,14 +38,15 @@ pub fn slugify(title: &str) -> String {
     if slug.is_empty() {
         slug.push_str("thread");
     }
-    // `/t/{id}/unread` and `/t/{id}/reply` are routes of their own.
+    // `/t/{id}/unread`, `/t/{id}/reply`, `/t/{id}/subscribe` and
+    // `/t/{id}/unsubscribe` are routes of their own.
     if RESERVED_SLUGS.contains(&slug.as_str()) {
         slug.push_str("-thread");
     }
     slug
 }
 
-const RESERVED_SLUGS: &[&str] = &["unread", "reply", "watch"];
+const RESERVED_SLUGS: &[&str] = &["unread", "reply", "subscribe", "unsubscribe"];
 
 #[derive(Clone, Debug, Default)]
 pub struct NewUser {
@@ -470,7 +472,8 @@ pub struct CreatedThread {
 }
 
 /// Creates a thread together with its first post. The author has read
-/// that post, having written it, so the thread isn't new to them.
+/// that post, having written it, so the thread isn't new to them, and is
+/// subscribed to the thread (DESIGN.md §9).
 pub async fn create_thread<'c>(
     db: impl Handle<'c>,
     thread: &NewThread,
@@ -505,6 +508,7 @@ pub async fn create_thread<'c>(
     )
     .await?;
     mark_read(&mut *tx, thread.author_id, thread_id, 1).await?;
+    social::set_subscribed(&mut *tx, thread.author_id, thread_id, true).await?;
     tx.commit().await?;
     Ok(CreatedThread {
         thread_id,
@@ -608,7 +612,7 @@ pub struct NewConversation {
 }
 
 /// Starts a conversation: a private thread, its participants (the author
-/// and the recipients) and its first message.
+/// and the recipients, each subscribed to it) and its first message.
 pub async fn create_conversation<'c>(
     db: impl Handle<'c>,
     conversation: &NewConversation,
@@ -637,6 +641,13 @@ pub async fn create_conversation<'c>(
     )
     .execute(&mut *tx)
     .await?;
+    sqlx::query!(
+        "INSERT INTO thread_subscriptions (user_id, thread_id)
+         SELECT user_id, thread_id FROM private_thread_participants WHERE thread_id = $1",
+        thread_id,
+    )
+    .execute(&mut *tx)
+    .await?;
     let first_post_id = insert_post(
         &mut tx,
         &NewPost {
@@ -655,15 +666,15 @@ pub async fn create_conversation<'c>(
     })
 }
 
-/// Adds someone to a conversation, or back to one they left. Returns
-/// whether they weren't in it already.
+/// Adds someone to a conversation, or back to one they left, subscribed
+/// to it. Returns whether they weren't in it already.
 pub async fn add_participant<'c>(
     db: impl Handle<'c>,
     thread_id: i64,
     user_id: i64,
     added_by: i64,
 ) -> sqlx::Result<bool> {
-    let mut conn = db.open(KEY).acquire().await?;
+    let mut tx = db.open(KEY).begin().await?;
     let done = sqlx::query!(
         r#"INSERT INTO private_thread_participants (thread_id, user_id, added_by) VALUES ($1, $2, $3)
            ON CONFLICT (thread_id, user_id)
@@ -673,26 +684,34 @@ pub async fn add_participant<'c>(
         user_id,
         added_by,
     )
-    .execute(&mut *conn)
+    .execute(&mut *tx)
     .await?;
-    Ok(done.rows_affected() == 1)
+    let added = done.rows_affected() == 1;
+    if added {
+        social::set_subscribed(&mut *tx, user_id, thread_id, true).await?;
+    }
+    tx.commit().await?;
+    Ok(added)
 }
 
-/// Takes someone out of a conversation. Returns whether they were in it.
+/// Takes someone out of a conversation, and so unsubscribes them from it.
+/// Returns whether they were in it.
 pub async fn leave_conversation<'c>(
     db: impl Handle<'c>,
     thread_id: i64,
     user_id: i64,
 ) -> sqlx::Result<bool> {
-    let mut conn = db.open(KEY).acquire().await?;
+    let mut tx = db.open(KEY).begin().await?;
     let done = sqlx::query!(
         "UPDATE private_thread_participants SET left_at = now()
          WHERE thread_id = $1 AND user_id = $2 AND left_at IS NULL",
         thread_id,
         user_id,
     )
-    .execute(&mut *conn)
+    .execute(&mut *tx)
     .await?;
+    social::set_subscribed(&mut *tx, user_id, thread_id, false).await?;
+    tx.commit().await?;
     Ok(done.rows_affected() == 1)
 }
 
@@ -989,7 +1008,7 @@ pub async fn change_reaction_type<'c>(
 
 #[cfg(test)]
 mod tests {
-    use super::slugify;
+    use super::{RESERVED_SLUGS, slugify};
     use hegel::TestCase;
     use hegel::generators as gs;
 
@@ -1007,6 +1026,8 @@ mod tests {
         assert_eq!(slugify("Ünïcødé"), "n-c-d");
         assert_eq!(slugify("Unread!"), "unread-thread");
         assert_eq!(slugify("Reply"), "reply-thread");
+        assert_eq!(slugify("Subscribe"), "subscribe-thread");
+        assert_eq!(slugify("Unsubscribe?"), "unsubscribe-thread");
     }
 
     #[hegel::test(test_cases = 500)]
@@ -1014,8 +1035,9 @@ mod tests {
         let title = tc.draw(gs::text());
         let slug = slugify(&title);
         assert!(!slug.is_empty() && slug.len() <= 67, "{slug:?}");
-        assert_ne!(slug, "unread");
-        assert_ne!(slug, "reply");
+        for route in RESERVED_SLUGS {
+            assert_ne!(slug, *route);
+        }
         assert!(
             !slug.starts_with('-') && !slug.ends_with('-') && !slug.contains("--"),
             "{slug:?}"

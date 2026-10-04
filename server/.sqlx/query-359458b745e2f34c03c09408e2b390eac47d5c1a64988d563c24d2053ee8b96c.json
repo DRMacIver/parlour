@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        WITH claimed AS (\n            UPDATE notifications SET emailed_at = now()\n            WHERE user_id = $1 AND read_at IS NULL AND emailed_at IS NULL AND created_at <= $2\n            RETURNING id, kind, post_id, message, created_at, actor_id\n        )\n        SELECT c.id, c.kind, c.post_id, c.message, c.created_at,\n               (EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id\n                        WHERE b.user_id = $1 AND b.blocked_user_id = c.actor_id AND bu.role = 'user')\n                OR coalesce((SELECT coalesce(tw.level, cw.level) = 'muted'\n                             FROM posts p\n                             JOIN threads t ON t.id = p.thread_id\n                             LEFT JOIN watches tw ON tw.user_id = $1 AND tw.thread_id = t.id\n                             LEFT JOIN watches cw ON cw.user_id = $1 AND cw.space_id = t.space_id\n                             WHERE p.id = c.post_id), false)) AS \"quiet!\"\n        FROM claimed c\n        ORDER BY c.created_at, c.id\n        ",
+  "query": "\n        WITH claimed AS (\n            UPDATE notifications SET emailed_at = now()\n            WHERE user_id = $1 AND read_at IS NULL AND emailed_at IS NULL AND created_at <= $2\n            RETURNING id, kind, post_id, message, created_at, actor_id\n        )\n        SELECT c.id, c.kind, c.post_id, c.message, c.created_at,\n               (EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id\n                        WHERE b.user_id = $1 AND b.blocked_user_id = c.actor_id AND bu.role = 'user')\n                OR (c.kind IN ('subscription', 'message')\n                    AND NOT EXISTS (SELECT 1 FROM posts p\n                                    JOIN thread_subscriptions s ON s.thread_id = p.thread_id\n                                    WHERE p.id = c.post_id AND s.user_id = $1))) AS \"quiet!\"\n        FROM claimed c\n        ORDER BY c.created_at, c.id\n        ",
   "describe": {
     "columns": [
       {
@@ -80,5 +80,5 @@
       null
     ]
   },
-  "hash": "8fa9bb1eb97005a5581715a0c7ded065f46e01d4555969712f327867c4aa675f"
+  "hash": "359458b745e2f34c03c09408e2b390eac47d5c1a64988d563c24d2053ee8b96c"
 }

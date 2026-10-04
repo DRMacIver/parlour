@@ -735,9 +735,8 @@ pub struct ThreadPage {
     /// number of the last post they'd seen, or `None` if they had never
     /// opened the thread.
     pub read_marker: Option<i64>,
-    /// For a logged-in viewer, how closely they follow the thread, as
-    /// stored (`None` if they never chose).
-    pub watch_level: Option<String>,
+    /// Whether the viewer (if logged in) is subscribed to the thread.
+    pub subscribed: bool,
 }
 
 impl ThreadPage {
@@ -866,8 +865,8 @@ pub async fn thread_page(
                c.read_group_names AS "group_names!",
                (SELECT tr.last_read_seq FROM thread_reads tr
                 WHERE tr.thread_id = t.id AND tr.user_id = $4) AS read_marker,
-               (SELECT w.level FROM watches w
-                WHERE w.user_id = $5 AND w.thread_id = t.id AND w.space_id IS NULL) AS "watch_level?",
+               EXISTS (SELECT 1 FROM thread_subscriptions s
+                       WHERE s.user_id = $5 AND s.thread_id = t.id) AS "subscribed!",
                a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name
         FROM threads t
         JOIN space_targets c ON c.id = t.space_id
@@ -950,7 +949,7 @@ pub async fn thread_page(
         embed,
         posts,
         read_marker: thread.read_marker.map(i64::from),
-        watch_level: thread.watch_level,
+        subscribed: thread.subscribed,
     }))
 }
 

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM thread_subscriptions\n                          WHERE user_id = $1 AND thread_id = $2) AS \"subscribed!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "subscribed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a89293a3674e52014b4fde4f1089c6eb32caba67706c6c52815c33505f23a8c4"
+}

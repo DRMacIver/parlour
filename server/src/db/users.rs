@@ -424,7 +424,7 @@ pub enum Deletion {
 /// them in the posts that mention or quote them.
 /// Their picture is deleted too, unless a post shows the same image.
 /// Everything else that is theirs alone goes: sessions, tokens, recorded
-/// addresses, notifications, reactions, watches, blocks, read markers,
+/// addresses, notifications, reactions, thread subscriptions, blocks, read markers,
 /// group memberships, their front page and mutes, and staff notes about
 /// them. They leave their conversations, unused invites are revoked, and
 /// posts waiting for approval are rejected.
@@ -491,7 +491,7 @@ pub async fn delete_account(db: &Db, user_id: i64) -> sqlx::Result<Deletion> {
     remove!("DELETE FROM user_ips WHERE user_id = $1");
     remove!("DELETE FROM notifications WHERE user_id = $1");
     remove!("DELETE FROM reactions WHERE user_id = $1");
-    remove!("DELETE FROM watches WHERE user_id = $1");
+    remove!("DELETE FROM thread_subscriptions WHERE user_id = $1");
     remove!("DELETE FROM blocks WHERE user_id = $1 OR blocked_user_id = $1");
     remove!("DELETE FROM thread_reads WHERE user_id = $1");
     remove!("DELETE FROM group_members WHERE user_id = $1");

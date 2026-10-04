@@ -1,7 +1,7 @@
 //! A member's own data, for them to download (DESIGN.md §2): their
 //! account and profile, everything they wrote (with earlier versions),
 //! their posts held for approval, reactions, conversations,
-//! notifications, invites, groups, blocks, watches, how they have
+//! notifications, invites, groups, blocks, thread subscriptions, how they have
 //! arranged their front page and what they have muted, uploads, reports,
 //! sessions and the addresses recorded for them.
 //!
@@ -143,11 +143,20 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
     )
     .fetch_all(pool)
     .await?;
-    let watches = sqlx::query!(
-        r#"SELECT w.thread_id, w.space_id, w.level, c.slug AS "space_slug?"
-           FROM watches w LEFT JOIN spaces c ON c.id = w.space_id
-           WHERE w.user_id = $1 ORDER BY w.updated_at"#,
-        user_id
+    // The threads and conversations they are subscribed to, named only
+    // if they may read them now.
+    let subscriptions = sqlx::query!(
+        r#"SELECT s.thread_id,
+                  CASE WHEN t.deleted_at IS NULL
+                        AND (thread_readable(t.visibility, t.space_id, $2, $3)
+                             OR dm_readable(t.id, t.visibility, $4))
+                       THEN t.title END AS title
+           FROM thread_subscriptions s JOIN threads t ON t.id = s.thread_id
+           WHERE s.user_id = $1 ORDER BY s.thread_id"#,
+        user_id,
+        &filter.visibilities,
+        &filter.restricted_space_ids,
+        filter.dm_viewer,
     )
     .fetch_all(pool)
     .await?;
@@ -275,10 +284,9 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
         "invited_members": invited,
         "groups": groups,
         "blocked_members": blocks,
-        "watches": watches.iter().map(|w| json!({
-            "thread_id": w.thread_id,
-            "space": w.space_slug,
-            "level": w.level,
+        "thread_subscriptions": subscriptions.iter().map(|s| json!({
+            "thread_id": s.thread_id,
+            "title": s.title,
         })).collect::<Vec<_>>(),
         "front_page": layout.map(|l| json!({
             "edited_at": l.edited_at,
