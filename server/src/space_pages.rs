@@ -29,7 +29,7 @@ use crate::admin_pages::DoneQuery;
 use crate::changes::Change;
 use crate::content::{self, Deps, SpaceListing, SpaceSort, SpaceTarget};
 use crate::error::AppError;
-use crate::groups::{self, GroupSummary};
+use crate::groups::{self, GroupChoice};
 use crate::layouts::{self, MuteOutcome, Section};
 use crate::mod_records::{self, NewAction};
 use crate::permissions::{Grant, Level};
@@ -507,7 +507,7 @@ impl SettingsForm {
     async fn settings(
         &self,
         state: &AppState,
-        groups: &[GroupSummary],
+        groups: &[GroupChoice],
     ) -> Result<Result<SpaceSettings, Vec<String>>, AppError> {
         let mut problems = Vec::new();
         let mut grants = Vec::new();
@@ -583,7 +583,8 @@ struct SettingsTemplate {
     form: SettingsForm,
     /// The default front page's sections, for staff to choose from.
     sections: Vec<Section>,
-    groups: Vec<GroupSummary>,
+    /// The groups and lists the viewer may name (DESIGN.md §3.3).
+    groups: Vec<GroupChoice>,
     /// Staff also place the space on the default front page.
     staff: bool,
     /// Admins also mark it essential.
@@ -606,6 +607,22 @@ async fn default_sections(state: &AppState) -> Result<Vec<Section>, AppError> {
         .await?
         .map(|layout| layout.sections)
         .unwrap_or_default())
+}
+
+/// The groups and lists the viewer may name in the space's grants: the
+/// site's groups, the lists they own or are on, and whatever lists the
+/// grants name already, which are kept without being explained to them.
+async fn choosable(
+    state: &AppState,
+    viewer: &Viewer,
+    space: &SpaceTarget,
+) -> Result<Vec<GroupChoice>, AppError> {
+    let rules = &space.rules;
+    let named: Vec<i64> = [&rules.read, &rules.reply, &rules.start, &rules.administer]
+        .iter()
+        .flat_map(|grant| grant.group_ids())
+        .collect();
+    Ok(groups::choosable(state.db(), viewer.user_id(), &named).await?)
 }
 
 /// The space at `slug` if the viewer administers it, or the page for
@@ -643,7 +660,7 @@ async fn render_settings(
             layout: Layout::load(state, viewer, Nav::None).await?,
             thread_count: content::space_thread_count(db, viewer, space.space.id).await?,
             sections: default_sections(state).await?,
-            groups: groups::list(db).await?,
+            groups: choosable(state, viewer, &space).await?,
             staff: viewer.is_staff(),
             admin: viewer.is_admin(),
             space,
@@ -741,7 +758,9 @@ pub async fn save_settings(
     };
     let db = state.db();
     let form = SettingsForm::from_fields(&fields);
-    let mut settings = form.settings(&state, &groups::list(db).await?).await?;
+    let mut settings = form
+        .settings(&state, &choosable(&state, &viewer, &space).await?)
+        .await?;
     // Where it goes on the default front page is for staff to say.
     let section = if viewer.is_staff() {
         match form.section(&default_sections(&state).await?) {

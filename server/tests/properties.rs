@@ -4,7 +4,10 @@
 //! edits (inside and after the grace period, so that some edits keep
 //! history), reacts to, deletes, hides, moves and renames them, changes
 //! space levels and read groups, moves the logged-in member in and out
-//! of groups, and reports each change as a write handler would.
+//! of groups and on and off a list of another member's (DESIGN.md §3.3),
+//! and reports each change as a write handler would. A list lets in its
+//! owner as well as the people on it, and its name is a token that only
+//! the people on it may see: anyone else is told only whose choice it is.
 //! Throughout:
 //!
 //! - every page served through the anonymous cache is identical to the same
@@ -66,6 +69,7 @@ use parlour::content::{
 use parlour::db::Db;
 use parlour::groups::{self, GroupFields};
 use parlour::layouts::{self, MuteOutcome};
+use parlour::lists;
 use parlour::pagination::page_href;
 use parlour::permissions::{Grant, Level};
 use parlour::sessions;
@@ -236,8 +240,12 @@ struct World {
     member_cookie: String,
     staff_cookie: String,
     /// Group ids, and the member viewer's id and groups (indexes into
-    /// `groups`).
+    /// `groups`). Some of the groups are lists (DESIGN.md §3.3): for each
+    /// group, its owner if it is one, and the name of the list, a token
+    /// that only its owner and the people on it may see.
     groups: Vec<i64>,
+    list_owners: Vec<Option<i64>>,
+    list_tokens: Vec<Option<String>>,
     member_id: i64,
     member_groups: BTreeSet<usize>,
     staff_id: i64,
@@ -293,6 +301,8 @@ impl World {
             member_cookie: String::new(),
             staff_cookie: String::new(),
             groups: Vec::new(),
+            list_owners: Vec::new(),
+            list_tokens: Vec::new(),
             member_id: 0,
             member_groups: BTreeSet::new(),
             staff_id: 0,
@@ -360,10 +370,43 @@ impl World {
         for n in 0..2 {
             let id = world.block(world.cached.group(&format!("g{n}"), &format!("Group {n}")));
             world.groups.push(id);
+            world.list_owners.push(None);
+            world.list_tokens.push(None);
         }
-        for level in ["public", "public", "members", "listed"] {
+        // Two lists: Ruth's Friends, renamed to a token so that any page
+        // showing its name to someone not on it is caught, and the member
+        // viewer's own Friends.
+        let ruth = world.users[0];
+        let ruths = world
+            .block(lists::friends_id(world.cached.state.db(), ruth))
+            .unwrap()
+            .expect("every member has a Friends list");
+        let token = world.token();
+        let name = format!("List {token}");
+        assert_eq!(
+            world
+                .block(lists::rename(world.cached.state.db(), ruth, ruths, &name))
+                .unwrap(),
+            lists::Change::Done
+        );
+        world.groups.push(ruths);
+        world.list_owners.push(Some(ruth));
+        world.list_tokens.push(Some(token));
+        let own = world
+            .block(lists::friends_id(world.cached.state.db(), world.member_id))
+            .unwrap()
+            .expect("every member has a Friends list");
+        world.groups.push(own);
+        world.list_owners.push(Some(world.member_id));
+        world.list_tokens.push(None);
+        for level in ["public", "public", "members", "listed", "listed"] {
             world.add_space(level);
         }
+        // From the start, one listed space names a group and Ruth's list,
+        // and the other the member viewer's own list, so that what a list
+        // lets through and how it is named are checked from the first step.
+        world.name_read_groups(3, BTreeSet::from([0, 2]));
+        world.name_read_groups(4, BTreeSet::from([3]));
         // Everyone can be emailed, as soon as a notification is made.
         world.exec("UPDATE users SET email_verified_at = now()".to_owned());
         world
@@ -429,6 +472,39 @@ impl World {
         });
     }
 
+    /// Has space `c`'s read grant name these groups and lists (indexes
+    /// into `groups`), keeping its level: they matter only to a listed
+    /// space.
+    fn name_read_groups(&mut self, c: usize, read_groups: BTreeSet<usize>) {
+        let space = &self.spaces[c];
+        let group_ids: Vec<i64> = read_groups.iter().map(|&g| self.groups[g]).collect();
+        let settings = SpaceSettings {
+            slug: space.slug.clone(),
+            name: format!("Space {}", space.token),
+            description: String::new(),
+            read: Grant::from_parts(space.read_level, &group_ids, &[]),
+            reply: Grant::members(),
+            start: Grant::members(),
+            administer: Grant::staff(),
+        }
+        .clean()
+        .unwrap();
+        self.block(store::update_space(
+            self.cached.state.db(),
+            space.id,
+            &settings,
+        ))
+        .unwrap()
+        .unwrap();
+        let id = space.id;
+        self.spaces[c].read_groups = if settings.read.level == Level::Listed {
+            read_groups
+        } else {
+            BTreeSet::new()
+        };
+        self.changed(Change::SpaceChanged { space_id: id });
+    }
+
     fn add_post(&mut self, thread: usize, author: i64, reply_to: Option<usize>, mentions: bool) {
         let token = self.token();
         let id = self
@@ -487,11 +563,12 @@ impl World {
     }
 
     /// DESIGN.md §9: who should be told about a new post, and how. In a
-    /// conversation, someone subscribed to it hears of it as a message.
-    /// Otherwise someone mentioned hears of it as a mention, subscribed or
-    /// not, and someone subscribed to its thread hears of it as a new post
-    /// there. Nobody hears of their own posts or of what they can't
-    /// read. (The model has no blocks.)
+    /// conversation, someone in it and subscribed to it hears of it as a
+    /// message. Otherwise someone mentioned hears of it as a mention,
+    /// subscribed or not (staff included, in a reported conversation they
+    /// can read), and someone subscribed to its thread hears of it as a
+    /// new post there. Nobody hears of their own posts or of what they
+    /// can't read. (The model has no blocks.)
     fn expected_notified(&self, post_id: i64) -> BTreeMap<i64, &'static str> {
         let mut told = BTreeMap::new();
         if let Some(p) = self.posts.iter().find(|p| p.id == post_id) {
@@ -523,14 +600,16 @@ impl World {
                         .fetch_one(self.db()),
                 )
                 .unwrap();
-            for &user in &c.participants {
+            // Anyone who can read it, which is the people in it and,
+            // once one of its messages is reported, staff.
+            for user in self.dm_people() {
                 if user == author
                     || m.deleted
                     || !self.conversation_readable_by(m.conversation, user)
                 {
                     continue;
                 }
-                if self.subscriptions.contains(&(user, c.id)) {
+                if c.participants.contains(&user) && self.subscriptions.contains(&(user, c.id)) {
                     told.insert(user, "message");
                 } else if m.mentions && (user == self.member_id || user == self.staff_id) {
                     told.insert(user, "mention");
@@ -618,9 +697,19 @@ impl World {
         };
         match (c.read_level, who) {
             ("public", _) | ("members", Who::Member | Who::Staff) | (_, Who::Staff) => true,
-            ("listed", Who::Member) => !self.member_groups.is_disjoint(&c.read_groups),
+            ("listed", Who::Member) => self.lets_in(&c.read_groups, self.member_id),
             _ => false,
         }
+    }
+
+    /// Whether naming these groups lets member `user` in: they are on one
+    /// of them (only the member viewer joins any), or it is a list of
+    /// theirs (DESIGN.md §3.3).
+    fn lets_in(&self, groups: &BTreeSet<usize>, user: i64) -> bool {
+        groups.iter().any(|&g| {
+            self.list_owners[g] == Some(user)
+                || (user == self.member_id && self.member_groups.contains(&g))
+        })
     }
 
     fn thread_readable(&self, thread: usize, who: Who) -> bool {
@@ -643,7 +732,8 @@ impl World {
 
     /// The viewer a member is, for the reference permission function:
     /// the logged-in viewers as themselves, and the other members (who
-    /// are in no groups) as a member viewer in no groups would be.
+    /// are in no groups, though Ruth owns a list) as a member viewer in no
+    /// groups would be.
     fn space_readable_by(&self, space: usize, user: i64) -> bool {
         if user == self.staff_id {
             return true;
@@ -654,7 +744,7 @@ impl World {
         }
         match c.read_level {
             "public" | "members" => true,
-            _ => user == self.member_id && !self.member_groups.is_disjoint(&c.read_groups),
+            _ => self.lets_in(&c.read_groups, user),
         }
     }
 
@@ -838,6 +928,15 @@ impl World {
                 tokens.insert(m.body_token.as_str());
             }
         }
+        // A list's name, to the people on it (its owner is never a viewer).
+        for (g, token) in self.list_tokens.iter().enumerate() {
+            if let Some(token) = token
+                && who == Who::Member
+                && self.member_groups.contains(&g)
+            {
+                tokens.insert(token.as_str());
+            }
+        }
         tokens
     }
 
@@ -976,8 +1075,17 @@ impl World {
                 // The layout editors.
                 "/settings/layout",
                 "/admin/layout",
+                // Lists, and the pages that name them to those who may
+                // see them.
+                "/settings/lists",
             ] {
                 paths.push(path.to_owned());
+            }
+            for g in &self.groups {
+                paths.push(format!("/settings/lists/{g}"));
+            }
+            for c in &self.spaces {
+                paths.push(format!("/c/{}/settings", c.slug));
             }
         }
         paths
@@ -1542,10 +1650,13 @@ impl World {
         self.changed(Change::SpaceChanged { space_id: id });
     }
 
-    /// The member viewer joins or leaves a group.
+    /// The member viewer joins or leaves a group, or a list of Ruth's (as
+    /// she would put them on it, or take them off).
     #[rule]
     fn toggle_membership(&mut self, tc: TestCase) {
         let g = tc.draw(gs::integers::<usize>().max_value(self.groups.len() - 1));
+        // Nobody is on their own list.
+        tc.assume(self.list_owners[g] != Some(self.member_id));
         let db = self.cached.state.db();
         if self.member_groups.remove(&g) {
             assert!(
@@ -1558,41 +1669,15 @@ impl World {
         }
     }
 
-    /// An admin changes which groups may read a space, as the space
-    /// form does.
+    /// An admin changes which groups and lists may read a space, as the
+    /// space form does.
     #[rule]
     fn set_read_groups(&mut self, tc: TestCase) {
         let c = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
         let read_groups: BTreeSet<usize> = (0..self.groups.len())
             .filter(|_| tc.draw(gs::booleans()))
             .collect();
-        let space = &self.spaces[c];
-        let group_ids: Vec<i64> = read_groups.iter().map(|&g| self.groups[g]).collect();
-        let settings = SpaceSettings {
-            slug: space.slug.clone(),
-            name: format!("Space {}", space.token),
-            description: String::new(),
-            read: Grant::from_parts(space.read_level, &group_ids, &[]),
-            reply: Grant::members(),
-            start: Grant::members(),
-            administer: Grant::staff(),
-        }
-        .clean()
-        .unwrap();
-        self.block(store::update_space(
-            self.cached.state.db(),
-            space.id,
-            &settings,
-        ))
-        .unwrap()
-        .unwrap();
-        let id = space.id;
-        self.spaces[c].read_groups = if settings.read.level == Level::Listed {
-            read_groups
-        } else {
-            BTreeSet::new()
-        };
-        self.changed(Change::SpaceChanged { space_id: id });
+        self.name_read_groups(c, read_groups);
     }
 
     #[rule]
@@ -2227,8 +2312,9 @@ async fn staff_see_every_space(pool: PgPool) {
 // ---------------------------------------------------------------------------
 // The access layer itself (DESIGN.md §6)
 //
-// A second state machine builds random forums out of groups, memberships,
-// roles, spaces with read and write levels and groups, threads, posts,
+// A second state machine builds random forums out of groups, members'
+// lists (which let in their owners too), memberships, roles, spaces with
+// read and write levels and groups, threads, posts,
 // quote-forks, moves and deletions, and asks the `content` module directly
 // what each viewer gets, where they may post, and where they may quote
 // each post they can read. Every answer is checked, in both directions,
@@ -2316,6 +2402,9 @@ struct Access {
     state: AppState,
     users: Vec<UserModel>,
     groups: Vec<i64>,
+    /// For each group, the user who owns it if it is a list (DESIGN.md
+    /// §3.3), who is let in wherever it is named.
+    group_owners: Vec<Option<usize>>,
     spaces: Vec<AccessSpace>,
     threads: Vec<AccessThread>,
     posts: Vec<AccessPost>,
@@ -2351,6 +2440,7 @@ impl Access {
             rt,
             users: Vec::new(),
             groups: Vec::new(),
+            group_owners: Vec::new(),
             spaces: Vec::new(),
             threads: Vec::new(),
             posts: Vec::new(),
@@ -2408,10 +2498,27 @@ impl Access {
         for _ in 0..2 {
             world.add_group();
         }
+        // The Friends lists of a member and of the moderator, which every
+        // account has.
+        for u in [1, 4] {
+            let id = world
+                .block(lists::friends_id(&world.db, world.users[u].id))
+                .unwrap()
+                .expect("every member has a Friends list");
+            world.groups.push(id);
+            world.group_owners.push(Some(u));
+        }
         for level in ["public", "members", "listed", "listed"] {
             world.add_space(level);
         }
         world
+    }
+
+    /// Whether naming these groups lets user `u` in: they are on one, or
+    /// it is a list of theirs.
+    fn lets_in(&self, groups: &BTreeSet<usize>, u: usize) -> bool {
+        !self.users[u].groups.is_disjoint(groups)
+            || groups.iter().any(|&g| self.group_owners[g] == Some(u))
     }
 
     fn block<F: Future>(&self, f: F) -> F::Output {
@@ -2437,6 +2544,22 @@ impl Access {
             .unwrap()
             .unwrap();
         self.groups.push(id);
+        self.group_owners.push(None);
+    }
+
+    /// A member makes a list.
+    fn add_list(&mut self, owner: usize) {
+        let n = self.groups.len();
+        let id = self
+            .block(lists::create(
+                &self.db,
+                self.users[owner].id,
+                &format!("List {n}"),
+            ))
+            .unwrap()
+            .unwrap();
+        self.groups.push(id);
+        self.group_owners.push(Some(owner));
     }
 
     fn add_space(&mut self, level: &'static str) {
@@ -2554,10 +2677,7 @@ impl Access {
             (_, None) => false,
             ("members", Some(_)) => true,
             ("staff", Some(u)) => self.users[u].staff,
-            (_, Some(u)) => {
-                let user = &self.users[u];
-                user.staff || !user.groups.is_disjoint(&c.read_groups)
-            }
+            (_, Some(u)) => self.users[u].staff || self.lets_in(&c.read_groups, u),
         }
     }
 
@@ -2756,7 +2876,7 @@ impl Access {
             && self.reads_space(who, space)
             && match c.write_level {
                 "members" => true,
-                "listed" => !user.groups.is_disjoint(&c.write_groups),
+                "listed" => self.lets_in(&c.write_groups, u),
                 _ => user.staff,
             }
     }
@@ -3418,14 +3538,23 @@ impl Access {
 impl Access {
     #[rule]
     fn new_group(&mut self, tc: TestCase) {
-        tc.assume(self.groups.len() < 4);
+        tc.assume(self.groups.len() < 6);
         self.add_group();
+    }
+
+    #[rule]
+    fn new_list(&mut self, tc: TestCase) {
+        tc.assume(self.groups.len() < 6);
+        let owner = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
+        self.add_list(owner);
     }
 
     #[rule]
     fn toggle_membership(&mut self, tc: TestCase) {
         let u = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
         let g = tc.draw(gs::integers::<usize>().max_value(self.groups.len() - 1));
+        // Nobody is on their own list.
+        tc.assume(self.group_owners[g] != Some(u));
         let (user_id, group_id) = (self.users[u].id, self.groups[g]);
         if self.users[u].groups.remove(&g) {
             assert!(

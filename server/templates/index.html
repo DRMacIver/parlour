@@ -21,7 +21,7 @@
           <td class="main-col">
             <div class="row-title">
               <a href="/c/{{ summary.space.slug }}">{{ summary.space.name }}</a>
-              {% call m::access_flag(summary.read_level, summary.group_names) %}{% endcall %}
+              {% call m::access_flag(summary.read_level, summary.group_names, summary.list_names) %}{% endcall %}
               {% if let Some(n) = summary.unread %}{% if *n > 0 %}<span class="unread">{{ n }} unread</span>{% endif %}{% endif %}
             </div>
             {% if !summary.description.is_empty() %}<div class="row-meta">{{ summary.description }}</div>{% endif %}

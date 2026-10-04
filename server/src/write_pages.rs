@@ -165,10 +165,10 @@ fn thread_crumbs(thread: &ThreadTarget) -> Vec<Crumb> {
 /// A space's name with who can read it, as in "Lounge (members only)"
 /// or "Planning (Organisers group)".
 pub(crate) fn space_label(space: &SpaceTarget) -> String {
-    match format::access_label(space.read_level(), &space.group_names) {
+    match format::access_label(space.read_level(), &space.group_names, &space.list_names) {
         None => space.space.name.clone(),
-        // Group names keep their capitals.
-        Some(access) if !space.group_names.is_empty() => {
+        // Group and list names keep their capitals.
+        Some(access) if !(space.group_names.is_empty() && space.list_names.is_empty()) => {
             format!("{} ({access})", space.space.name)
         }
         Some(access) => format!("{} ({})", space.space.name, access.to_lowercase()),

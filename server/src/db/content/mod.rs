@@ -139,8 +139,10 @@ pub struct SpaceSummary {
     pub description: String,
     /// The level of the read grant, for the label beside the name.
     pub read_level: String,
-    /// For a listed space, the groups that may read it.
+    /// For a listed space, the site groups that may read it.
     pub group_names: Vec<String>,
+    /// And the lists, as the viewer may know them (DESIGN.md §3.3).
+    pub list_names: Vec<String>,
     pub essential: bool,
     pub thread_count: i64,
     pub post_count: i64,
@@ -182,9 +184,8 @@ pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Resu
         )
         SELECT c.id, c.slug, c.name, c.description, c.essential, r.level AS read_level,
                p.section_id AS "section_id?", p.section_name AS "section_name?",
-               array(SELECT g.name FROM groups g
-                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)
-                     ORDER BY lower(g.name), g.id) AS "group_names!",
+               site_group_names(r.group_ids) AS "group_names!",
+               list_labels(r.group_ids, $3) AS "list_names!",
                counts.threads AS "thread_count!", counts.posts AS "post_count!", counts.unread AS "unread!",
                lt.id AS "last_thread_id?", lt.title AS "last_thread_title?", lt.slug AS "last_thread_slug?",
                coalesce(lp.created_at, lt.last_post_at) AS "last_at?", lp.id AS "last_post_id?",
@@ -257,6 +258,7 @@ pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Resu
             description: row.description,
             read_level: row.read_level,
             group_names: row.group_names,
+            list_names: row.list_names,
             essential: row.essential,
             thread_count: row.thread_count,
             post_count: row.post_count,
@@ -337,8 +339,10 @@ pub struct SpacePage {
     pub description: String,
     /// The level of the read grant, for the label beside the name.
     pub read_level: String,
-    /// For a listed space, the groups that may read it.
+    /// For a listed space, the site groups that may read it.
     pub group_names: Vec<String>,
+    /// And the lists, as the viewer may know them (DESIGN.md §3.3).
+    pub list_names: Vec<String>,
     pub archived: bool,
     pub thread_count: i64,
     pub threads: Vec<ThreadRow>,
@@ -358,9 +362,8 @@ pub async fn space_page(
         r#"
         SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,
                c.archived_at IS NOT NULL AS "archived!",
-               array(SELECT g.name FROM groups g
-                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)
-                     ORDER BY lower(g.name), g.id) AS "group_names!",
+               site_group_names(r.group_ids) AS "group_names!",
+               list_labels(r.group_ids, $4) AS "list_names!",
                (SELECT count(*) FROM threads t
                 WHERE t.space_id = c.id AND t.deleted_at IS NULL
                   AND thread_readable(t.visibility, t.space_id, $2, $3)) AS "thread_count!"
@@ -371,6 +374,7 @@ pub async fn space_page(
         slug,
         &filter.visibilities,
         &filter.restricted_space_ids,
+        viewer.user_id(),
     )
     .fetch_optional(db.pool())
     .await?
@@ -388,6 +392,7 @@ pub async fn space_page(
         description: space.description,
         read_level: space.read_level,
         group_names: space.group_names,
+        list_names: space.list_names,
         archived: space.archived,
         thread_count: space.thread_count,
         threads,
@@ -862,7 +867,8 @@ pub async fn thread_page(
                c.start_level AS "start_level!", c.start_group_ids AS "start_group_ids!", c.start_user_ids AS "start_user_ids!",
                c.administer_level AS "administer_level!", c.administer_group_ids AS "administer_group_ids!",
                c.administer_user_ids AS "administer_user_ids!",
-               c.read_group_names AS "group_names!",
+               site_group_names(c.read_group_ids) AS "group_names!",
+               list_labels(c.read_group_ids, $5) AS "list_names!",
                (SELECT tr.last_read_seq FROM thread_reads tr
                 WHERE tr.thread_id = t.id AND tr.user_id = $4) AS read_marker,
                EXISTS (SELECT 1 FROM thread_subscriptions s
@@ -911,6 +917,7 @@ pub async fn thread_page(
             essential: thread.essential,
             visibility: thread.visibility,
             group_names: thread.group_names,
+            list_names: thread.list_names,
             created_by: thread.created_by,
             created_at: thread.space_created_at,
             rules: SpaceRules {
@@ -1429,8 +1436,10 @@ pub struct SpaceTarget {
     pub essential: bool,
     /// `public`, `members` or `restricted`, as `spaces.visibility` has it.
     pub visibility: String,
-    /// The names of the groups the read grant lists.
+    /// The names of the site groups the read grant lists.
     pub group_names: Vec<String>,
+    /// And its lists, as the viewer may know them (DESIGN.md §3.3).
+    pub list_names: Vec<String>,
     pub created_by: Option<i64>,
     pub created_at: DateTime<Utc>,
     /// Who may do what here.
@@ -1485,6 +1494,25 @@ pub async fn space_thread_count(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Resu
     .await
 }
 
+/// The spaces the viewer can read whose grants name a group or list, by
+/// name, for the list's page (DESIGN.md §3.3).
+pub async fn spaces_naming(db: &Db, viewer: &Viewer, group_id: i64) -> sqlx::Result<Vec<SpaceRef>> {
+    let filter = viewer.filter();
+    sqlx::query_as!(
+        SpaceRef,
+        r#"SELECT c.id, c.slug, c.name FROM spaces c
+           WHERE space_readable(c.visibility, c.id, $1, $2)
+             AND EXISTS (SELECT 1 FROM space_grants g
+                         WHERE g.space_id = c.id AND g.group_ids @> ARRAY[$3]::bigint[])
+           ORDER BY lower(c.name), c.id"#,
+        &filter.visibilities,
+        &filter.restricted_space_ids,
+        group_id,
+    )
+    .fetch_all(db.pool())
+    .await
+}
+
 /// Every space the viewer can read, archived ones included, by name.
 pub async fn readable_spaces(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<SpaceTarget>> {
     space_targets(db, viewer, None, None).await
@@ -1510,7 +1538,8 @@ async fn space_targets(
                c.start_level AS "start_level!", c.start_group_ids AS "start_group_ids!", c.start_user_ids AS "start_user_ids!",
                c.administer_level AS "administer_level!", c.administer_group_ids AS "administer_group_ids!",
                c.administer_user_ids AS "administer_user_ids!",
-               c.read_group_names AS "group_names!"
+               site_group_names(c.read_group_ids) AS "group_names!",
+               list_labels(c.read_group_ids, $5) AS "list_names!"
         FROM space_targets c
         WHERE space_readable(c.visibility, c.id, $1, $2)
           AND ($3::bigint IS NULL OR c.id = $3)
@@ -1521,6 +1550,7 @@ async fn space_targets(
         &filter.restricted_space_ids,
         id,
         slug,
+        viewer.user_id(),
     )
     .fetch_all(db.pool())
     .await?;
@@ -1536,6 +1566,7 @@ async fn space_targets(
             essential: row.essential,
             visibility: row.visibility,
             group_names: row.group_names,
+            list_names: row.list_names,
             created_by: row.created_by,
             created_at: row.created_at,
             rules: SpaceRules {
@@ -1608,6 +1639,7 @@ pub struct SpaceListing {
     pub description: String,
     pub read_level: String,
     pub group_names: Vec<String>,
+    pub list_names: Vec<String>,
     pub archived: bool,
     /// Whether the viewer has muted it (shown only when asked for).
     pub muted: bool,
@@ -1632,9 +1664,8 @@ pub async fn space_index(
         SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,
                c.archived_at IS NOT NULL AS "archived!", c.created_at,
                EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $5 AND m.space_id = c.id) AS "muted!",
-               array(SELECT g.name FROM groups g
-                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)
-                     ORDER BY lower(g.name), g.id) AS "group_names!",
+               site_group_names(r.group_ids) AS "group_names!",
+               list_labels(r.group_ids, $5) AS "list_names!",
                counts.threads AS "thread_count!", counts.last_post_at AS "last_post_at?"
         FROM spaces c
         JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'
@@ -1674,6 +1705,7 @@ pub async fn space_index(
                 description: row.description,
                 read_level: row.read_level,
                 group_names: row.group_names,
+                list_names: row.list_names,
                 archived: row.archived,
                 muted: row.muted,
                 created_at: row.created_at,

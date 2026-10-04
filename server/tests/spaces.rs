@@ -482,12 +482,26 @@ async fn groups_named_in_grants_cant_be_deleted(pool: PgPool) {
         "{}",
         response.body
     );
-    assert_eq!(count(&s.f, "SELECT count(*) FROM groups").await, 1);
+    assert_eq!(
+        count(
+            &s.f,
+            "SELECT count(*) FROM groups WHERE owner_user_id IS NULL"
+        )
+        .await,
+        1
+    );
 
     s.f.set_grant(planning, "read", Grant::members()).await;
     let response = s.f.submit(&path, &[], Some(&admin_cookie)).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
-    assert_eq!(count(&s.f, "SELECT count(*) FROM groups").await, 0);
+    assert_eq!(
+        count(
+            &s.f,
+            "SELECT count(*) FROM groups WHERE owner_user_id IS NULL"
+        )
+        .await,
+        0
+    );
 }
 
 #[sqlx::test]

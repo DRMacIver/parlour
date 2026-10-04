@@ -790,7 +790,7 @@ async fn only_admins_manage_spaces_and_groups(db: PgPool) {
             .await;
         assert_eq!(response.status, StatusCode::FORBIDDEN, "{path}");
     }
-    let groups: i64 = sqlx::query_scalar("SELECT count(*) FROM groups")
+    let groups: i64 = sqlx::query_scalar("SELECT count(*) FROM groups WHERE owner_user_id IS NULL")
         .fetch_one(&forum.db)
         .await
         .unwrap();
@@ -879,7 +879,11 @@ async fn deleting_a_group_asks_first_and_says_what_it_will_change(db: PgPool) {
     assert!(confirm.contains("href=\"/c/accounts\""));
     let response = a.submit(&delete_path, &[]).await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
-    assert_eq!(a.id("SELECT count(*) FROM groups").await, 2);
+    assert_eq!(
+        a.id("SELECT count(*) FROM groups WHERE owner_user_id IS NULL")
+            .await,
+        2
+    );
 
     // Taken out of both spaces' settings, it can go.
     a.forum.restrict(planning, &[board], Some(&[board])).await;
@@ -892,14 +896,19 @@ async fn deleting_a_group_asks_first_and_says_what_it_will_change(db: PgPool) {
     assert!(confirm.contains("1 invite"));
     // Asking changes nothing.
     assert_eq!(
-        a.id("SELECT count(*) FROM groups").await,
+        a.id("SELECT count(*) FROM groups WHERE owner_user_id IS NULL")
+            .await,
         2,
         "the confirmation page deleted the group"
     );
 
     let response = a.submit(&delete_path, &[]).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
-    assert_eq!(a.id("SELECT count(*) FROM groups").await, 1);
+    assert_eq!(
+        a.id("SELECT count(*) FROM groups WHERE owner_user_id IS NULL")
+            .await,
+        1
+    );
 }
 
 #[sqlx::test]

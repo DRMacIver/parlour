@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,\n               c.archived_at IS NOT NULL AS \"archived!\",\n               array(SELECT g.name FROM groups g\n                     WHERE r.level = 'listed' AND g.id = ANY (r.group_ids)\n                     ORDER BY lower(g.name), g.id) AS \"group_names!\",\n               (SELECT count(*) FROM threads t\n                WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                  AND thread_readable(t.visibility, t.space_id, $2, $3)) AS \"thread_count!\"\n        FROM spaces c\n        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'\n        WHERE c.slug = $1 AND space_readable(c.visibility, c.id, $2, $3)\n        ",
+  "query": "\n        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,\n               c.archived_at IS NOT NULL AS \"archived!\",\n               site_group_names(r.group_ids) AS \"group_names!\",\n               list_labels(r.group_ids, $4) AS \"list_names!\",\n               (SELECT count(*) FROM threads t\n                WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                  AND thread_readable(t.visibility, t.space_id, $2, $3)) AS \"thread_count!\"\n        FROM spaces c\n        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'\n        WHERE c.slug = $1 AND space_readable(c.visibility, c.id, $2, $3)\n        ",
   "describe": {
     "columns": [
       {
@@ -72,6 +72,12 @@
       },
       {
         "ordinal": 7,
+        "name": "list_names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
         "name": "thread_count!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -81,7 +87,8 @@
       "Left": [
         "Text",
         "TextArray",
-        "Int8Array"
+        "Int8Array",
+        "Int8"
       ]
     },
     "nullable": [
@@ -92,8 +99,9 @@
       false,
       null,
       null,
+      null,
       null
     ]
   },
-  "hash": "58e9e9cf1b7be806ced62684865da260d6cf29d950473a4c1625979aa92671b3"
+  "hash": "f57277a9bc559cb618991a519b9df625e7f50a06381550f3179318fd97b519d0"
 }

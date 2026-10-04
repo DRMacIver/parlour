@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT c.id AS \"id!\", c.slug AS \"slug!\", c.name AS \"name!\", c.description AS \"description!\",\n               c.essential AS \"essential!\",\n               c.visibility AS \"visibility!\", c.created_by AS \"created_by?\", c.created_at AS \"created_at!\",\n               c.archived_at AS \"archived_at?\",\n               c.read_level AS \"read_level!\", c.read_group_ids AS \"read_group_ids!\", c.read_user_ids AS \"read_user_ids!\",\n               c.reply_level AS \"reply_level!\", c.reply_group_ids AS \"reply_group_ids!\", c.reply_user_ids AS \"reply_user_ids!\",\n               c.start_level AS \"start_level!\", c.start_group_ids AS \"start_group_ids!\", c.start_user_ids AS \"start_user_ids!\",\n               c.administer_level AS \"administer_level!\", c.administer_group_ids AS \"administer_group_ids!\",\n               c.administer_user_ids AS \"administer_user_ids!\",\n               c.read_group_names AS \"group_names!\"\n        FROM space_targets c\n        WHERE space_readable(c.visibility, c.id, $1, $2)\n          AND ($3::bigint IS NULL OR c.id = $3)\n          AND ($4::text IS NULL OR c.slug = $4)\n        ORDER BY lower(c.name), c.id\n        ",
+  "query": "\n        SELECT c.id AS \"id!\", c.slug AS \"slug!\", c.name AS \"name!\", c.description AS \"description!\",\n               c.essential AS \"essential!\",\n               c.visibility AS \"visibility!\", c.created_by AS \"created_by?\", c.created_at AS \"created_at!\",\n               c.archived_at AS \"archived_at?\",\n               c.read_level AS \"read_level!\", c.read_group_ids AS \"read_group_ids!\", c.read_user_ids AS \"read_user_ids!\",\n               c.reply_level AS \"reply_level!\", c.reply_group_ids AS \"reply_group_ids!\", c.reply_user_ids AS \"reply_user_ids!\",\n               c.start_level AS \"start_level!\", c.start_group_ids AS \"start_group_ids!\", c.start_user_ids AS \"start_user_ids!\",\n               c.administer_level AS \"administer_level!\", c.administer_group_ids AS \"administer_group_ids!\",\n               c.administer_user_ids AS \"administer_user_ids!\",\n               site_group_names(c.read_group_ids) AS \"group_names!\",\n               list_labels(c.read_group_ids, $5) AS \"list_names!\"\n        FROM space_targets c\n        WHERE space_readable(c.visibility, c.id, $1, $2)\n          AND ($3::bigint IS NULL OR c.id = $3)\n          AND ($4::text IS NULL OR c.slug = $4)\n        ORDER BY lower(c.name), c.id\n        ",
   "describe": {
     "columns": [
       {
@@ -238,12 +238,13 @@
         "ordinal": 21,
         "name": "group_names!",
         "type_info": "TextArray",
-        "origin": {
-          "Table": {
-            "table": "space_targets",
-            "name": "read_group_names"
-          }
-        }
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 22,
+        "name": "list_names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -251,7 +252,8 @@
         "TextArray",
         "Int8Array",
         "Int8",
-        "Text"
+        "Text",
+        "Int8"
       ]
     },
     "nullable": [
@@ -276,8 +278,9 @@
       true,
       true,
       true,
-      true
+      null,
+      null
     ]
   },
-  "hash": "cb6fc5ee9a458f775c78c5617975ec89cb800d93925cb35fbe467224bb2d2566"
+  "hash": "ec36b8d72aed51cde3757cfd66e9c5c26fe428270c2a5c6021e11307b2b45484"
 }

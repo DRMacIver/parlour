@@ -29,7 +29,7 @@
   <div class="form">
     <div class="field"><label for="title">Title</label><input id="title" name="title" type="text" maxlength="150" value="{{ thread.thread.title }}"></div>
     <div class="field"><label for="space">Space</label>
-      <select id="space" name="space">{% for c in spaces %}<option value="{{ c.space.slug }}"{% if self.current_space(c.space.slug) %} selected{% endif %}>{{ c.space.name }}{% if let Some(access) = crate::format::access_label(c.read_level(), c.group_names) %} ({{ access }}){% endif %}</option>{% endfor %}</select>
+      <select id="space" name="space">{% for c in spaces %}<option value="{{ c.space.slug }}"{% if self.current_space(c.space.slug) %} selected{% endif %}>{{ c.space.name }}{% if let Some(access) = crate::format::access_label(c.read_level(), c.group_names, c.list_names) %} ({{ access }}){% endif %}</option>{% endfor %}</select>
     </div>
     <div class="field"><label for="reason-edit">Reason</label><input id="reason-edit" name="reason" type="text" maxlength="500" required></div>
     <div class="form-actions">

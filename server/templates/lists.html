@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{% block title %}Your lists · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/settings">Your account</a> › Your lists</nav>
+<h1 class="page-title">Your lists</h1>
+<p class="lede">A list is a set of members you choose. Name it in a space’s settings to let the people on it read or post there; wherever a list lets people in, it lets you in too. Only you and the people on a list know it exists, and nobody is told when you add them.</p>
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+{% call f::errors(errors) %}{% endcall %}
+
+<section class="panel" aria-labelledby="own-heading">
+  <h2 class="panel-bar" id="own-heading">Lists you own</h2>
+  {% if own.is_empty() %}
+  <p class="empty">You have no lists.</p>
+  {% else %}
+  <ul class="member-list">
+  {% for list in own %}
+    <li>
+      <span class="admin-space-name"><a href="/settings/lists/{{ list.id }}">{{ list.name }}</a></span>
+      <span class="row-meta">{% if list.members.is_empty() %}Nobody is on it yet{% else %}{{ crate::format::plural(list.members.len() as i64, "person", "people") }}{% endif %}</span>
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+<form class="panel" method="post" action="/settings/lists">
+  <h2 class="panel-bar">Make a list</h2>
+  <div class="form">
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" type="text" maxlength="60" value="{{ name }}" required>
+      <span class="field-hint">{{ self.creation_note() }}</span>
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Make the list</button></div>
+  </div>
+</form>
+
+<section class="panel" aria-labelledby="on-heading">
+  <h2 class="panel-bar" id="on-heading">Lists you are on</h2>
+  {% if others.is_empty() %}
+  <p class="empty">Nobody has put you on a list of theirs.</p>
+  {% else %}
+  <ul class="member-list">
+  {% for list in others %}
+    <li>
+      <span class="admin-space-name">
+        <a href="/settings/lists/{{ list.id }}">{{ list.owner.display_name }}’s {{ list.name }}</a>
+        <span class="row-meta">{% for member in list.others(me) %}{% if loop.first %}Also on it: {% else %}, {% endif %}{{ member.user.display_name }} (@{{ member.user.username }}){% else %}Nobody else is on it{% endfor %}{% if list.frozen() %} · frozen{% endif %}</span>
+      </span>
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+</div>
+{% endblock %}

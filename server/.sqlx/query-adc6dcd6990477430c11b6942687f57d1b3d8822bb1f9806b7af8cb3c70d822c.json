@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM groups WHERE id = $1 AND owner_user_id IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "adc6dcd6990477430c11b6942687f57d1b3d8822bb1f9806b7af8cb3c70d822c"
+}

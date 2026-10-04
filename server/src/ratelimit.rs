@@ -61,6 +61,8 @@ pub enum Action {
     Export,
     /// Making a space.
     CreateSpace,
+    /// Making a list.
+    CreateList,
 }
 
 /// Whose allowance a request uses up.
@@ -138,6 +140,9 @@ pub fn rule(action: Action, scope: Scope) -> Rule {
         // Spaces are cheap to make, but not that cheap: a handful at once,
         // then one every half hour.
         (Action::CreateSpace, _) => Rule::new(10, 1800),
+        // Lists cost less than spaces, and are only seen by the people on
+        // them: plenty at once, then one every five minutes.
+        (Action::CreateList, _) => Rule::new(20, 300),
     }
 }
 

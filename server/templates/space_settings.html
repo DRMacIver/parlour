@@ -9,10 +9,10 @@
   {% if allow_public %}<label class="choice"><input type="radio" name="{{ verb }}_level" value="public"{% if grant.level == "public" %} checked{% endif %}> Everyone, including visitors who aren’t logged in</label>{% endif %}
   <label class="choice"><input type="radio" name="{{ verb }}_level" value="members"{% if grant.level == "members" %} checked{% endif %}> Any member</label>
   <label class="choice"><input type="radio" name="{{ verb }}_level" value="staff"{% if grant.level == "staff" %} checked{% endif %}> Only moderators and admins</label>
-  <label class="choice"><input type="radio" name="{{ verb }}_level" value="listed"{% if grant.level == "listed" %} checked{% endif %}> Only the groups and people named here:</label>
-  <div class="choice-group" role="group" aria-label="Groups and people">
+  <label class="choice"><input type="radio" name="{{ verb }}_level" value="listed"{% if grant.level == "listed" %} checked{% endif %}> Only the groups, lists and people named here:</label>
+  <div class="choice-group" role="group" aria-label="Groups, lists and people">
   {% for group in groups %}
-    <label class="choice"><input type="checkbox" name="{{ verb }}_group" value="{{ group.id }}"{% if grant.ticked(group.id) %} checked{% endif %}> {{ group.name }}</label>
+    <label class="choice"><input type="checkbox" name="{{ verb }}_group" value="{{ group.id }}"{% if grant.ticked(group.id) %} checked{% endif %}> {{ group.label }}</label>
   {% endfor %}
     <label for="{{ verb }}_users">Members, by username</label>
     <input id="{{ verb }}_users" name="{{ verb }}_users" type="text" value="{{ grant.users }}" placeholder="alice, bob">

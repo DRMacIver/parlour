@@ -29,7 +29,7 @@
       <td class="main-col">
         <div class="row-title">
           <a href="/c/{{ space.space.slug }}">{{ space.space.name }}</a>
-          {% call m::access_flag(space.read_level, space.group_names) %}{% endcall %}
+          {% call m::access_flag(space.read_level, space.group_names, space.list_names) %}{% endcall %}
           {% if space.archived %}<span class="flag">Archived</span>{% endif %}
           {% if space.muted %}<span class="flag">Muted</span>{% endif %}
         </div>

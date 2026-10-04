@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO group_members (group_id, user_id, added_by)\n         SELECT g.id, $3, $2 FROM groups g\n         WHERE g.id = $1 AND g.owner_user_id = $2 AND g.frozen_at IS NULL\n         ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "315880a9c21ddb2d3d293e314d3af3c868aa692520997b2143f4fae12b57e7e6"
+}

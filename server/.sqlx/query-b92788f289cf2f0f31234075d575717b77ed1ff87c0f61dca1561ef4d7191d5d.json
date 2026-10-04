@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE groups SET slug = $2, name = $3, description = $4 WHERE id = $1",
+  "query": "UPDATE groups SET slug = $2, name = $3, description = $4 WHERE id = $1 AND owner_user_id IS NULL",
   "describe": {
     "columns": [],
     "parameters": {
@@ -13,5 +13,5 @@
     },
     "nullable": []
   },
-  "hash": "6b6c100d7d8decf4de25ba3a14aa4a430ec9d24f8732dc0c435d4c46553d8ab6"
+  "hash": "b92788f289cf2f0f31234075d575717b77ed1ff87c0f61dca1561ef4d7191d5d"
 }

@@ -154,3 +154,58 @@ async fn watches_become_thread_subscriptions(db: PgPool) {
     .await;
     assert!(refused.is_err());
 }
+
+/// Migration 0026 (DESIGN.md §3.3, milestone 12): every member who has an
+/// account gets an empty list called Friends, site groups stay as they
+/// were, and from then on every new account gets one too.
+#[sqlx::test(migrations = false)]
+async fn every_member_gets_a_friends_list(db: PgPool) {
+    run_to(&db, 25).await;
+    exec(
+        &db,
+        "INSERT INTO users (id, username, display_name, email, deleted_at) OVERRIDING SYSTEM VALUE VALUES
+             (1, 'ruth', 'Ruth', 'ruth@example.com', NULL),
+             (2, 'jonah', 'Jonah', 'jonah@example.com', NULL),
+             (3, 'deleted_3', 'Deleted member', 'deleted-3@deleted.invalid', now());
+         INSERT INTO groups (slug, name) VALUES ('organisers', 'Organisers');
+         INSERT INTO group_members (group_id, user_id) VALUES (1, 2);",
+    )
+    .await;
+
+    run_to(&db, 26).await;
+
+    assert_eq!(
+        pairs(
+            &db,
+            "SELECT coalesce(owner_user_id::text, '-'), name FROM groups ORDER BY id"
+        )
+        .await,
+        [
+            ("-".to_owned(), "Organisers".to_owned()),
+            ("1".to_owned(), "Friends".to_owned()),
+            ("2".to_owned(), "Friends".to_owned()),
+        ]
+    );
+    assert_eq!(
+        pairs(
+            &db,
+            "SELECT group_id::text, user_id::text FROM group_members ORDER BY 1, 2"
+        )
+        .await,
+        [("1".to_owned(), "2".to_owned())]
+    );
+    exec(
+        &db,
+        "INSERT INTO users (id, username, display_name, email) OVERRIDING SYSTEM VALUE VALUES
+             (4, 'maya', 'Maya', 'maya@example.com')",
+    )
+    .await;
+    assert_eq!(
+        pairs(
+            &db,
+            "SELECT owner_user_id::text, name FROM groups WHERE owner_user_id = 4"
+        )
+        .await,
+        [("4".to_owned(), "Friends".to_owned())]
+    );
+}

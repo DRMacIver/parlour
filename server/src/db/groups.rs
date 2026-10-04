@@ -1,7 +1,13 @@
-//! Groups of members (DESIGN.md §3.1, §3.3). Admins make them and add
-//! members to them, and invites can add the people who use them. A space's
-//! grants name the groups that may read, post in or administer it (in
-//! `space_grants`, set by [`crate::store::update_space`]).
+//! Site groups of members (DESIGN.md §3.1, §3.3). Admins make them and
+//! add members to them, and invites can add the people who use them. A
+//! space's grants name the groups that may read, post in or administer it
+//! (in `space_grants`, set by [`crate::store::update_space`]).
+//!
+//! Members' own lists are groups too, in the same table with an owner
+//! (see [`crate::lists`]), but they are hidden from everyone who isn't on
+//! them, admins included: everything here that lists or finds groups for
+//! admins and invites knows only site groups. [`choosable`] is what a
+//! grant form offers, which is where the two meet.
 //!
 //! Group names show on the index next to restricted spaces, but only to
 //! viewers who can read those spaces, and they are never in the anonymous
@@ -113,7 +119,7 @@ pub async fn create(db: &Db, fields: &GroupFields) -> sqlx::Result<Result<i64, S
 /// Changes a group's fields. `Ok(Ok(false))` if there is no such group.
 pub async fn update(db: &Db, id: i64, fields: &GroupFields) -> sqlx::Result<Result<bool, String>> {
     let updated = sqlx::query!(
-        "UPDATE groups SET slug = $2, name = $3, description = $4 WHERE id = $1",
+        "UPDATE groups SET slug = $2, name = $3, description = $4 WHERE id = $1 AND owner_user_id IS NULL",
         id,
         fields.slug,
         fields.name,
@@ -146,9 +152,12 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<Result<bool, String>> {
             crate::format::plural(named, "space", "spaces")
         )));
     }
-    let done = sqlx::query!("DELETE FROM groups WHERE id = $1", id)
-        .execute(db.pool())
-        .await?;
+    let done = sqlx::query!(
+        "DELETE FROM groups WHERE id = $1 AND owner_user_id IS NULL",
+        id
+    )
+    .execute(db.pool())
+    .await?;
     Ok(Ok(done.rows_affected() == 1))
 }
 
@@ -183,8 +192,8 @@ pub async fn remove_member(db: &Db, group_id: i64, user_id: i64) -> sqlx::Result
     Ok(done.rows_affected() == 1)
 }
 
-/// Adds a member to those of these groups that still exist, as an invite
-/// does when it is used.
+/// Adds a member to those of these site groups that still exist, as an
+/// invite does when it is used.
 pub async fn grant<'c>(
     db: impl Handle<'c>,
     user_id: i64,
@@ -194,7 +203,7 @@ pub async fn grant<'c>(
     let mut conn = db.open(KEY).acquire().await?;
     sqlx::query!(
         "INSERT INTO group_members (group_id, user_id, added_by)
-         SELECT g.id, $1, $3 FROM groups g WHERE g.id = ANY($2)
+         SELECT g.id, $1, $3 FROM groups g WHERE g.id = ANY($2) AND g.owner_user_id IS NULL
          ON CONFLICT DO NOTHING",
         user_id,
         group_ids,
@@ -215,24 +224,77 @@ pub struct GroupSummary {
     pub member_count: i64,
 }
 
-/// Every group, by name.
+/// Every site group, by name.
 pub async fn list(db: &Db) -> sqlx::Result<Vec<GroupSummary>> {
     sqlx::query_as!(
         GroupSummary,
-        r#"SELECT g.id, g.slug, g.name, g.description,
+        r#"SELECT g.id, g.slug AS "slug!", g.name, g.description,
                   (SELECT count(*) FROM group_members m JOIN users u ON u.id = m.user_id
                    WHERE m.group_id = g.id AND u.deleted_at IS NULL) AS "member_count!"
-           FROM groups g ORDER BY lower(g.name), g.id"#
+           FROM groups g WHERE g.owner_user_id IS NULL ORDER BY lower(g.name), g.id"#
     )
     .fetch_all(db.pool())
     .await
 }
 
-/// Those of these ids that are groups.
+/// Those of these ids that are site groups.
 pub async fn existing(db: &Db, ids: &[i64]) -> sqlx::Result<Vec<i64>> {
-    sqlx::query_scalar!("SELECT id FROM groups WHERE id = ANY($1) ORDER BY id", ids)
-        .fetch_all(db.pool())
-        .await
+    sqlx::query_scalar!(
+        "SELECT id FROM groups WHERE id = ANY($1) AND owner_user_id IS NULL ORDER BY id",
+        ids
+    )
+    .fetch_all(db.pool())
+    .await
+}
+
+/// A group or list a grant form offers, as the person filling it in may
+/// know it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupChoice {
+    pub id: i64,
+    pub label: String,
+}
+
+/// The groups and lists `viewer` may name in a grant (DESIGN.md §3.3):
+/// every site group, by name; their own lists ("Your Friends"); the lists
+/// they are on ("Ruth’s Book club"); and, so that a form can keep what a
+/// grant already says, the lists in `named` that they know nothing about,
+/// only as "People Ruth has chosen".
+pub async fn choosable(
+    db: &Db,
+    viewer: Option<i64>,
+    named: &[i64],
+) -> sqlx::Result<Vec<GroupChoice>> {
+    sqlx::query_as!(
+        GroupChoice,
+        r#"SELECT id AS "id!", label AS "label!" FROM (
+               SELECT g.id, g.name, o.display_name, o.id AS owner_id,
+                      CASE WHEN g.owner_user_id IS NULL THEN 0
+                           WHEN g.owner_user_id = $1 THEN 1
+                           WHEN k.on_it THEN 2
+                           ELSE 3 END AS rank,
+                      CASE WHEN g.owner_user_id IS NULL THEN g.name
+                           WHEN g.owner_user_id = $1 THEN 'Your ' || g.name
+                           WHEN k.on_it THEN o.display_name || '’s ' || g.name
+                           ELSE 'People ' || o.display_name || ' has chosen' END AS label
+               FROM groups g
+               LEFT JOIN users o ON o.id = g.owner_user_id
+               CROSS JOIN LATERAL (
+                   SELECT EXISTS (SELECT 1 FROM group_members m
+                                  WHERE m.group_id = g.id AND m.user_id = $1) AS on_it
+               ) k
+               WHERE g.owner_user_id IS NULL
+                  OR g.owner_user_id = $1
+                  OR k.on_it
+                  OR g.id = ANY($2)
+           ) c
+           ORDER BY rank, CASE WHEN rank >= 2 THEN lower(display_name) END, owner_id,
+                    CASE WHEN rank < 3 THEN lower(name) END, id"#,
+        viewer,
+        named,
+    )
+    .fetch_all(db.pool())
+    .await
 }
 
 /// A member of a group.

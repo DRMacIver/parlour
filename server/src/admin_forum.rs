@@ -6,7 +6,9 @@
 //!   front page (`/admin/layout`, in `layout_pages`);
 //! - `/admin/spaces/new` and `/admin/spaces/{id}`, which lead to the
 //!   space's own pages (`space_pages`);
-//! - `/admin/groups` and `/admin/groups/{id}`: groups and their members.
+//! - `/admin/groups` and `/admin/groups/{id}`: site groups and their
+//!   members. Members' own lists (DESIGN.md §3.3) are hidden from admins
+//!   as from everyone not on them, so these pages know nothing of them.
 //!
 //! Group changes matter only to logged-in members, whose pages are never
 //! cached.
@@ -61,7 +63,7 @@ struct SpacesTemplate {
 
 impl SpacesTemplate {
     fn access(&self, space: &SpaceTarget) -> String {
-        format::access_label(space.read_level(), &space.group_names)
+        format::access_label(space.read_level(), &space.group_names, &space.list_names)
             .unwrap_or_else(|| "Everyone".to_owned())
     }
 
@@ -420,7 +422,13 @@ pub async fn remove_member(
     Path((id, user_id)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
     admins_only!(state, viewer, "/admin/groups");
-    let (Some(id), Some(user_id)) = (parse_id(&id), parse_id(&user_id)) else {
+    // Only site groups: members' lists are theirs alone.
+    let detail = match find_group(&state, &viewer, &id).await? {
+        Ok(detail) => detail,
+        Err(response) => return Ok(response),
+    };
+    let id = detail.group.id;
+    let Some(user_id) = parse_id(&user_id) else {
         return web::not_found(&state, &viewer).await;
     };
     if !groups::remove_member(state.db(), id, user_id).await? {

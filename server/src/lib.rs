@@ -18,6 +18,7 @@ pub mod http_cache;
 mod invite_pages;
 pub mod islands;
 mod layout_pages;
+mod list_pages;
 pub mod live;
 pub mod mail;
 pub mod markdown;
@@ -44,7 +45,7 @@ mod write_pages;
 pub mod writing;
 
 pub use db::{
-    changes, content, groups, invites, jobs, layouts, login_tokens, members,
+    changes, content, groups, invites, jobs, layouts, lists, login_tokens, members,
     moderation as mod_records, notifications, seed, sessions, settings, social, store,
     uploads as upload_records, users,
 };
@@ -447,6 +448,21 @@ pub fn app(state: AppState) -> Router {
             get(auth_pages::verify_page).post(auth_pages::verify_email),
         )
         .route("/settings", get(auth_pages::settings_page))
+        // A member's lists.
+        .route(
+            "/settings/lists",
+            get(list_pages::lists_page).post(list_pages::create_list),
+        )
+        .route(
+            "/settings/lists/{id}",
+            get(list_pages::list_page).post(list_pages::rename_list),
+        )
+        .route("/settings/lists/{id}/members", post(list_pages::add_member))
+        .route(
+            "/settings/lists/{id}/members/{user_id}/remove",
+            post(list_pages::remove_member),
+        )
+        .route("/settings/lists/{id}/delete", post(list_pages::delete_list))
         // The layout editors: a member's own front page, and the default.
         .merge(layout_routes::<false>())
         .merge(layout_routes::<true>())

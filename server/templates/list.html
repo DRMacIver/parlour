@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{%- import "_macros.html" as m -%}
+{% block title %}{{ self.title() }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/settings">Your account</a> › <a href="/settings/lists">Your lists</a> › <span aria-current="page">{{ self.title() }}</span></nav>
+<h1 class="page-title">{{ self.title() }}</h1>
+{% if list.frozen() %}
+<p class="lede">{{ list.owner.display_name }}’s account was deleted, so nobody can change who is on it. Wherever it let people read or post, it still does.</p>
+{% else if list.yours %}
+<p class="lede">Only you and the people on this list know it exists. Each of them can see its name and who else is on it.</p>
+{% else %}
+<p class="lede">{{ list.owner.display_name }} (@{{ list.owner.username }}) chose who is on this list. Everyone on it can see its name and who else is on it; only {{ list.owner.display_name }} can change it.</p>
+{% endif %}
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+{% call f::errors(errors) %}{% endcall %}
+
+<section class="panel" aria-labelledby="members-heading">
+  <h2 class="panel-bar" id="members-heading">Who is on it</h2>
+  {% if list.members.is_empty() %}
+  <p class="empty">Nobody is on it yet.</p>
+  {% else %}
+  <ul class="member-list admin-members">
+  {% for member in list.members %}
+    <li>
+      {% call m::avatar(member.user, "avatar-tiny") %}{% endcall %}
+      <span class="tree-names">
+        <a href="/u/{{ member.user.username }}">{{ member.user.display_name }}</a>
+        <span class="tree-username">@{{ member.user.username }}</span>
+        {% if list.yours %}<span class="row-meta">added {{ crate::format::date(member.added_at) }}</span>{% endif %}
+      </span>
+      {% if list.yours %}
+      <form class="form-inline" method="post" action="/settings/lists/{{ list.id }}/members/{{ member.user.id }}/remove">
+        <button class="button button-small button-quiet" type="submit" aria-label="Take {{ member.user.username }} off the list">Remove</button>
+      </form>
+      {% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+  {% if list.yours %}
+  <form class="form" method="post" action="/settings/lists/{{ list.id }}/members">
+    <div class="field">
+      <label for="username">Add someone</label>
+      <input id="username" name="username" type="text" maxlength="64" autocomplete="off" placeholder="username" value="{{ username }}" required>
+      <span class="field-hint">They aren’t told. Taking someone off later stops them reading what the list let them read; what they posted stays.</span>
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Add</button></div>
+  </form>
+  {% endif %}
+</section>
+
+<section class="panel" aria-labelledby="spaces-heading">
+  <h2 class="panel-bar" id="spaces-heading">Where it is named</h2>
+  {% if spaces.is_empty() %}
+  <p class="empty">{% if named_in == 0 %}No space’s settings name this list yet.{% else %}No space you can read names this list.{% endif %}</p>
+  {% else %}
+  <ul class="member-list">
+  {% for space in spaces %}
+    <li><a href="/c/{{ space.slug }}">{{ space.name }}</a></li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+{% if list.yours %}
+<form class="panel" method="post" action="/settings/lists/{{ list.id }}">
+  <h2 class="panel-bar">Rename it</h2>
+  <div class="form">
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" type="text" maxlength="60" value="{{ name }}" required>
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Save</button></div>
+  </div>
+</form>
+<section class="panel" aria-labelledby="delete-heading">
+  <h2 class="panel-bar" id="delete-heading">Delete</h2>
+  <div class="form">
+    {% if named_in > 0 %}
+    <p class="form-note">{{ self.named_in() }}</p>
+    {% else %}
+    <p class="form-note">Deleting the list takes everyone off it. It can’t be undone.</p>
+    <form class="form-inline" method="post" action="/settings/lists/{{ list.id }}/delete">
+      <button class="button button-quiet" type="submit">Delete this list</button>
+    </form>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+</div>
+{% endblock %}

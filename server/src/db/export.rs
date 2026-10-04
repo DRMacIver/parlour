@@ -1,7 +1,9 @@
 //! A member's own data, for them to download (DESIGN.md §2): their
 //! account and profile, everything they wrote (with earlier versions),
 //! their posts held for approval, reactions, conversations,
-//! notifications, invites, groups, blocks, thread subscriptions, how they have
+//! notifications, invites, site groups, their lists (with who is on them)
+//! and the lists they are on (with whose they are), blocks, thread
+//! subscriptions, how they have
 //! arranged their front page and what they have muted, uploads, reports,
 //! sessions and the addresses recorded for them.
 //!
@@ -18,7 +20,7 @@
 
 use serde_json::{Value, json};
 
-use crate::db::{Db, layouts};
+use crate::db::{Db, layouts, lists};
 use crate::viewer::Viewer;
 
 pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
@@ -131,11 +133,15 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
     .await?;
     let groups = sqlx::query_scalar!(
         "SELECT g.name FROM group_members m JOIN groups g ON g.id = m.group_id
-         WHERE m.user_id = $1 ORDER BY g.name",
+         WHERE m.user_id = $1 AND g.owner_user_id IS NULL ORDER BY g.name",
         user_id
     )
     .fetch_all(pool)
     .await?;
+    let (own_lists, other_lists): (Vec<_>, Vec<_>) = lists::known_to(db, user_id)
+        .await?
+        .into_iter()
+        .partition(|list| list.yours);
     let blocks = sqlx::query_scalar!(
         r#"SELECT u.username::text AS "username!" FROM blocks b JOIN users u ON u.id = b.blocked_user_id
            WHERE b.user_id = $1 ORDER BY b.created_at"#,
@@ -283,6 +289,14 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
         })).collect::<Vec<_>>(),
         "invited_members": invited,
         "groups": groups,
+        "lists": own_lists.iter().map(|l| json!({
+            "name": l.name,
+            "members": l.members.iter().map(|m| &m.user.username).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "lists_you_are_on": other_lists.iter().map(|l| json!({
+            "name": l.name,
+            "owner": l.owner.username,
+        })).collect::<Vec<_>>(),
         "blocked_members": blocks,
         "thread_subscriptions": subscriptions.iter().map(|s| json!({
             "thread_id": s.thread_id,
