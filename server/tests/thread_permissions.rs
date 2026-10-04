@@ -922,14 +922,15 @@ async fn a_restriction_names_only_groups_and_people_the_editor_may(pool: PgPool)
     .unwrap()
     .unwrap();
     // Kit runs the space and doesn't know Ruth's Friends, but may keep it
-    // where it is named already, while changing the rest.
+    // where it is named already, while changing the rest (naming for
+    // replying no more than for reading: repliers must be readers).
     let kit = club.viewer(club.kit).await;
     writing::restrict_thread(
         &f.state,
         &kit,
         thread,
         &ThreadRestriction {
-            read: Some(Grant::listed([club.friends], [club.maya])),
+            read: Some(Grant::listed([club.friends, organisers], [club.maya])),
             reply: Some(Grant::listed([organisers], [])),
         },
     )
@@ -942,7 +943,7 @@ async fn a_restriction_names_only_groups_and_people_the_editor_may(pool: PgPool)
         &kit,
         thread,
         &ThreadRestriction {
-            read: Some(Grant::listed([club.friends], [])),
+            read: Some(Grant::listed([club.friends, organisers], [])),
             reply: Some(Grant::listed([club.friends], [])),
         },
     )

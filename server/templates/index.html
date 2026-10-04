@@ -80,7 +80,7 @@
     <ol class="latest-list">
     {% for row in latest %}
       <li>
-        <a href="{{ crate::format::thread_href(row.thread.id, row.thread.slug) }}">{{ row.thread.title }}</a>
+        <a href="{{ crate::format::thread_href(row.thread.id, row.thread.slug) }}">{{ row.thread.title }}</a>{% if let Some(label) = row.restricted_to %} {% call m::restricted_flag(label) %}{% endcall %}{% endif %}
         <div class="row-meta">{{ row.space.name }} · {% call m::time(row.last_post_at) %}{% endcall %}</div>
       </li>
     {% endfor %}

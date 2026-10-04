@@ -530,3 +530,51 @@ async fn threads_start_with_no_restriction_of_their_own(db: PgPool) {
         .await;
     assert!(half.is_err());
 }
+
+/// Migration 0031 (DESIGN.md §3.4, §11): `/t/{id}/audience` is a thread's
+/// audience page, so a thread whose address ended in `audience` moves
+/// aside, as `subscribe` did in 0025; and held posts can carry a new
+/// thread's read restriction.
+#[sqlx::test(migrations = false)]
+async fn threads_called_audience_move_aside(db: PgPool) {
+    run_to(&db, 30).await;
+    exec(
+        &db,
+        "INSERT INTO users (id, username, display_name, email) OVERRIDING SYSTEM VALUE VALUES
+             (1, 'ruth', 'Ruth', 'ruth@example.com');
+         INSERT INTO spaces (id, slug, name, visibility) OVERRIDING SYSTEM VALUE VALUES
+             (11, 'games', 'Games', 'public');
+         INSERT INTO space_grants (space_id, verb, level) VALUES
+             (11, 'read', 'public'), (11, 'reply', 'members'), (11, 'start', 'members'),
+             (11, 'administer', 'staff');
+         INSERT INTO threads (id, space_id, visibility, title, slug, author_id) OVERRIDING SYSTEM VALUE VALUES
+             (1, 11, 'public', 'Audience', 'audience', 1),
+             (2, 11, 'public', 'Audience figures', 'audience-figures', 1);",
+    )
+    .await;
+
+    run_to(&db, 31).await;
+
+    assert_eq!(
+        pairs(&db, "SELECT id::text, slug FROM threads ORDER BY id").await,
+        vec![
+            ("1".to_owned(), "audience-thread".to_owned()),
+            ("2".to_owned(), "audience-figures".to_owned()),
+        ]
+    );
+    exec(
+        &db,
+        "INSERT INTO held_posts (author_id, space_id, title, body_md, read_group_ids, read_user_ids)
+         VALUES (1, 11, 'Quiet', 'Hush', '{}', '{1}')",
+    )
+    .await;
+    // A held reply can't carry one, and its two parts go together.
+    for sql in [
+        "INSERT INTO held_posts (author_id, thread_id, body_md, read_group_ids, read_user_ids)
+         VALUES (1, 1, 'Hush', '{}', '{1}')",
+        "INSERT INTO held_posts (author_id, space_id, title, body_md, read_user_ids)
+         VALUES (1, 11, 'Quiet', 'Hush', '{1}')",
+    ] {
+        assert!(sqlx::raw_sql(sql).execute(&db).await.is_err(), "{sql}");
+    }
+}

@@ -1392,6 +1392,7 @@ impl Seeder<'_> {
                 space_id: introductions,
                 title: "Hello from Otley".into(),
                 forked_from_post_id: None,
+                read: None,
             },
             "Hello! Ruth dragged me along to a Tuesday session last month and I haven’t stopped thinking about Brass since. Mostly into heavier euros, slowly learning to lose gracefully.",
         )

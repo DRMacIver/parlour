@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO held_posts (author_id, space_id, title, forked_from_post_id, thread_id,\n                                   reply_to_post_id, body_md)\n           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+  "query": "INSERT INTO held_posts (author_id, space_id, title, forked_from_post_id, thread_id,\n                                   reply_to_post_id, body_md, read_group_ids, read_user_ids)\n           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
   "describe": {
     "columns": [
       {
@@ -23,12 +23,14 @@
         "Int8",
         "Int8",
         "Int8",
-        "Text"
+        "Text",
+        "Int8Array",
+        "Int8Array"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "b6bee67cc968a43ec6bdf7882f2ace03f60aa50f297bff2cbc0a993f5c9c4d9f"
+  "hash": "3e817c8f2beb127251bd4e8ede61ffbd960ebbc46fb6e40115d360d92a6e8918"
 }

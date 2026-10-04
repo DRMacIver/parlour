@@ -11,10 +11,12 @@
   {% if thread.locked %}· <span class="flag">Locked</span>{% endif %}
   {% if let Some(Embed::Available(source)) = thread.embed %}· started from a post in <a href="{{ crate::format::thread_href(source.thread.id, source.thread.slug) }}">{{ source.thread.title }}</a>{% endif %}
 </p>
+{% call m::thread_lock(thread.read_label, thread.reply_label, thread.thread.id) %}{% endcall %}
 {% if pagination.is_multi_page() || self.logged_in() %}
 <div class="toolbar">
   {% if self.can_reply() %}<a class="button" href="#reply">Post reply</a>{% endif %}
   {% if self.logged_in() %}<a href="/t/{{ thread.thread.id }}/unread">First unread</a>{% endif %}
+  {% if may_restrict %}<a href="/t/{{ thread.thread.id }}/audience">Who can take part</a>{% endif %}
   {% if staff %}<a href="/mod/t/{{ thread.thread.id }}">Moderate thread</a>{% endif %}
   {% if let Some(subscribed) = subscribed %}{% call m::subscription_toggle(thread.thread.id, subscribed) %}{% endcall %}{% endif %}
   <span class="spacer"></span>
@@ -168,6 +170,7 @@
 </div>
 {% endif %}
 
+{% call m::thread_lock(thread.read_label, thread.reply_label, thread.thread.id) %}{% endcall %}
 {% match reply_box %}
 {% when ReplyBox::Form %}
 <form class="panel quick-reply" id="reply" method="post" action="/t/{{ thread.thread.id }}/reply">

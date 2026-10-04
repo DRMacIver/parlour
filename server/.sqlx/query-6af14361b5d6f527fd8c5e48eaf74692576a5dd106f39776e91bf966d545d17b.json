@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,\n               coalesce(lp.created_at, t.last_post_at) AS \"last_post_at!\", t.pinned, t.locked,\n               c.id AS space_id, c.slug AS space_slug, c.name AS space_name,\n               a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name,\n               lp.id AS \"last_post_id?\", lu.id AS \"last_user_id?\", lu.username AS \"last_username?\",\n               lu.display_name AS \"last_display_name?\",\n               src.id AS \"source_thread_id?\", src.title AS \"source_title?\", src.slug AS \"source_slug?\",\n               src.visible AS \"source_visible?\",\n               CASE WHEN $6::bigint IS NULL THEN NULL\n                    ELSE t.last_seq - coalesce(tr.last_read_seq, 0) END AS unread\n        FROM threads t\n        LEFT JOIN thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $6\n        JOIN spaces c ON c.id = t.space_id\n        JOIN users a ON a.id = t.author_id\n        LEFT JOIN LATERAL (\n            SELECT p.id, p.author_id, p.created_at FROM posts p\n            WHERE p.thread_id = t.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL\n            ORDER BY p.seq DESC\n            LIMIT 1\n        ) lp ON true\n        LEFT JOIN users lu ON lu.id = lp.author_id\n        LEFT JOIN LATERAL (\n            SELECT st.id, st.title, st.slug,\n                   st.deleted_at IS NULL AND thread_readable(st, $1, $2, $8, $9) AS visible\n            FROM posts sp JOIN threads st ON st.id = sp.thread_id\n            WHERE sp.id = t.forked_from_post_id\n        ) src ON true\n        WHERE t.deleted_at IS NULL\n          AND thread_readable(t, $1, $2, $8, $9)\n          AND t.space_id = ANY($3)\n        ORDER BY CASE WHEN $7 THEN t.pinned ELSE false END DESC,\n                 t.last_post_at DESC, t.id DESC\n        LIMIT $4 OFFSET $5\n        ",
+  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,\n               coalesce(lp.created_at, t.last_post_at) AS \"last_post_at!\", t.pinned, t.locked,\n               c.id AS space_id, c.slug AS space_slug, c.name AS space_name,\n               a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name,\n               lp.id AS \"last_post_id?\", lu.id AS \"last_user_id?\", lu.username AS \"last_username?\",\n               lu.display_name AS \"last_display_name?\",\n               src.id AS \"source_thread_id?\", src.title AS \"source_title?\", src.slug AS \"source_slug?\",\n               src.visible AS \"source_visible?\",\n               CASE WHEN $6::bigint IS NULL THEN NULL\n                    ELSE t.last_seq - coalesce(tr.last_read_seq, 0) END AS unread,\n               t.read_group_ids IS NOT NULL AS \"restricted!\",\n               site_group_names(coalesce(t.read_group_ids, '{}')) AS \"restricted_groups!\",\n               list_labels(coalesce(t.read_group_ids, '{}'), $6) AS \"restricted_lists!\",\n               people_names(coalesce(t.read_user_ids, '{}')) AS \"restricted_people!\"\n        FROM threads t\n        LEFT JOIN thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $6\n        JOIN spaces c ON c.id = t.space_id\n        JOIN users a ON a.id = t.author_id\n        LEFT JOIN LATERAL (\n            SELECT p.id, p.author_id, p.created_at FROM posts p\n            WHERE p.thread_id = t.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL\n            ORDER BY p.seq DESC\n            LIMIT 1\n        ) lp ON true\n        LEFT JOIN users lu ON lu.id = lp.author_id\n        LEFT JOIN LATERAL (\n            SELECT st.id, st.title, st.slug,\n                   st.deleted_at IS NULL AND thread_readable(st, $1, $2, $8, $9) AS visible\n            FROM posts sp JOIN threads st ON st.id = sp.thread_id\n            WHERE sp.id = t.forked_from_post_id\n        ) src ON true\n        WHERE t.deleted_at IS NULL\n          AND thread_readable(t, $1, $2, $8, $9)\n          AND t.space_id = ANY($3)\n        ORDER BY CASE WHEN $7 THEN t.pinned ELSE false END DESC,\n                 t.last_post_at DESC, t.id DESC\n        LIMIT $4 OFFSET $5\n        ",
   "describe": {
     "columns": [
       {
@@ -250,6 +250,30 @@
         "name": "unread",
         "type_info": "Int4",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 23,
+        "name": "restricted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 24,
+        "name": "restricted_groups!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 25,
+        "name": "restricted_lists!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 26,
+        "name": "restricted_people!",
+        "type_info": "TextArray",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -288,8 +312,12 @@
       false,
       false,
       null,
+      null,
+      null,
+      null,
+      null,
       null
     ]
   },
-  "hash": "2844bd300650763d6a6431c35cafb7bb1a85252d7deaa40b94ea083ff59ae58c"
+  "hash": "6af14361b5d6f527fd8c5e48eaf74692576a5dd106f39776e91bf966d545d17b"
 }

@@ -426,6 +426,9 @@ struct ThreadTemplate {
     subscribed: Option<bool>,
     /// Whether the viewer is staff, who see moderation links.
     staff: bool,
+    /// Whether the viewer may change who can read and reply in the
+    /// thread: its author, and those who run its space (DESIGN.md §3.4).
+    may_restrict: bool,
 }
 
 impl ThreadTemplate {
@@ -488,9 +491,16 @@ pub async fn thread(
         return Ok(redirect);
     }
     let mut deps = Deps::new();
-    let Some(thread) = content::thread_page(&state.db, &viewer, id, page, &mut deps).await? else {
+    let Some(mut thread) = content::thread_page(&state.db, &viewer, id, page, &mut deps).await?
+    else {
         return web::not_found(&state, &viewer).await;
     };
+    // Visitors never read a thread with a read restriction, and never
+    // reply, so a reply restriction is nothing to them; leaving it out
+    // also keeps the names it gives out of the cached page.
+    if viewer.user().is_none() {
+        thread.reply_label = None;
+    }
     if thread.thread.slug != slug {
         let canonical = page_href(&format::thread_href(&id, &thread.thread.slug), page);
         return Ok(Redirect::permanent(&canonical).into_response());
@@ -526,6 +536,9 @@ pub async fn thread(
             )
         }
     };
+    let may_restrict = viewer.user().is_some_and(|user| {
+        user.id == thread.author.id || thread.space.rules.may_administer(&viewer)
+    });
     let can_react = viewer.user().is_some_and(|user| {
         writing::restriction(user).is_none() && (!thread.locked || viewer.is_staff())
     });
@@ -542,6 +555,7 @@ pub async fn thread(
             divider_before,
             subscribed,
             staff: viewer.is_staff(),
+            may_restrict,
         },
         &deps,
     )

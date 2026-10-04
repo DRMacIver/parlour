@@ -38,15 +38,15 @@ pub fn slugify(title: &str) -> String {
     if slug.is_empty() {
         slug.push_str("thread");
     }
-    // `/t/{id}/unread`, `/t/{id}/reply`, `/t/{id}/subscribe` and
-    // `/t/{id}/unsubscribe` are routes of their own.
+    // `/t/{id}/unread`, `/t/{id}/reply`, `/t/{id}/subscribe`,
+    // `/t/{id}/unsubscribe` and `/t/{id}/audience` are routes of their own.
     if RESERVED_SLUGS.contains(&slug.as_str()) {
         slug.push_str("-thread");
     }
     slug
 }
 
-const RESERVED_SLUGS: &[&str] = &["unread", "reply", "subscribe", "unsubscribe"];
+const RESERVED_SLUGS: &[&str] = &["unread", "reply", "subscribe", "unsubscribe", "audience"];
 
 #[derive(Clone, Debug, Default)]
 pub struct NewUser {

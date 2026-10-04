@@ -350,6 +350,9 @@ pub struct ThreadRow {
     /// For a logged-in viewer, how many posts they haven't read yet: those
     /// after their read marker, or every post if they've never opened it.
     pub unread: Option<i64>,
+    /// For a thread with its own read restriction, who it names, as the
+    /// viewer may know them (DESIGN.md §3.3, §3.4): what its lock says.
+    pub restricted_to: Option<String>,
 }
 
 pub struct SpacePage {
@@ -669,7 +672,11 @@ async fn thread_rows(
                src.id AS "source_thread_id?", src.title AS "source_title?", src.slug AS "source_slug?",
                src.visible AS "source_visible?",
                CASE WHEN $6::bigint IS NULL THEN NULL
-                    ELSE t.last_seq - coalesce(tr.last_read_seq, 0) END AS unread
+                    ELSE t.last_seq - coalesce(tr.last_read_seq, 0) END AS unread,
+               t.read_group_ids IS NOT NULL AS "restricted!",
+               site_group_names(coalesce(t.read_group_ids, '{}')) AS "restricted_groups!",
+               list_labels(coalesce(t.read_group_ids, '{}'), $6) AS "restricted_lists!",
+               people_names(coalesce(t.read_user_ids, '{}')) AS "restricted_people!"
         FROM threads t
         LEFT JOIN thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $6
         JOIN spaces c ON c.id = t.space_id
@@ -751,6 +758,13 @@ async fn thread_rows(
                 locked: row.locked,
                 forked_from,
                 unread: row.unread.map(i64::from),
+                restricted_to: row.restricted.then(|| {
+                    crate::format::restriction_label(
+                        &row.restricted_groups,
+                        &row.restricted_lists,
+                        &row.restricted_people,
+                    )
+                }),
             }
         })
         .collect())
@@ -772,6 +786,11 @@ pub struct ThreadPage {
     pub locked: bool,
     /// Its own read and reply restriction, if it has one (DESIGN.md §3.4).
     pub restriction: ThreadRestriction,
+    /// Who its read restriction names, if it has one, as the viewer may
+    /// know them: the audience shown beside its lock.
+    pub read_label: Option<String>,
+    /// And its reply restriction.
+    pub reply_label: Option<String>,
     /// For a quote-fork, the post it quotes.
     pub embed: Option<Embed>,
     pub posts: Vec<PostView>,
@@ -917,7 +936,13 @@ pub async fn thread_page(
                        WHERE s.user_id = $5 AND s.thread_id = t.id) AS "subscribed!",
                a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name,
                o.id AS "owner_id?", o.username::text AS "owner_username?",
-               o.display_name AS "owner_display_name?", o.deleted_at IS NOT NULL AS "owner_deleted?"
+               o.display_name AS "owner_display_name?", o.deleted_at IS NOT NULL AS "owner_deleted?",
+               site_group_names(coalesce(t.read_group_ids, '{}')) AS "read_groups!",
+               list_labels(coalesce(t.read_group_ids, '{}'), $5) AS "read_lists!",
+               people_names(coalesce(t.read_user_ids, '{}')) AS "read_people!",
+               site_group_names(coalesce(t.reply_group_ids, '{}')) AS "reply_groups!",
+               list_labels(coalesce(t.reply_group_ids, '{}'), $5) AS "reply_lists!",
+               people_names(coalesce(t.reply_user_ids, '{}')) AS "reply_people!"
         FROM threads t
         JOIN space_targets c ON c.id = t.space_id
         JOIN users a ON a.id = t.author_id
@@ -1010,6 +1035,20 @@ pub async fn thread_page(
         last_seq: i64::from(thread.last_seq),
         pinned: thread.pinned,
         locked: thread.locked,
+        read_label: thread.thread_read_group_ids.is_some().then(|| {
+            crate::format::restriction_label(
+                &thread.read_groups,
+                &thread.read_lists,
+                &thread.read_people,
+            )
+        }),
+        reply_label: thread.thread_reply_group_ids.is_some().then(|| {
+            crate::format::restriction_label(
+                &thread.reply_groups,
+                &thread.reply_lists,
+                &thread.reply_people,
+            )
+        }),
         restriction: ThreadRestriction::from_parts(
             thread.thread_read_group_ids.as_deref(),
             thread.thread_read_user_ids.as_deref(),
@@ -2204,6 +2243,9 @@ pub struct RestrictionTarget {
     pub restriction: ThreadRestriction,
     /// Whether the viewer can read the thread itself.
     pub readable: bool,
+    /// The thread's title and address, for a viewer who can read it.
+    pub thread: Option<ThreadRef>,
+    pub locked: bool,
 }
 
 impl RestrictionTarget {
@@ -2223,7 +2265,7 @@ pub async fn restriction_target(
     let filter = viewer.filter();
     let Some(row) = sqlx::query!(
         r#"
-        SELECT t.author_id, t.space_id AS "space_id!",
+        SELECT t.author_id, t.space_id AS "space_id!", t.title, t.slug, t.locked,
                t.read_group_ids, t.read_user_ids, t.reply_group_ids, t.reply_user_ids,
                thread_readable(t, $2, $3, $4, $5) AS "readable!"
         FROM threads t
@@ -2254,6 +2296,74 @@ pub async fn restriction_target(
             row.reply_user_ids.as_deref(),
         ),
         readable: row.readable,
+        thread: row.readable.then_some(ThreadRef {
+            id: thread_id,
+            title: row.title,
+            slug: row.slug,
+        }),
+        locked: row.locked,
+    }))
+}
+
+/// Who one part of a thread's restriction names, as the viewer may know
+/// them (DESIGN.md §3.3).
+#[derive(Clone, Debug)]
+pub struct NamedAudience {
+    pub groups: Vec<NamedGroup>,
+    /// The people it names one by one, whose accounts still exist.
+    pub people: Vec<UserRef>,
+}
+
+/// Who may read and reply in a thread: its audience page (DESIGN.md
+/// §3.4).
+#[derive(Clone, Debug)]
+pub struct ThreadAudience {
+    pub target: RestrictionTarget,
+    pub author: UserRef,
+    /// Who its read restriction names, or `None` while it has its space's
+    /// readers.
+    pub read: Option<NamedAudience>,
+    /// And its reply restriction.
+    pub reply: Option<NamedAudience>,
+}
+
+/// Who may read and reply in a live thread in a space the viewer can
+/// read, whether or not they can read the thread itself (its space's
+/// administrators may change its restriction even then), naming groups,
+/// lists and their members only as [`space_audience`] does. `None` if
+/// there is no such thread; the caller decides who may see the rest.
+pub async fn thread_audience(
+    db: &Db,
+    viewer: &Viewer,
+    thread_id: i64,
+) -> sqlx::Result<Option<ThreadAudience>> {
+    let Some(target) = restriction_target(db, viewer, thread_id).await? else {
+        return Ok(None);
+    };
+    let author = sqlx::query_as!(
+        UserRef,
+        r#"SELECT id, username::text AS "username!", display_name FROM users WHERE id = $1"#,
+        target.author_id,
+    )
+    .fetch_one(db.pool())
+    .await?;
+    let mut parts = Vec::new();
+    for part in [&target.restriction.read, &target.restriction.reply] {
+        parts.push(match part {
+            Some(grant) => Some(NamedAudience {
+                groups: named_groups(db, viewer, &grant.group_ids()).await?,
+                people: people_named(db, &grant.user_ids()).await?,
+            }),
+            None => None,
+        });
+    }
+    let reply = parts.pop().flatten();
+    let read = parts.pop().flatten();
+    Ok(Some(ThreadAudience {
+        target,
+        author,
+        read,
+        reply,
     }))
 }
 

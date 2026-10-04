@@ -232,6 +232,18 @@ pub async fn grant<'c>(
     Ok(())
 }
 
+/// Those of these groups and lists (of any kind) that still exist, locked against
+/// being deleted until the transaction ends.
+pub async fn still_there<'c>(db: impl Handle<'c>, ids: &[i64]) -> sqlx::Result<Vec<i64>> {
+    let mut conn = db.open(KEY).acquire().await?;
+    sqlx::query_scalar!(
+        "SELECT id FROM groups WHERE id = ANY($1) ORDER BY id FOR KEY SHARE",
+        ids
+    )
+    .fetch_all(&mut *conn)
+    .await
+}
+
 /// A group, as listed for admins and in pickers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GroupSummary {

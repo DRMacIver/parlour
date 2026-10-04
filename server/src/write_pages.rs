@@ -20,8 +20,10 @@ use crate::content::{
 use crate::diff::{self, Segment};
 use crate::error::AppError;
 use crate::format;
+use crate::groups;
 use crate::pages::parse_id;
 use crate::store;
+use crate::thread_audience_pages::{PartForm, ReadPart, part_grant};
 use crate::viewer::Viewer;
 use crate::web::{self, Layout, Nav, cacheable, render, see_other};
 use crate::writing::{self, MAX_REACTIONS, Posted, Refused, Written};
@@ -87,11 +89,15 @@ struct Draft {
     space: String,
     /// A moderator's reason for editing someone else's post.
     reason: String,
+    /// For a new thread, who alone may read it, if the author narrows it
+    /// (DESIGN.md §3.4).
+    read: PartForm,
 }
 
 impl Draft {
     fn from_fields(fields: &Fields) -> Draft {
         Draft {
+            read: PartForm::from_fields(fields, "read"),
             reason: field(fields, "reason").unwrap_or_default().to_owned(),
             title: field(fields, "title").unwrap_or_default().to_owned(),
             body: field(fields, "body").unwrap_or_default().to_owned(),
@@ -138,6 +144,11 @@ struct ComposeTemplate {
     errors: Vec<String>,
     /// For a moderator editing someone else's post, the reason so far.
     mod_reason: Option<String>,
+    /// For a new thread, "only these people can read it": what the author
+    /// has chosen, and the groups and lists they may name.
+    read: Option<ReadPart>,
+    /// The space a new thread goes in, for the read part's choices.
+    space_name: String,
 }
 
 fn space_crumbs(space: &SpaceTarget) -> Vec<Crumb> {
@@ -213,6 +224,11 @@ async fn render_compose(
     };
     let template = match compose {
         Compose::NewThread(space) => ComposeTemplate {
+            read: Some(ReadPart {
+                choices: groups::choosable(state.db(), viewer.user_id(), &[]).await?,
+                form: draft.read,
+            }),
+            space_name: space.space.name.clone(),
             mod_reason: None,
             heading: format!("New thread in {}", space.space.name),
             form_label: "New thread",
@@ -243,6 +259,8 @@ async fn render_compose(
                 None => None,
             };
             ComposeTemplate {
+                read: None,
+                space_name: String::new(),
                 mod_reason: None,
                 heading: format!("Reply to {}", thread.name.clone()),
                 form_label: "Reply",
@@ -262,6 +280,8 @@ async fn render_compose(
             }
         }
         Compose::Edit(post) => ComposeTemplate {
+            read: None,
+            space_name: String::new(),
             mod_reason: writing::editing_as_moderator(viewer, &post).then(|| draft.reason.clone()),
             heading: format!("Edit № {}", post.seq),
             form_label: "Edit post",
@@ -290,6 +310,8 @@ async fn render_compose(
                 draft.space.clone()
             };
             ComposeTemplate {
+                read: None,
+                space_name: String::new(),
                 mod_reason: None,
                 heading: format!("Start a new thread from № {}", source.seq),
                 form_label: "New thread",
@@ -527,7 +549,33 @@ pub async fn new_thread(
             Err(refusal) => refused(&state, &viewer, refusal, &back, Typed::Text(draft)).await,
         };
     }
-    match writing::new_thread(&state, &viewer, &slug, &draft.title, &draft.body).await? {
+    let read = match part_grant(
+        &state,
+        &draft.read,
+        &groups::choosable(state.db(), viewer.user_id(), &[]).await?,
+        None,
+    )
+    .await?
+    {
+        Ok(read) => read,
+        Err(problems) => {
+            let compose = match new_thread_target(&state, &viewer, &slug).await? {
+                Ok(space) => Typed::Form(Box::new(Compose::NewThread(space)), draft),
+                Err(_) => Typed::Text(draft),
+            };
+            return refused(&state, &viewer, Refused::Invalid(problems), &back, compose).await;
+        }
+    };
+    match writing::new_thread(
+        &state,
+        &viewer,
+        &slug,
+        &draft.title,
+        &draft.body,
+        read.as_ref(),
+    )
+    .await?
+    {
         Ok(done) => written(&state, &viewer, done).await,
         Err(refusal) => {
             let compose = match new_thread_target(&state, &viewer, &slug).await? {

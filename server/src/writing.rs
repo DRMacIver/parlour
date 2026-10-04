@@ -17,7 +17,7 @@ use crate::error::AppError;
 use crate::markdown;
 use crate::mod_records::{self, HeldPlace, NewAction};
 use crate::notify;
-use crate::permissions::{Audience, ThreadRestriction, at_most_as_visible};
+use crate::permissions::{Audience, Grant, ThreadRestriction, at_most_as_visible};
 use crate::ratelimit::{Action, Scope};
 use crate::social;
 use crate::store::{self, Edited, NewPost, NewThread};
@@ -288,12 +288,18 @@ pub fn may_delete(viewer: &Viewer, post: &PostTarget) -> bool {
 
 // ---------------------------------------------------------------------------
 
+/// Starts a thread in a space, with its first post. `read`, if given, is
+/// the read restriction its author chooses for it from the start
+/// (DESIGN.md §3.4): the groups, lists and people who alone may read it,
+/// of those who can read the space, checked as [`restrict_thread`] checks
+/// names; it always names the author too.
 pub async fn new_thread(
     state: &AppState,
     viewer: &Viewer,
     space_slug: &str,
     title: &str,
     body: &str,
+    read: Option<&Grant>,
 ) -> Outcome<Written> {
     let Some(user) = viewer.user() else {
         return Ok(Err(Refused::LogIn));
@@ -311,9 +317,20 @@ pub async fn new_thread(
     let mut problems = Vec::new();
     check_title(&title, &mut problems);
     check_body(&body, &mut problems);
+    let restriction = ThreadRestriction {
+        read: read.cloned(),
+        reply: None,
+    };
+    if !restriction.is_valid() {
+        problems.push(NARROWED_TO_NAMES.to_owned());
+    } else {
+        problems
+            .extend(unnameable(state, user.id, &restriction, &ThreadRestriction::default()).await?);
+    }
     if !problems.is_empty() {
         return Ok(Err(Refused::Invalid(problems)));
     }
+    let restriction = named_in(restriction, user.id, &space);
     if !allowed_to_post(state, user, Action::Post).await? {
         return Ok(Err(Refused::RateLimited));
     }
@@ -322,6 +339,7 @@ pub async fn new_thread(
             space_id: space.space.id,
             title,
             forked_from_post_id: None,
+            read: restriction.read,
         };
         let id = mod_records::hold(state.db(), user.id, &place, &body).await?;
         return Ok(Ok(Written::Held(id)));
@@ -338,6 +356,7 @@ pub async fn new_thread(
             locked: false,
             created_at: None,
         },
+        &restriction,
     )
     .await?;
     Ok(Ok(Written::Posted(Posted {
@@ -584,8 +603,7 @@ pub async fn restrict_thread(
         return Ok(Err(Refused::NotFound));
     };
     let author = target.author_id == user.id && target.readable;
-    let runs = target.space.rules.may_administer(viewer);
-    if !author && !runs {
+    if !may_restrict(viewer, &target) {
         return Ok(Err(if target.readable {
             Refused::NotAllowed(
                 "Only the thread’s author and the people who run its space can change who may read it and reply in it.",
@@ -600,18 +618,15 @@ pub async fn restrict_thread(
         )));
     }
     if !restriction.is_valid() {
-        return Ok(Err(Refused::Invalid(vec![
-            "A thread can only be narrowed to groups, lists and people.".to_owned(),
-        ])));
+        return Ok(Err(Refused::Invalid(vec![NARROWED_TO_NAMES.to_owned()])));
     }
-    let problems = unnameable(state, user.id, restriction, &target.restriction).await?;
+    let mut problems = unnameable(state, user.id, restriction, &target.restriction).await?;
+    let restriction = named_in(restriction.clone(), target.author_id, &target.space);
+    if !restriction.reply_within_read() {
+        problems.push(REPLIERS_READ.to_owned());
+    }
     if !problems.is_empty() {
         return Ok(Err(Refused::Invalid(problems)));
-    }
-    let mut restriction = restriction.clone().naming(target.author_id);
-    // A feed's owner holds every permission on it (DESIGN.md §2, §3.2).
-    if let Some(owner) = &target.space.owner {
-        restriction = restriction.naming(owner.user.id);
     }
     if restriction == target.restriction {
         return Ok(Ok(()));
@@ -659,6 +674,31 @@ pub async fn restrict_thread(
 }
 
 const CHOOSE_GROUPS: &str = "Choose groups and lists from those offered.";
+
+const NARROWED_TO_NAMES: &str = "A thread can only be narrowed to groups, lists and people.";
+
+const REPLIERS_READ: &str = "Only people who can read the thread can reply in it, so name each group, list and person who may reply among those who may read it too.";
+
+/// Whether the viewer may change who can read a thread and reply in it
+/// (DESIGN.md §3.4): its author, while they can read it, and those who run
+/// its space, staff included, whether or not they can read it. Suspended
+/// members are refused later, with a reason.
+pub fn may_restrict(viewer: &Viewer, target: &content::RestrictionTarget) -> bool {
+    let author = viewer.user_id() == Some(target.author_id) && target.readable;
+    author || target.space.rules.may_administer(viewer)
+}
+
+/// A restriction as it is saved: naming the thread's author in every part,
+/// who could otherwise shut themselves out of their own thread, and in a
+/// feed its owner, who holds every permission on it (DESIGN.md §2, §3.2;
+/// the database names them too, however a thread comes there).
+fn named_in(restriction: ThreadRestriction, author: i64, space: &SpaceTarget) -> ThreadRestriction {
+    let restriction = restriction.naming(author);
+    match &space.owner {
+        Some(owner) => restriction.naming(owner.user.id),
+        None => restriction,
+    }
+}
 
 /// What is wrong with the names a member gives a thread's restriction
 /// (DESIGN.md §3.3, §3.4), as a grant's form checks them
@@ -766,6 +806,7 @@ pub async fn fork(
             space_id: destination.space.id,
             title,
             forked_from_post_id: Some(post_id),
+            read: None,
         };
         let id = mod_records::hold(state.db(), user.id, &place, &body).await?;
         return Ok(Ok(Written::Held(id)));
@@ -782,6 +823,7 @@ pub async fn fork(
             locked: false,
             created_at: None,
         },
+        &ThreadRestriction::default(),
     )
     .await?;
     Ok(Ok(Written::Posted(Posted {
@@ -791,13 +833,19 @@ pub async fn fork(
 }
 
 /// Creates a space thread with its first post (which subscribes its
-/// author to it), and queues the notifications about it.
+/// author to it) and its own restriction, if it has one, and queues the
+/// notifications about it, which go only to those the restriction lets
+/// read it.
 pub(crate) async fn create_thread(
     state: &AppState,
     thread: &NewThread,
+    restriction: &ThreadRestriction,
 ) -> Result<store::CreatedThread, AppError> {
     let mut tx = state.db().begin().await?;
     let created = store::create_thread(&mut tx, thread).await?;
+    if !restriction.is_inherited() {
+        store::set_thread_restriction(&mut tx, created.thread_id, restriction).await?;
+    }
     notify::queue_post(&mut tx, created.first_post_id).await?;
     tx.commit().await?;
     state.jobs().wake();

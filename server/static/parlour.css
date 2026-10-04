@@ -613,6 +613,21 @@ img.avatar { object-fit: cover; background: var(--rule); filter: none; }
 .page-title .flag-access { font-size: 15px; vertical-align: middle; }
 .flag-icon { margin-right: 4px; vertical-align: -1px; }
 
+/* A thread narrower than its space: its lock and who it is for, by the
+   title and beside the reply box (DESIGN.md §3.4). */
+.thread-audience {
+  margin: 0 0 12px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-muted);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.thread-audience .flag-icon { color: var(--accent); }
+.thread-audience a { margin-left: 4px; font-variant: small-caps; letter-spacing: 0.04em; }
+.quick-reply + .thread-audience, .thread-audience + .quick-reply { margin-top: 16px; }
+
 /* The admin pages for spaces and groups, and the layout editors. */
 .layout-section-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .layout-section-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }

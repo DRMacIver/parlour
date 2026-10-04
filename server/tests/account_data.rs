@@ -579,6 +579,7 @@ async fn the_export_includes_held_posts_and_notifications(pool: PgPool) {
             space_id: s.public,
             title: "Ruth's held title".into(),
             forked_from_post_id: None,
+            read: None,
         },
         "Ruth's rejected thread.",
     )

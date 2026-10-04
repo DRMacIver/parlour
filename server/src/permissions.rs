@@ -405,6 +405,21 @@ impl ThreadRestriction {
         self
     }
 
+    /// Whether everyone the reply restriction names is named for reading
+    /// too, by the same names, when both parts restrict: repliers must be
+    /// readers (DESIGN.md §3.4), and names are compared rather than the
+    /// people behind them, as §3.1 compares audiences, so that the answer
+    /// doesn't change as memberships do or tell anyone who is on a list.
+    pub fn reply_within_read(&self) -> bool {
+        match (&self.read, &self.reply) {
+            (Some(read), Some(reply)) => {
+                reply.group_ids.is_subset(&read.group_ids)
+                    && reply.user_ids.is_subset(&read.user_ids)
+            }
+            _ => true,
+        }
+    }
+
     /// Who can read the thread: its space's readers, narrowed by its own
     /// read restriction.
     pub fn audience(&self, space: &SpaceRules) -> Audience {
@@ -871,5 +886,31 @@ mod tests {
         for level in [Level::Public, Level::Members, Level::Staff, Level::Listed] {
             assert_eq!(Level::parse(level.as_str()), Some(level));
         }
+    }
+
+    #[test]
+    fn repliers_are_named_among_readers() {
+        let r = |read: Option<Grant>, reply: Option<Grant>| ThreadRestriction { read, reply };
+        // Either part may inherit.
+        assert!(r(None, None).reply_within_read());
+        assert!(r(Some(Grant::listed([1], [7])), None).reply_within_read());
+        assert!(r(None, Some(Grant::listed([1], [7]))).reply_within_read());
+        // Both restricting: replying names no more than reading does.
+        assert!(
+            r(
+                Some(Grant::listed([1, 2], [7, 8])),
+                Some(Grant::listed([2], [8]))
+            )
+            .reply_within_read()
+        );
+        assert!(r(Some(Grant::listed([1], [7])), Some(Grant::listed([], []))).reply_within_read());
+        assert!(
+            !r(Some(Grant::listed([1], [7])), Some(Grant::listed([2], []))).reply_within_read()
+        );
+        // Even someone who is in a group reading names: names are compared.
+        assert!(!r(Some(Grant::listed([1], [])), Some(Grant::listed([], [7]))).reply_within_read());
+        // Naming someone in every part keeps it so.
+        let named = r(Some(Grant::listed([1], [])), Some(Grant::listed([1], []))).naming(9);
+        assert!(named.reply_within_read());
     }
 }

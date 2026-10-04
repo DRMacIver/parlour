@@ -1285,6 +1285,7 @@ impl World {
         for t in &self.threads {
             paths.push(format!("/t/{}", t.id));
             paths.push(format!("/t/{}/unread", t.id));
+            paths.push(format!("/t/{}/audience", t.id));
             for page in 1..=page_count(t.last_seq, POSTS_PER_PAGE) + 1 {
                 paths.push(page_href(&format!("/t/{}/{}", t.id, self.slug_of(t)), page));
             }
@@ -1580,6 +1581,13 @@ impl World {
                 assert_eq!(response.status, StatusCode::OK);
                 assert!(response.body.contains(&t.title_token));
                 self.check_toggle(who, t.id, true, &response.body);
+                // A lock and its audience only for a thread narrower than
+                // its space (DESIGN.md §3.4).
+                assert_eq!(
+                    response.body.contains("class=\"thread-audience\""),
+                    t.read.is_some(),
+                    "{who:?}'s lock on thread {i}"
+                );
             } else if let Some(into) = t.merged_into.filter(|&into| {
                 t.deleted && self.readable_if_live(i, who) && self.thread_readable(into, who)
             }) {
@@ -1593,6 +1601,19 @@ impl World {
             } else {
                 assert_eq!(response.status, StatusCode::NOT_FOUND, "{who:?} thread {i}");
             }
+        }
+        // Who can take part in a thread: for members who can read it, and
+        // those who run its space (here, staff), whom it shows to without
+        // its title if it doesn't let them read it; visitors log in first.
+        for (i, t) in self.threads.iter().enumerate() {
+            let response = pages.get(&format!("/t/{}/audience", t.id));
+            let expected = match who {
+                Who::Anonymous => StatusCode::SEE_OTHER,
+                Who::Staff if !t.deleted => StatusCode::OK,
+                _ if self.thread_readable(i, who) => StatusCode::OK,
+                _ => StatusCode::NOT_FOUND,
+            };
+            assert_eq!(response.status, expected, "{who:?} audience of thread {i}");
         }
         for (i, p) in self.posts.iter().enumerate() {
             let permalink = pages.get(&format!("/p/{}", p.id));
@@ -2542,6 +2563,7 @@ impl World {
                     space_id: self.spaces[space].id,
                     title: format!("Thread {title_token}"),
                     forked_from_post_id: None,
+                    read: None,
                 },
                 &format!("Held {body_token}"),
             ))
@@ -2787,6 +2809,10 @@ struct AccessThread {
     /// Its own reply restriction, if it has one.
     reply: Option<Names>,
 }
+
+/// How an audience page names a group or list: whether it is a list, who
+/// is in it (if the viewer is shown), and a stranger's list's label.
+type NamedSeen = (bool, Option<BTreeSet<i64>>, Option<String>);
 
 /// The groups (indexes into `Access::groups`) and members (indexes into
 /// `Access::users`) a thread's restriction names.
@@ -4209,6 +4235,7 @@ impl Access {
         }
 
         self.check_audience(who, &viewer);
+        self.check_thread_audience(who, &viewer);
         if let Some(u) = who {
             self.check_grant_choices(u);
         }
@@ -4222,7 +4249,6 @@ impl Access {
     /// and to anyone else is "people X has chosen", once per owner; a site
     /// group's members are listed only to the people in it.
     fn check_audience(&self, who: Option<usize>, viewer: &Viewer) {
-        const NAMES: [&str; 5] = ["Boss", "Ruth", "Jonah", "Maya", "Kit"];
         let nobody = BTreeSet::new();
         for (c, space) in self.spaces.iter().enumerate() {
             let audience = self
@@ -4242,62 +4268,126 @@ impl Access {
                     "reply" | "start" => &space.write_groups,
                     _ => &nobody,
                 };
-                let user_ids = |members: &BTreeSet<usize>| -> BTreeSet<i64> {
-                    members.iter().map(|&u| self.users[u].id).collect()
-                };
-                let on = |g: usize| -> BTreeSet<usize> {
-                    (0..self.users.len())
-                        .filter(|&u| self.users[u].groups.contains(&g))
-                        .collect()
-                };
-                let mut expected: Vec<(bool, Option<BTreeSet<i64>>, Option<String>)> = Vec::new();
-                let mut strangers = BTreeSet::new();
-                for &g in named {
-                    let knows = who.is_some_and(|u| {
-                        self.users[u].groups.contains(&g) || self.group_owners[g] == Some(u)
-                    });
-                    match self.group_owners[g] {
-                        None => expected.push((false, knows.then(|| user_ids(&on(g))), None)),
-                        Some(_) if knows => expected.push((true, Some(user_ids(&on(g))), None)),
-                        Some(owner) => {
-                            if strangers.insert(owner) {
-                                expected.push((
-                                    true,
-                                    None,
-                                    Some(format!("people {} has chosen", NAMES[owner])),
-                                ));
-                            }
-                        }
-                    }
-                }
-                let mut found: Vec<(bool, Option<BTreeSet<i64>>, Option<String>)> = grant
-                    .groups
-                    .iter()
-                    .map(|group| {
-                        let members = group
-                            .members
-                            .as_ref()
-                            .map(|m| m.iter().map(|u| u.id).collect());
-                        let stranger =
-                            (group.list && members.is_none()).then(|| group.label.clone());
-                        (group.list, members, stranger)
-                    })
-                    .collect();
-                expected.sort();
-                found.sort();
                 assert_eq!(
-                    found, expected,
+                    self.found_groups(&grant.groups),
+                    self.expected_groups(who, named),
                     "{who:?}: {} grant of space {c}",
                     grant.verb
                 );
-                // A list's own name reaches only those who know it.
-                for group in &grant.groups {
-                    if group.list && group.members.is_none() {
-                        assert!(group.label.starts_with("people "), "{}", group.label);
+            }
+        }
+    }
+
+    /// A thread's audience page (DESIGN.md §3.4): for every live thread
+    /// in a space the viewer reads, whether they read the thread itself
+    /// (only then its title), and each part of its restriction naming its
+    /// groups and lists as a space's audience page does, and its people.
+    fn check_thread_audience(&self, who: Option<usize>, viewer: &Viewer) {
+        for (t, thread) in self.threads.iter().enumerate() {
+            let audience = self
+                .block(content::thread_audience(&self.db, viewer, thread.id))
+                .unwrap();
+            assert_eq!(
+                audience.is_some(),
+                !thread.deleted && self.reads_space(who, thread.space),
+                "{who:?}: audience of thread {t}"
+            );
+            let Some(audience) = audience else {
+                continue;
+            };
+            let reads = self.reads_thread(who, t);
+            assert_eq!(audience.target.readable, reads, "{who:?}: thread {t}");
+            assert_eq!(
+                audience.target.thread.is_some(),
+                reads,
+                "{who:?}: thread {t}"
+            );
+            for (part, names, shown) in [
+                ("read", &thread.read, &audience.read),
+                ("reply", &thread.reply, &audience.reply),
+            ] {
+                assert_eq!(shown.is_some(), names.is_some(), "{who:?}: {part} of {t}");
+                let (Some(names), Some(shown)) = (names, shown) else {
+                    continue;
+                };
+                assert_eq!(
+                    self.found_groups(&shown.groups),
+                    self.expected_groups(who, &names.groups),
+                    "{who:?}: {part} restriction of thread {t}"
+                );
+                let people: BTreeSet<i64> = shown.people.iter().map(|p| p.id).collect();
+                let expected: BTreeSet<i64> =
+                    names.users.iter().map(|&u| self.users[u].id).collect();
+                assert_eq!(
+                    people, expected,
+                    "{who:?}: {part} restriction of thread {t}"
+                );
+            }
+        }
+    }
+
+    /// How an audience page should name these groups and lists to the
+    /// viewer (DESIGN.md §3.3): each site group, with who is in it for the
+    /// people in it; each list they own or are on, with who is on it; and
+    /// any other lists as "people X has chosen", once per owner. Each is
+    /// (whether it is a list, who is in it if shown, the label if it is a
+    /// stranger's list).
+    fn expected_groups(&self, who: Option<usize>, named: &BTreeSet<usize>) -> Vec<NamedSeen> {
+        const NAMES: [&str; 5] = ["Boss", "Ruth", "Jonah", "Maya", "Kit"];
+        let user_ids = |members: &BTreeSet<usize>| -> BTreeSet<i64> {
+            members.iter().map(|&u| self.users[u].id).collect()
+        };
+        let on = |g: usize| -> BTreeSet<usize> {
+            (0..self.users.len())
+                .filter(|&u| self.users[u].groups.contains(&g))
+                .collect()
+        };
+        let mut expected = Vec::new();
+        let mut strangers = BTreeSet::new();
+        for &g in named {
+            let knows = who.is_some_and(|u| {
+                self.users[u].groups.contains(&g) || self.group_owners[g] == Some(u)
+            });
+            match self.group_owners[g] {
+                None => expected.push((false, knows.then(|| user_ids(&on(g))), None)),
+                Some(_) if knows => expected.push((true, Some(user_ids(&on(g))), None)),
+                Some(owner) => {
+                    if strangers.insert(owner) {
+                        expected.push((
+                            true,
+                            None,
+                            Some(format!("people {} has chosen", NAMES[owner])),
+                        ));
                     }
                 }
             }
         }
+        expected.sort();
+        expected
+    }
+
+    /// The groups and lists an audience page names, as
+    /// [`Access::expected_groups`] describes them; a list's own name never
+    /// reaches anyone who doesn't know it.
+    fn found_groups(&self, groups: &[content::NamedGroup]) -> Vec<NamedSeen> {
+        let mut found: Vec<NamedSeen> = groups
+            .iter()
+            .map(|group| {
+                let members = group
+                    .members
+                    .as_ref()
+                    .map(|m| m.iter().map(|u| u.id).collect());
+                let stranger = (group.list && members.is_none()).then(|| group.label.clone());
+                (group.list, members, stranger)
+            })
+            .collect();
+        for group in groups {
+            if group.list && group.members.is_none() {
+                assert!(group.label.starts_with("people "), "{}", group.label);
+            }
+        }
+        found.sort();
+        found
     }
 
     /// Whether member `u` knows group `g` exists and what it is called: a
@@ -4872,9 +4962,34 @@ impl Access {
                     });
                 }
             }
+            // And mostly name for replying only those named for reading.
+            if let (Some(read), Some(reply)) = (&read, &mut reply)
+                && tc.draw(gs::booleans())
+            {
+                reply.groups.retain(|g| read.groups.contains(g));
+                reply.users.retain(|u| read.users.contains(u));
+            }
         }
-        let lawful =
-            nameable(&read, &self.threads[t].read) && nameable(&reply, &self.threads[t].reply);
+        // Repliers must be readers (DESIGN.md §3.4): when both parts
+        // restrict, replying names no more than reading does, once the
+        // author and a feed's owner are named in both.
+        let always: BTreeSet<usize> = [self.threads[t].author]
+            .into_iter()
+            .chain(self.spaces[self.threads[t].space].owner)
+            .collect();
+        let within = match (&read, &reply) {
+            (Some(read), Some(reply)) => {
+                reply.groups.is_subset(&read.groups)
+                    && reply
+                        .users
+                        .iter()
+                        .all(|u| read.users.contains(u) || always.contains(u))
+            }
+            _ => true,
+        };
+        let lawful = nameable(&read, &self.threads[t].read)
+            && nameable(&reply, &self.threads[t].reply)
+            && within;
         let restriction = self.restriction(&read, &reply);
         let viewer = self.viewer(Some(u));
         let outcome = self
@@ -4916,7 +5031,7 @@ impl Access {
         if !lawful {
             assert!(
                 matches!(outcome, Err(Refused::Invalid(_))),
-                "{u} naming what they don't know in {t}: {outcome:?}"
+                "{u} naming what they don't know, or repliers who can't read, in {t}: {outcome:?}"
             );
             return;
         }

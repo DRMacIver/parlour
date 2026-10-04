@@ -14,6 +14,7 @@ use serde_json::Value;
 use crate::accounts::Role;
 use crate::content::UserRef;
 use crate::db::{Db, Handle, KEY};
+use crate::permissions::Grant;
 
 fn user_ref(id: Option<i64>, username: Option<String>, name: Option<String>) -> Option<UserRef> {
     Some(UserRef {
@@ -34,6 +35,9 @@ pub enum HeldPlace {
         space_id: i64,
         title: String,
         forked_from_post_id: Option<i64>,
+        /// The read restriction its author chose for it (DESIGN.md
+        /// §3.4), naming them, or `None` for its space's audience.
+        read: Option<Grant>,
     },
     /// A reply in a thread.
     Reply {
@@ -63,27 +67,32 @@ pub async fn hold<'c>(
     body_md: &str,
 ) -> sqlx::Result<i64> {
     let mut conn = db.open(KEY).acquire().await?;
-    let (space_id, title, forked_from, thread_id, reply_to) = match place {
+    let (space_id, title, forked_from, thread_id, reply_to, read) = match place {
         HeldPlace::Thread {
             space_id,
             title,
             forked_from_post_id,
+            read,
         } => (
             Some(*space_id),
             Some(title.as_str()),
             *forked_from_post_id,
             None,
             None,
+            read.as_ref(),
         ),
         HeldPlace::Reply {
             thread_id,
             reply_to_post_id,
-        } => (None, None, None, Some(*thread_id), *reply_to_post_id),
+        } => (None, None, None, Some(*thread_id), *reply_to_post_id, None),
     };
+    let (read_groups, read_users) = read
+        .map(|grant| (grant.group_ids(), grant.user_ids()))
+        .unzip();
     sqlx::query_scalar!(
         r#"INSERT INTO held_posts (author_id, space_id, title, forked_from_post_id, thread_id,
-                                   reply_to_post_id, body_md)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"#,
+                                   reply_to_post_id, body_md, read_group_ids, read_user_ids)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id"#,
         author_id,
         space_id,
         title,
@@ -91,6 +100,8 @@ pub async fn hold<'c>(
         thread_id,
         reply_to,
         body_md,
+        read_groups.as_deref(),
+        read_users.as_deref(),
     )
     .fetch_one(&mut *conn)
     .await
@@ -110,6 +121,8 @@ struct HeldRow {
     status: String,
     post_id: Option<i64>,
     created_at: DateTime<Utc>,
+    read_group_ids: Option<Vec<i64>>,
+    read_user_ids: Option<Vec<i64>>,
 }
 
 impl HeldRow {
@@ -119,6 +132,13 @@ impl HeldRow {
                 space_id,
                 title,
                 forked_from_post_id: self.forked_from_post_id,
+                read: match (self.read_group_ids, self.read_user_ids) {
+                    (None, None) => None,
+                    (groups, users) => Some(Grant::listed(
+                        groups.unwrap_or_default(),
+                        users.unwrap_or_default(),
+                    )),
+                },
             },
             (_, _, thread_id) => HeldPlace::Reply {
                 thread_id: thread_id.expect("a held reply has a thread"),
@@ -146,7 +166,7 @@ pub async fn held_post(db: &Db, id: i64) -> sqlx::Result<Option<HeldPost>> {
         HeldRow,
         r#"SELECT h.id, h.author_id, u.username AS "username!: String", u.display_name, h.space_id,
                   h.title, h.forked_from_post_id, h.thread_id, h.reply_to_post_id, h.body_md, h.status,
-                  h.post_id, h.created_at
+                  h.post_id, h.created_at, h.read_group_ids, h.read_user_ids
            FROM held_posts h JOIN users u ON u.id = h.author_id WHERE h.id = $1"#,
         id
     )
@@ -162,7 +182,7 @@ pub async fn waiting_held(db: &Db) -> sqlx::Result<Vec<HeldPost>> {
         HeldRow,
         r#"SELECT h.id, h.author_id, u.username AS "username!: String", u.display_name, h.space_id,
                   h.title, h.forked_from_post_id, h.thread_id, h.reply_to_post_id, h.body_md, h.status,
-                  h.post_id, h.created_at
+                  h.post_id, h.created_at, h.read_group_ids, h.read_user_ids
            FROM held_posts h JOIN users u ON u.id = h.author_id
            WHERE h.status = 'held' AND u.deleted_at IS NULL
            ORDER BY h.created_at, h.id"#
@@ -186,7 +206,7 @@ pub async fn claim_held<'c>(
         HeldRow,
         r#"SELECT h.id, h.author_id, u.username AS "username!: String", u.display_name, h.space_id,
                   h.title, h.forked_from_post_id, h.thread_id, h.reply_to_post_id, h.body_md, h.status,
-                  h.post_id, h.created_at
+                  h.post_id, h.created_at, h.read_group_ids, h.read_user_ids
            FROM held_posts h JOIN users u ON u.id = h.author_id
            WHERE h.id = $1 AND h.status = $2
            FOR UPDATE OF h"#,

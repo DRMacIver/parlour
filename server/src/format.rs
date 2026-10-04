@@ -129,6 +129,54 @@ pub fn access_label(
     }
 }
 
+/// Who a thread's restriction names (DESIGN.md §3.4), as the lock beside
+/// it says: its site groups ("Organisers and Hosts groups"), then its
+/// lists as the viewer may know them ("Ruth’s Friends (12)", or "people
+/// Ruth has chosen"), then the people it names by name, as in "Organisers
+/// group, Ruth’s Friends (12) and Ruth". Empty if it names nobody who is
+/// still here.
+pub fn restriction_label(
+    group_names: &[String],
+    list_names: &[String],
+    people: &[String],
+) -> String {
+    let groups = match group_names {
+        [] => None,
+        [one] => Some(group_name(one)),
+        [first @ .., last] => Some(format!(
+            "{} and {} groups",
+            first
+                .iter()
+                .map(|name| without_group(name))
+                .collect::<Vec<_>>()
+                .join(", "),
+            without_group(last)
+        )),
+    };
+    let parts: Vec<&str> = groups
+        .as_deref()
+        .into_iter()
+        .chain(list_names.iter().map(String::as_str))
+        .chain(people.iter().map(String::as_str))
+        .collect();
+    match parts.as_slice() {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [first @ .., last] => format!("{} and {last}", first.join(", ")),
+    }
+}
+
+/// What the lock beside a restricted thread says of reading or replying
+/// (`verb`, as in "can read this thread" or "can reply"), given
+/// [`restriction_label`]'s label.
+pub fn restriction_sentence(label: &str, verb: &str) -> String {
+    if label.is_empty() {
+        format!("Nobody {verb}.")
+    } else {
+        format!("Only {label} {verb}.")
+    }
+}
+
 /// A site group's name as a label says it: "Organisers group", but
 /// "Steering Group" as it is.
 pub fn group_name(name: &str) -> String {
@@ -196,6 +244,30 @@ pub fn thread_page_href(id: &i64, slug: &str, page: &i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn restrictions_name_groups_lists_and_people() {
+        use super::{restriction_label, restriction_sentence};
+        let names = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        assert_eq!(restriction_label(&[], &[], &names(&["Ruth"])), "Ruth");
+        assert_eq!(
+            restriction_label(
+                &names(&["Organisers"]),
+                &names(&["Ruth’s Friends (12)"]),
+                &names(&["Maya", "Ruth"])
+            ),
+            "Organisers group, Ruth’s Friends (12), Maya and Ruth"
+        );
+        assert_eq!(
+            restriction_label(&names(&["Hosts", "Organisers"]), &[], &[]),
+            "Hosts and Organisers groups"
+        );
+        assert_eq!(
+            restriction_sentence("people Ruth has chosen and Ruth", "can read this thread"),
+            "Only people Ruth has chosen and Ruth can read this thread."
+        );
+        assert_eq!(restriction_sentence("", "can reply"), "Nobody can reply.");
+    }
+
     use super::*;
     use chrono::TimeZone;
     use hegel::TestCase;

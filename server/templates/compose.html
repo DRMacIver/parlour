@@ -55,6 +55,21 @@
       <textarea id="body" name="body" rows="12" required>{{ body }}</textarea>
       <span class="field-hint">Markdown: *italic*, **bold**, &gt; quote, `code`, [link](https://…), tables and ~~strikethrough~~. Mention someone with @username. <a href="/uploads/new" target="_blank" rel="noopener">Upload an image</a> to put one in.</span>
     </div>{% if layout.islands.is_some() %}<script type="application/json" data-island-props>{{ crate::islands::composer_props("body", false)|safe }}</script>{% endif %}
+    {% if let Some(read) = read %}
+    <fieldset class="field">
+      <legend>Who can read it</legend>
+      <label class="choice"><input type="radio" name="read" value="space"{% if !read.form.restrict %} checked{% endif %}> Everyone who can read {{ space_name }}</label>
+      <label class="choice"><input type="radio" name="read" value="only"{% if read.form.restrict %} checked{% endif %}> Only these people can read it:</label>
+      <div class="choice-group" role="group" aria-label="Groups, lists and people">
+      {% for group in read.choices %}
+        <label class="choice"><input type="checkbox" name="read_group" value="{{ group.value }}"{% if read.form.ticked(group) %} checked{% endif %}> {{ group.label }}</label>
+      {% endfor %}
+        <label for="read_users">Members, by username</label>
+        <input id="read_users" name="read_users" type="text" value="{{ read.form.users }}" placeholder="alice, bob">
+      </div>
+      <span class="field-hint">Only those who can read {{ space_name }} can read it, whoever you name. You always can, and you can change this later from the thread’s “Who can take part” page.</span>
+    </fieldset>
+    {% endif %}
     {% if let Some(reason) = mod_reason %}
     <div class="field">
       <label for="reason">Why you are editing this post</label>

@@ -14,6 +14,7 @@
         <div class="row-title">
           {% if row.pinned && !show_space %}<span class="flag">Pinned</span>{% endif %}
           {% if row.locked %}<span class="flag">Locked</span>{% endif %}
+          {% if let Some(label) = row.restricted_to %}{% call m::restricted_flag(label) %}{% endcall %}{% endif %}
           <a href="{{ crate::format::thread_href(row.thread.id, row.thread.slug) }}">{{ row.thread.title }}</a>
           {% if row.new_posts() > 0 %}<a class="unread" href="/t/{{ row.thread.id }}/unread">{{ row.new_posts() }} new</a>{% endif %}
         </div>

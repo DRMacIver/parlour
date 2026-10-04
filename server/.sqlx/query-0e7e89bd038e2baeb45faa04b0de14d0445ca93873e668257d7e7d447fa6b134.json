@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT h.id, h.author_id, u.username AS \"username!: String\", u.display_name, h.space_id,\n                  h.title, h.forked_from_post_id, h.thread_id, h.reply_to_post_id, h.body_md, h.status,\n                  h.post_id, h.created_at\n           FROM held_posts h JOIN users u ON u.id = h.author_id WHERE h.id = $1",
+  "query": "SELECT h.id, h.author_id, u.username AS \"username!: String\", u.display_name, h.space_id,\n                  h.title, h.forked_from_post_id, h.thread_id, h.reply_to_post_id, h.body_md, h.status,\n                  h.post_id, h.created_at, h.read_group_ids, h.read_user_ids\n           FROM held_posts h JOIN users u ON u.id = h.author_id WHERE h.id = $1",
   "describe": {
     "columns": [
       {
@@ -150,6 +150,28 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "ordinal": 13,
+        "name": "read_group_ids",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "held_posts",
+            "name": "read_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "read_user_ids",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "held_posts",
+            "name": "read_user_ids"
+          }
+        }
       }
     ],
     "parameters": {
@@ -170,8 +192,10 @@
       false,
       false,
       true,
-      false
+      false,
+      true,
+      true
     ]
   },
-  "hash": "458d2350f0f4b0e563a918ea7edb4fa7c898f019709c7f2c887e2e24e2cff55e"
+  "hash": "0e7e89bd038e2baeb45faa04b0de14d0445ca93873e668257d7e7d447fa6b134"
 }

@@ -36,6 +36,7 @@ mod search_pages;
 pub mod setup;
 mod space_pages;
 pub mod startup;
+mod thread_audience_pages;
 pub mod tokens;
 mod upload_pages;
 pub mod uploads;
@@ -234,6 +235,10 @@ pub fn app(state: AppState) -> Router {
         .route("/spaces", get(space_pages::index))
         .route("/t/{id}", get(pages::thread_without_slug))
         .route("/t/{id}/unread", get(pages::thread_unread))
+        .route(
+            "/t/{id}/audience",
+            get(thread_audience_pages::page).post(thread_audience_pages::save),
+        )
         .route("/t/{id}/{slug}", get(pages::thread))
         .route("/p/{id}", get(pages::permalink))
         .route("/search", get(search_pages::search_page))

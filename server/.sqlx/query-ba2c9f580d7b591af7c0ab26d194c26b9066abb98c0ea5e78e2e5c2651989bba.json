@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT t.author_id, t.space_id AS \"space_id!\",\n               t.read_group_ids, t.read_user_ids, t.reply_group_ids, t.reply_user_ids,\n               thread_readable(t, $2, $3, $4, $5) AS \"readable!\"\n        FROM threads t\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.space_id IS NOT NULL\n        ",
+  "query": "\n        SELECT t.author_id, t.space_id AS \"space_id!\", t.title, t.slug, t.locked,\n               t.read_group_ids, t.read_user_ids, t.reply_group_ids, t.reply_user_ids,\n               thread_readable(t, $2, $3, $4, $5) AS \"readable!\"\n        FROM threads t\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.space_id IS NOT NULL\n        ",
   "describe": {
     "columns": [
       {
@@ -27,6 +27,39 @@
       },
       {
         "ordinal": 2,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "locked",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "locked"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
         "name": "read_group_ids",
         "type_info": "Int8Array",
         "origin": {
@@ -37,7 +70,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 6,
         "name": "read_user_ids",
         "type_info": "Int8Array",
         "origin": {
@@ -48,7 +81,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 7,
         "name": "reply_group_ids",
         "type_info": "Int8Array",
         "origin": {
@@ -59,7 +92,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 8,
         "name": "reply_user_ids",
         "type_info": "Int8Array",
         "origin": {
@@ -70,7 +103,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 9,
         "name": "readable!",
         "type_info": "Bool",
         "origin": "Expression"
@@ -88,6 +121,9 @@
     "nullable": [
       false,
       true,
+      false,
+      false,
+      false,
       true,
       true,
       true,
@@ -95,5 +131,5 @@
       null
     ]
   },
-  "hash": "3392e8d2959fd69430c51c51e326980513c19cf1032aa7e33b0c8089fcd2011e"
+  "hash": "ba2c9f580d7b591af7c0ab26d194c26b9066abb98c0ea5e78e2e5c2651989bba"
 }

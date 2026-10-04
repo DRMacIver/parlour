@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{% block title %}{{ self.heading() }} · {{ layout.site_name }}{% endblock %}
+
+{#- Who one part of a restriction names: groups and lists as the viewer may know them, then people. -#}
+{% macro named(part) %}
+<ul class="member-list">
+{% for group in part.groups %}
+  <li>
+    <span class="admin-space-name">
+      {{ self.group_heading(group) }}{% if let Some(members) = group.members %} ({{ members.len() }})
+      <span class="row-meta">{% for member in members %}{% if loop.first %}{% if group.list %}On it: {% else %}In it: {% endif %}{% else %}, {% endif %}<a href="/u/{{ member.username }}">{{ member.display_name }}</a> (@{{ member.username }}){% else %}{% if group.list %}Nobody is on it yet{% else %}Nobody is in it yet{% endif %}{% endfor %}</span>{% endif %}
+    </span>
+  </li>
+{% endfor %}
+{% for person in part.people %}
+  <li><span class="admin-space-name"><a href="/u/{{ person.username }}">{{ person.display_name }}</a> <span class="row-meta">@{{ person.username }}</span></span></li>
+{% endfor %}
+</ul>
+{% endmacro %}
+
+{#- One part of the form: the space's audience, or only those named. -#}
+{% macro part_fields(name, legend, part, choices, inherit, only, hint) %}
+<fieldset class="field">
+  <legend>{{ legend }}</legend>
+  <label class="choice"><input type="radio" name="{{ name }}" value="space"{% if !part.restrict %} checked{% endif %}> {{ inherit }}</label>
+  <label class="choice"><input type="radio" name="{{ name }}" value="only"{% if part.restrict %} checked{% endif %}> {{ only }}</label>
+  <div class="choice-group" role="group" aria-label="Groups, lists and people">
+  {% for group in choices.iter() %}
+    <label class="choice"><input type="checkbox" name="{{ name }}_group" value="{{ group.value }}"{% if part.ticked(group) %} checked{% endif %}> {{ group.label }}</label>
+  {% endfor %}
+    <label for="{{ name }}_users">Members, by username</label>
+    <input id="{{ name }}_users" name="{{ name }}_users" type="text" value="{{ part.users }}" placeholder="alice, bob">
+  </div>
+  <span class="field-hint">{{ hint }}</span>
+</fieldset>
+{% endmacro %}
+
+{% block content %}
+{% let space = audience.target.space.space %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/c/{{ space.slug }}">{{ space.name }}</a>{% if let Some(thread) = audience.target.thread %} › <a href="{{ crate::format::thread_href(thread.id, thread.slug) }}">{{ thread.title }}</a>{% endif %} › <span aria-current="page">Who can take part</span></nav>
+<h1 class="page-title">{{ self.heading() }}</h1>
+<p class="lede">A thread can be narrower than its space, never wider: of those who can read {{ space.name }}, it may let only some read it, and only some of its readers reply. A list is named only to the person who made it and the people on it; anyone else sees whose choice it is.</p>
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+{% call f::errors(errors) %}{% endcall %}
+{% if audience.target.thread.is_none() %}<div class="notice" role="status"><p>This thread doesn’t let you read it, but you run {{ space.name }}, so you can change who may.</p></div>{% endif %}
+{% if audience.target.space.rules.archived %}<div class="notice" role="status"><p>The space is archived, so nobody can post in it.</p></div>
+{% else if audience.target.locked %}<div class="notice" role="status"><p>The thread is locked, so only the moderators and admins can post in it.</p></div>{% endif %}
+
+<section class="panel" aria-labelledby="read-heading">
+  <h2 class="panel-bar" id="read-heading">Who can read</h2>
+  {% if let Some(read) = audience.read %}
+  <p class="panel-text">Only these, of those who can read {{ space.name }}:</p>
+  {% call named(read) %}{% endcall %}
+  {% else %}
+  <p class="empty">Everyone who can read {{ space.name }}. <a href="/c/{{ space.slug }}/audience">Who can take part in {{ space.name }}</a></p>
+  {% endif %}
+</section>
+
+<section class="panel" aria-labelledby="reply-heading">
+  <h2 class="panel-bar" id="reply-heading">Who can reply</h2>
+  {% if let Some(reply) = audience.reply %}
+  <p class="panel-text">Only these, of those who can read the thread and reply in {{ space.name }}:</p>
+  {% call named(reply) %}{% endcall %}
+  {% else if audience.read.is_some() %}
+  <p class="empty">Everyone above who can reply in {{ space.name }}.</p>
+  {% else %}
+  <p class="empty">Everyone who can reply in {{ space.name }}.</p>
+  {% endif %}
+</section>
+
+{% if let Some(form) = form %}
+<form class="panel" method="post" action="/t/{{ audience.target.thread_id }}/audience">
+  <h2 class="panel-bar">Change who can take part</h2>
+  <div class="form">
+    {% call part_fields("read", "Who can read it", form.read, form.read_choices, format!("Everyone who can read {}", self.space_name()), "Only these people can read it:", always) %}{% endcall %}
+    {% call part_fields("reply", "Who can reply", form.reply, form.reply_choices, format!("Everyone who can read it and reply in {}", self.space_name()), "Only these people can reply:", "Only people who can read it can reply, so name them for reading too.") %}{% endcall %}
+    <div class="form-actions">
+      <button class="button" type="submit">Save</button>
+      {% if let Some(thread) = audience.target.thread %}<a href="{{ crate::format::thread_href(thread.id, thread.slug) }}">Back to the thread</a>{% endif %}
+    </div>
+  </div>
+</form>
+{% endif %}
+</div>
+{% endblock %}

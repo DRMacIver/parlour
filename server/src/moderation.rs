@@ -26,12 +26,13 @@ use crate::AppState;
 use crate::changes::Change;
 use crate::content::{self, Place, PostTarget, ThreadTarget, UserRef};
 use crate::error::AppError;
+use crate::groups;
 use crate::mod_records::{
     self, ActionRecord, HeldPlace, HeldPost, MemberRecord, NewAction, NewReport, OpenReport,
     ReportAbout, Restriction, Settles,
 };
 use crate::notify;
-use crate::permissions::{Audience, at_most_as_visible};
+use crate::permissions::{Audience, Grant, ThreadRestriction, at_most_as_visible};
 use crate::ratelimit::{Action, Scope};
 use crate::sessions;
 use crate::social;
@@ -1695,6 +1696,7 @@ async fn publish_held(
             space_id,
             title,
             forked_from_post_id,
+            read,
         } => {
             let Some(space) = content::space_by_id(db, &author_viewer, *space_id).await? else {
                 return Ok(Err(Refused::NotAllowed(
@@ -1734,10 +1736,26 @@ async fn publish_held(
                 },
             )
             .await?;
+            // The restriction its author chose, less any group deleted
+            // while it waited, which only narrows it (DESIGN.md §3.4).
+            let restriction = match read {
+                Some(grant) => ThreadRestriction {
+                    read: Some(Grant::listed(
+                        groups::still_there(&mut *tx, &grant.group_ids()).await?,
+                        grant.user_ids.iter().copied(),
+                    )),
+                    reply: None,
+                }
+                .naming(author.id),
+                None => ThreadRestriction::default(),
+            };
+            if !restriction.is_inherited() {
+                store::set_thread_restriction(&mut *tx, created.thread_id, &restriction).await?;
+            }
             (
                 created.first_post_id,
                 created.thread_id,
-                is_public(&space.audience()),
+                is_public(&restriction.audience(&space.rules)),
             )
         }
         HeldPlace::Reply {
