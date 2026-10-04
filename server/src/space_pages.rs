@@ -8,6 +8,10 @@
 //! also place the space on the default front page from here, and admins
 //! mark it essential (DESIGN.md §3.1, §3.5).
 //!
+//! `/c/{slug}/audience` tells members who can read a space who may read,
+//! reply, start threads in and run it, naming lists only as DESIGN.md §3.3
+//! allows.
+//!
 //! Members arrange their own front page from a space's page too: `POST
 //! /c/{slug}/follow` puts it in a section of their layout, `unfollow`
 //! takes it out, `mute` leaves it out of All, the space index and search,
@@ -27,11 +31,15 @@ use serde_json::json;
 use crate::AppState;
 use crate::admin_pages::DoneQuery;
 use crate::changes::Change;
-use crate::content::{self, Deps, SpaceListing, SpaceSort, SpaceTarget};
+use crate::content::{
+    self, Deps, GrantAudience, NamedGroup, SpaceAudience, SpaceListing, SpaceSort, SpaceTarget,
+};
 use crate::error::AppError;
+use crate::format;
 use crate::groups::{self, GroupChoice};
 use crate::layouts::{self, MuteOutcome, Section};
 use crate::mod_records::{self, NewAction};
+use crate::pages::well_formed_slug;
 use crate::permissions::{Grant, Level};
 use crate::ratelimit::{Action, Scope};
 use crate::settings::{self, SpaceCreation};
@@ -971,4 +979,84 @@ pub async fn delete(
             .await
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Who can take part
+
+#[derive(Template)]
+#[template(path = "space_audience.html")]
+struct AudienceTemplate {
+    layout: Layout,
+    audience: SpaceAudience,
+}
+
+impl AudienceTemplate {
+    fn heading(&self, verb: &str) -> &'static str {
+        match verb {
+            "read" => "Who can read",
+            "reply" => "Who can reply",
+            "start" => "Who can start threads",
+            _ => "Who runs it",
+        }
+    }
+
+    /// What a grant naming nobody says.
+    fn level_text(&self, grant: &GrantAudience) -> &'static str {
+        match grant.level {
+            Level::Public => "Anyone, including visitors who haven’t logged in.",
+            Level::Members => "Every member.",
+            Level::Staff => "The moderators and admins.",
+            Level::Listed if grant.verb == "administer" => {
+                "Nobody is named, so the moderators and admins run it until someone is."
+            }
+            Level::Listed => "Nobody.",
+        }
+    }
+
+    /// A site group as "Organisers group", a list as it is named to the
+    /// viewer, with a capital.
+    fn group_heading(&self, group: &NamedGroup) -> String {
+        if group.list {
+            format::capitalised(&group.label)
+        } else {
+            format::group_name(&group.label)
+        }
+    }
+
+    /// Whether to say that staff run every space as well: not where the
+    /// grant already says it is them.
+    fn staff_also(&self, grant: &GrantAudience) -> bool {
+        match grant.level {
+            Level::Staff => false,
+            Level::Listed => !grant.groups.is_empty() || !grant.people.is_empty(),
+            Level::Public | Level::Members => true,
+        }
+    }
+}
+
+/// `/c/{slug}/audience`: who may read, reply, start threads in and run a
+/// space, for logged-in members who can read it (DESIGN.md §3.1, §3.3).
+/// What it says depends on who is looking, so it is never cached.
+pub async fn audience_page(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(slug): Path<String>,
+) -> Result<Response, AppError> {
+    if !well_formed_slug(&slug) {
+        return web::not_found(&state, &viewer).await;
+    }
+    if viewer.user().is_none() {
+        return Ok(web::login_first(&format!("/c/{slug}/audience")));
+    }
+    let Some(audience) = content::space_audience(state.db(), &viewer, &slug).await? else {
+        return web::not_found(&state, &viewer).await;
+    };
+    render(
+        StatusCode::OK,
+        &AudienceTemplate {
+            layout: Layout::load(&state, &viewer, Nav::None).await?,
+            audience,
+        },
+    )
 }

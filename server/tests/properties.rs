@@ -1124,6 +1124,11 @@ impl World {
                 paths.push(format!("/c/{}/settings", c.slug));
             }
         }
+        // Who can take part in each space: only for members, by the names
+        // they may know.
+        for c in &self.spaces {
+            paths.push(format!("/c/{}/audience", c.slug));
+        }
         paths
     }
 
@@ -1379,6 +1384,25 @@ impl World {
                 StatusCode::NOT_FOUND
             };
             assert_eq!(response.status, expected);
+            // Its audience page names a list to the people on it, and
+            // visitors are asked to log in.
+            let audience = pages.get(&format!("/c/{}/audience", c.slug));
+            let expected = match who {
+                Who::Anonymous => StatusCode::SEE_OTHER,
+                _ => expected,
+            };
+            assert_eq!(audience.status, expected, "{who:?} audience of space {i}");
+            if expected == StatusCode::OK {
+                for &g in &c.read_groups {
+                    if let Some(token) = &self.list_tokens[g] {
+                        assert_eq!(
+                            audience.body.contains(token.as_str()),
+                            who == Who::Member && self.member_groups.contains(&g),
+                            "{who:?} audience of space {i}, list {g}"
+                        );
+                    }
+                }
+            }
         }
         for (i, c) in self.conversations.iter().enumerate() {
             let response = pages.get(&format!("/messages/{}", c.id));
@@ -3587,8 +3611,93 @@ impl Access {
             );
         }
 
+        self.check_audience(who, &viewer);
         self.check_writing(who, &viewer);
         self.check_conversations(who, &viewer);
+    }
+
+    /// A space's audience page (DESIGN.md §3.3): for those who can read
+    /// the space, every group and list its grants name, where a list is
+    /// named, with who is on it, only to its owner and the people on it,
+    /// and to anyone else is "people X has chosen", once per owner; a site
+    /// group's members are listed only to the people in it.
+    fn check_audience(&self, who: Option<usize>, viewer: &Viewer) {
+        const NAMES: [&str; 5] = ["Boss", "Ruth", "Jonah", "Maya", "Kit"];
+        let nobody = BTreeSet::new();
+        for (c, space) in self.spaces.iter().enumerate() {
+            let audience = self
+                .block(content::space_audience(&self.db, viewer, &space.slug))
+                .unwrap();
+            assert_eq!(
+                audience.is_some(),
+                self.reads_space(who, c),
+                "{who:?}: audience of space {c}"
+            );
+            let Some(audience) = audience else {
+                continue;
+            };
+            for grant in &audience.grants {
+                let named = match grant.verb {
+                    "read" => &space.read_groups,
+                    "reply" | "start" => &space.write_groups,
+                    _ => &nobody,
+                };
+                let user_ids = |members: &BTreeSet<usize>| -> BTreeSet<i64> {
+                    members.iter().map(|&u| self.users[u].id).collect()
+                };
+                let on = |g: usize| -> BTreeSet<usize> {
+                    (0..self.users.len())
+                        .filter(|&u| self.users[u].groups.contains(&g))
+                        .collect()
+                };
+                let mut expected: Vec<(bool, Option<BTreeSet<i64>>, Option<String>)> = Vec::new();
+                let mut strangers = BTreeSet::new();
+                for &g in named {
+                    let knows = who.is_some_and(|u| {
+                        self.users[u].groups.contains(&g) || self.group_owners[g] == Some(u)
+                    });
+                    match self.group_owners[g] {
+                        None => expected.push((false, knows.then(|| user_ids(&on(g))), None)),
+                        Some(_) if knows => expected.push((true, Some(user_ids(&on(g))), None)),
+                        Some(owner) => {
+                            if strangers.insert(owner) {
+                                expected.push((
+                                    true,
+                                    None,
+                                    Some(format!("people {} has chosen", NAMES[owner])),
+                                ));
+                            }
+                        }
+                    }
+                }
+                let mut found: Vec<(bool, Option<BTreeSet<i64>>, Option<String>)> = grant
+                    .groups
+                    .iter()
+                    .map(|group| {
+                        let members = group
+                            .members
+                            .as_ref()
+                            .map(|m| m.iter().map(|u| u.id).collect());
+                        let stranger =
+                            (group.list && members.is_none()).then(|| group.label.clone());
+                        (group.list, members, stranger)
+                    })
+                    .collect();
+                expected.sort();
+                found.sort();
+                assert_eq!(
+                    found, expected,
+                    "{who:?}: {} grant of space {c}",
+                    grant.verb
+                );
+                // A list's own name reaches only those who know it.
+                for group in &grant.groups {
+                    if group.list && group.members.is_none() {
+                        assert!(group.label.starts_with("people "), "{}", group.label);
+                    }
+                }
+            }
+        }
     }
 
     /// The ids of every post a search finds for the viewer, everywhere or

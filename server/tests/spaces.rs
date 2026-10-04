@@ -541,3 +541,47 @@ async fn staff_edits_to_other_peoples_spaces_are_logged(pool: PgPool) {
     assert!(log.contains("changed the settings of"), "{log}");
     assert!(log.contains("href=\"/c/club\""), "{log}");
 }
+
+/// Every space's audience page (DESIGN.md §3.1, §3.3) says who may read,
+/// reply, start threads and run it, level by level.
+#[sqlx::test]
+async fn the_audience_page_says_who_may_do_what(pool: PgPool) {
+    let s = setup(pool).await;
+    s.f.space("open", "public", None, 0).await;
+    let page = s.f.page_as("/c/open/audience", &s.jonah_cookie).await;
+    for text in [
+        "Who can take part in Open",
+        "Anyone, including visitors who haven’t logged in.",
+        "Every member.",
+        "The moderators and admins.",
+        "Replying and starting threads also need permission to read.",
+    ] {
+        assert!(page.contains(text), "{text}: {page}");
+    }
+    let staff = s.f.space("back-room", "staff", None, 0).await;
+    s.f.set_grant(staff, "start", Grant::listed([], [])).await;
+    let page = s.f.page_as("/c/back-room/audience", &s.staff_cookie).await;
+    assert!(page.contains("Nobody."), "{page}");
+    assert_eq!(
+        s.f.get_as("/c/back-room/audience", Some(&s.jonah_cookie))
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    // An archived space says nobody can post.
+    s.f.exec("UPDATE spaces SET archived_at = now() WHERE slug = 'open'")
+        .await;
+    let page = s.f.page_as("/c/open/audience", &s.ruth_cookie).await;
+    assert!(
+        page.contains("The space is archived, so nobody can post in it."),
+        "{page}"
+    );
+    // A space with no administrators says who runs it meanwhile.
+    s.f.set_grant(staff, "administer", Grant::listed([], []))
+        .await;
+    let page = s.f.page_as("/c/back-room/audience", &s.staff_cookie).await;
+    assert!(
+        page.contains("Nobody is named, so the moderators and admins run it until someone is."),
+        "{page}"
+    );
+}

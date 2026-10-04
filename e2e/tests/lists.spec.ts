@@ -59,3 +59,14 @@ test("a member makes a list, and the person they put on it can see it", async ({
   await expect(page.locator("#username")).toHaveCount(0);
   await expectFits(page);
 });
+
+test("a space's page leads members to who can take part in it", async ({ page }) => {
+  await logIn(page, owner());
+  await page.goto("/c/announcements");
+  await page.locator("a", { hasText: "Who can take part" }).click();
+  await expect(page).toHaveURL(/\/c\/announcements\/audience$/);
+  await expect(page.locator("h1")).toHaveText("Who can take part in Announcements");
+  await expect(page.locator("#read-heading + p")).toHaveText("Anyone, including visitors who haven’t logged in.");
+  await expect(page.locator("#start-heading + p")).toHaveText("The moderators and admins.");
+  await expectFits(page);
+});

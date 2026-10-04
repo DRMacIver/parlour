@@ -1237,3 +1237,109 @@ async fn the_data_export_lists_the_members_lists(pool: PgPool) {
     );
     assert_eq!(export["groups"], serde_json::json!([]));
 }
+
+/// DESIGN.md §3.3: who can take part in a space is on its audience page,
+/// `/c/{slug}/audience`, for anyone who can read the space. A group or
+/// list the viewer is on (or a list they own) is named with who is on it;
+/// a list they aren't on is "People Ruth has chosen", with nobody named;
+/// a site group they aren't in is named without its members.
+#[sqlx::test]
+async fn the_audience_page_names_lists_only_to_their_people(pool: PgPool) {
+    let club = club(pool).await;
+    let pat = club.f.member("pat", "user", None).await;
+    let pat_cookie = club.f.session(pat).await;
+    let lee = club.f.member("lee", "user", None).await;
+    let lee_cookie = club.f.session(lee).await;
+    let organisers = club.f.group("organisers", "Organisers").await;
+    club.f.join_group(organisers, pat).await;
+    club.f.join_group(organisers, club.maya).await;
+    let list = club.ruths_list("Book club").await;
+    club.add(list, "jonah").await;
+    let space = club.f.space("books", "members", None, 0).await;
+    club.f
+        .set_grant(
+            space,
+            "read",
+            Grant::listed([organisers, list], [club.maya]),
+        )
+        .await;
+    club.f
+        .set_grant(space, "reply", Grant::listed([list], []))
+        .await;
+    club.f
+        .set_grant(space, "administer", Grant::listed([], [club.ruth]))
+        .await;
+
+    // Ruth, whose list it is, and Jonah, who is on it, see its name and
+    // who is on it.
+    for cookie in [&club.ruth_cookie, &club.jonah_cookie] {
+        let page = club.f.page_as("/c/books/audience", cookie).await;
+        for text in [
+            "Who can read",
+            "Who can reply",
+            "Who can start threads",
+            "Ruth’s Book club",
+            "@jonah",
+            "Organisers",
+            "Maya",
+            "Every member",
+        ] {
+            assert!(page.contains(text), "{text}: {page}");
+        }
+        // They aren't organisers, so the group's members aren't listed.
+        assert!(!page.contains("@pat"), "{page}");
+        assert!(!page.contains("People Ruth has chosen"), "{page}");
+    }
+    // Maya and Pat, organisers not on the list, and the admin, see
+    // whose choice it is and nothing more.
+    for cookie in [&club.maya_cookie, &pat_cookie, &club.admin_cookie] {
+        let page = club.f.page_as("/c/books/audience", cookie).await;
+        assert!(page.contains("People Ruth has chosen"), "{page}");
+        assert!(!page.contains("Book club"), "{page}");
+        assert!(!page.contains("@jonah"), "{page}");
+        assert!(page.contains("Organisers"), "{page}");
+    }
+    // The organisers see who else is one.
+    for cookie in [&club.maya_cookie, &pat_cookie] {
+        let page = club.f.page_as("/c/books/audience", cookie).await;
+        assert!(page.contains("@pat") && page.contains("@maya"), "{page}");
+    }
+    let admin = club
+        .f
+        .page_as("/c/books/audience", &club.admin_cookie)
+        .await;
+    assert!(!admin.contains("@pat"), "{admin}");
+    // Someone who can't read the space finds nothing; visitors log in.
+    let response = club.f.get_as("/c/books/audience", Some(&lee_cookie)).await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert!(!response.body.contains("Book club"));
+    let response = club.f.get("/c/books/audience").await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    assert!(response.location().starts_with("/login"));
+    // The space's page leads there, for members.
+    let page = club.f.page_as("/c/books", &club.maya_cookie).await;
+    assert!(page.contains("href=\"/c/books/audience\""), "{page}");
+    // Taking Jonah off the list takes the page away from him with the
+    // space, and the list's name with it.
+    club.f
+        .submit(
+            &format!("/settings/lists/{list}/members/{}/remove", club.jonah),
+            &[],
+            Some(&club.ruth_cookie),
+        )
+        .await;
+    let response = club
+        .f
+        .get_as("/c/books/audience", Some(&club.jonah_cookie))
+        .await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    // Once any member may read the space, Jonah reads it again, and the
+    // list in its reply grant is no longer named to him.
+    club.f.set_grant(space, "read", Grant::members()).await;
+    let page = club
+        .f
+        .page_as("/c/books/audience", &club.jonah_cookie)
+        .await;
+    assert!(page.contains("People Ruth has chosen"), "{page}");
+    assert!(!page.contains("Book club"), "{page}");
+}

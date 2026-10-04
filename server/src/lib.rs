@@ -286,6 +286,7 @@ pub fn app(state: AppState) -> Router {
             "/c/{slug}/settings",
             get(space_pages::settings_page).post(space_pages::save_settings),
         )
+        .route("/c/{slug}/audience", get(space_pages::audience_page))
         .route("/c/{slug}/archive", post(space_pages::archive))
         .route("/c/{slug}/unarchive", post(space_pages::unarchive))
         .route("/c/{slug}/delete", post(space_pages::delete))

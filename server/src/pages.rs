@@ -41,7 +41,7 @@ pub(crate) fn parse_id(id: &str) -> Option<i64> {
 
 /// Whether `slug` has the form the database requires of space and
 /// thread slugs, so that it can appear in a URL unescaped.
-fn well_formed_slug(slug: &str) -> bool {
+pub(crate) fn well_formed_slug(slug: &str) -> bool {
     !slug.is_empty()
         && slug.split('-').all(|part| {
             !part.is_empty()

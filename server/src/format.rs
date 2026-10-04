@@ -104,8 +104,7 @@ pub fn access_label(
         _ => {
             let groups = match group_names {
                 [] => None,
-                [one] if without_group(one).len() < one.len() => Some(one.clone()),
-                [one] => Some(format!("{one} group")),
+                [one] => Some(group_name(one)),
                 [first @ .., last] => Some(format!(
                     "{} and {} groups",
                     first
@@ -130,8 +129,18 @@ pub fn access_label(
     }
 }
 
+/// A site group's name as a label says it: "Organisers group", but
+/// "Steering Group" as it is.
+pub fn group_name(name: &str) -> String {
+    if without_group(name).len() < name.len() {
+        name.to_owned()
+    } else {
+        format!("{name} group")
+    }
+}
+
 /// Text with its first letter in upper case.
-fn capitalised(text: &str) -> String {
+pub fn capitalised(text: &str) -> String {
     let mut chars = text.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),

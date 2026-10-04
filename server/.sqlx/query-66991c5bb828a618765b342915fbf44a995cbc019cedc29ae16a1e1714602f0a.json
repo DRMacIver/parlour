@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT x.id AS \"id?\", x.list AS \"list!\", x.known AS \"known!\", x.label AS \"label!\"\n        FROM (\n            SELECT DISTINCT\n                   CASE WHEN k.known THEN g.id END AS id,\n                   -- Lists the viewer doesn't know are told apart only\n                   -- by whose they are.\n                   CASE WHEN NOT k.known AND g.owner_user_id IS NOT NULL\n                        THEN g.owner_user_id END AS stranger_owner,\n                   CASE WHEN g.owner_user_id IS NULL AND NOT k.known THEN g.id END AS site_id,\n                   g.owner_user_id IS NOT NULL AS list,\n                   k.known,\n                   CASE WHEN g.owner_user_id IS NULL THEN g.name\n                        WHEN k.known THEN o.display_name || '’s ' || g.name\n                        ELSE 'people ' || o.display_name || ' has chosen' END AS label\n            FROM groups g\n            LEFT JOIN users o ON o.id = g.owner_user_id\n            CROSS JOIN LATERAL (\n                SELECT coalesce(g.owner_user_id = $2\n                                OR EXISTS (SELECT 1 FROM group_members m\n                                           WHERE m.group_id = g.id AND m.user_id = $2),\n                                false) AS known\n            ) k\n            WHERE g.id = ANY ($1)\n        ) x\n        ORDER BY x.list, x.known DESC, lower(x.label), x.label\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id?",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "list!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "known!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "label!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "66991c5bb828a618765b342915fbf44a995cbc019cedc29ae16a1e1714602f0a"
+}

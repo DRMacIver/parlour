@@ -21,7 +21,7 @@ use crate::db::Db;
 use chrono::{DateTime, Utc};
 
 use crate::cache::Tag;
-use crate::permissions::{Audience, Grant, SpaceRules};
+use crate::permissions::{Audience, Grant, Level, SpaceRules};
 use crate::store::SpaceSettings;
 use crate::viewer::Viewer;
 
@@ -1508,6 +1508,160 @@ pub async fn spaces_naming(db: &Db, viewer: &Viewer, group_id: i64) -> sqlx::Res
         &filter.visibilities,
         &filter.restricted_space_ids,
         group_id,
+    )
+    .fetch_all(db.pool())
+    .await
+}
+
+/// A group or list a grant names, as the viewer may know it (DESIGN.md
+/// §3.3).
+#[derive(Clone, Debug)]
+pub struct NamedGroup {
+    /// A site group by its name; a list as "Ruth’s Friends" to its owner
+    /// and the people on it, and as "people Ruth has chosen" (once per
+    /// owner) to anyone else.
+    pub label: String,
+    pub list: bool,
+    /// Who is on it, for someone who is on it or, for a list, owns it.
+    pub members: Option<Vec<UserRef>>,
+}
+
+/// Who one of a space's grants lets through, as the viewer may know it.
+#[derive(Clone, Debug)]
+pub struct GrantAudience {
+    /// `read`, `reply`, `start` or `administer`.
+    pub verb: &'static str,
+    pub level: Level,
+    pub groups: Vec<NamedGroup>,
+    /// The people the grant names one by one.
+    pub people: Vec<UserRef>,
+}
+
+/// Who may take part in a space: its audience page.
+#[derive(Clone, Debug)]
+pub struct SpaceAudience {
+    pub space: SpaceRef,
+    pub archived: bool,
+    pub grants: Vec<GrantAudience>,
+}
+
+/// Who may read, reply, start threads in and run a space the viewer can
+/// read, or `None` if they can't (DESIGN.md §3.1, §3.3). A list's name and
+/// the people on it are given only to its owner and the people on it, and
+/// a site group's members only to the people in it.
+pub async fn space_audience(
+    db: &Db,
+    viewer: &Viewer,
+    slug: &str,
+) -> sqlx::Result<Option<SpaceAudience>> {
+    let Some(target) = space_target(db, viewer, slug).await? else {
+        return Ok(None);
+    };
+    let rules = &target.rules;
+    let mut grants = Vec::new();
+    for (verb, grant) in [
+        ("read", &rules.read),
+        ("reply", &rules.reply),
+        ("start", &rules.start),
+        ("administer", &rules.administer),
+    ] {
+        grants.push(GrantAudience {
+            verb,
+            level: grant.level,
+            groups: named_groups(db, viewer, &grant.group_ids()).await?,
+            people: people_named(db, &grant.user_ids()).await?,
+        });
+    }
+    Ok(Some(SpaceAudience {
+        space: target.space,
+        archived: rules.archived,
+        grants,
+    }))
+}
+
+/// The groups and lists with these ids, as the viewer may know them: site
+/// groups first, then lists the viewer knows, then everyone else's.
+async fn named_groups(db: &Db, viewer: &Viewer, ids: &[i64]) -> sqlx::Result<Vec<NamedGroup>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query!(
+        r#"
+        SELECT x.id AS "id?", x.list AS "list!", x.known AS "known!", x.label AS "label!"
+        FROM (
+            SELECT DISTINCT
+                   CASE WHEN k.known THEN g.id END AS id,
+                   -- Lists the viewer doesn't know are told apart only
+                   -- by whose they are.
+                   CASE WHEN NOT k.known AND g.owner_user_id IS NOT NULL
+                        THEN g.owner_user_id END AS stranger_owner,
+                   CASE WHEN g.owner_user_id IS NULL AND NOT k.known THEN g.id END AS site_id,
+                   g.owner_user_id IS NOT NULL AS list,
+                   k.known,
+                   CASE WHEN g.owner_user_id IS NULL THEN g.name
+                        WHEN k.known THEN o.display_name || '’s ' || g.name
+                        ELSE 'people ' || o.display_name || ' has chosen' END AS label
+            FROM groups g
+            LEFT JOIN users o ON o.id = g.owner_user_id
+            CROSS JOIN LATERAL (
+                SELECT coalesce(g.owner_user_id = $2
+                                OR EXISTS (SELECT 1 FROM group_members m
+                                           WHERE m.group_id = g.id AND m.user_id = $2),
+                                false) AS known
+            ) k
+            WHERE g.id = ANY ($1)
+        ) x
+        ORDER BY x.list, x.known DESC, lower(x.label), x.label
+        "#,
+        ids,
+        viewer.user_id(),
+    )
+    .fetch_all(db.pool())
+    .await?;
+    let known: Vec<i64> = rows.iter().filter_map(|row| row.id).collect();
+    let mut members: HashMap<i64, Vec<UserRef>> = HashMap::new();
+    if !known.is_empty() {
+        for row in sqlx::query!(
+            r#"SELECT m.group_id, u.id, u.username::text AS "username!", u.display_name
+               FROM group_members m JOIN users u ON u.id = m.user_id
+               WHERE m.group_id = ANY ($1) AND u.deleted_at IS NULL
+               ORDER BY lower(u.display_name), u.id"#,
+            &known,
+        )
+        .fetch_all(db.pool())
+        .await?
+        {
+            members.entry(row.group_id).or_default().push(UserRef {
+                id: row.id,
+                username: row.username,
+                display_name: row.display_name,
+            });
+        }
+    }
+    Ok(rows
+        .into_iter()
+        .map(|row| NamedGroup {
+            label: row.label,
+            list: row.list,
+            members: row
+                .id
+                .filter(|_| row.known)
+                .map(|id| members.remove(&id).unwrap_or_default()),
+        })
+        .collect())
+}
+
+/// The people with these ids whose accounts still exist, by name.
+async fn people_named(db: &Db, ids: &[i64]) -> sqlx::Result<Vec<UserRef>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    sqlx::query_as!(
+        UserRef,
+        r#"SELECT id, username::text AS "username!", display_name FROM users
+           WHERE id = ANY ($1) AND deleted_at IS NULL
+           ORDER BY lower(display_name), id"#,
+        ids,
     )
     .fetch_all(db.pool())
     .await
