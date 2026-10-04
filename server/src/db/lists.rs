@@ -119,17 +119,41 @@ pub async fn spaces_naming(db: &Db, id: i64) -> sqlx::Result<i64> {
     .await
 }
 
-/// Why a list that grants name can't be deleted.
-pub fn named_in(spaces: i64) -> String {
+/// How many threads' own restrictions (DESIGN.md §3.4) name a group or
+/// list.
+pub async fn threads_naming(db: &Db, id: i64) -> sqlx::Result<i64> {
+    sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM threads
+           WHERE read_group_ids @> ARRAY[$1]::bigint[] OR reply_group_ids @> ARRAY[$1]::bigint[]"#,
+        id
+    )
+    .fetch_one(db.pool())
+    .await
+}
+
+/// Why a list that spaces' grants or threads' restrictions name can't be
+/// deleted.
+pub fn named_in(spaces: i64, threads: i64) -> String {
+    let mut by = Vec::new();
+    if spaces > 0 {
+        by.push(crate::format::plural(spaces, "space", "spaces"));
+    }
+    if threads > 0 {
+        by.push(crate::format::plural(threads, "thread", "threads"));
+    }
     format!(
         "The list can’t be deleted while {} {} it. You can rename it, or take everyone off it, instead.",
-        crate::format::plural(spaces, "space", "spaces"),
-        if spaces == 1 { "names" } else { "name" }
+        by.join(" and "),
+        if spaces + threads == 1 {
+            "names"
+        } else {
+            "name"
+        }
     )
 }
 
-/// Deletes one of `owner`'s lists, unless a space's grants name it
-/// (DESIGN.md §3.3).
+/// Deletes one of `owner`'s lists, unless a space's grants or a thread's
+/// restriction name it (DESIGN.md §3.3, §3.4).
 pub async fn delete(db: &Db, owner: i64, id: i64) -> sqlx::Result<Change> {
     let mut tx = db.pool().begin().await?;
     let Some(_) = sqlx::query_scalar!(
@@ -142,14 +166,18 @@ pub async fn delete(db: &Db, owner: i64, id: i64) -> sqlx::Result<Change> {
     else {
         return Ok(Change::NotFound);
     };
-    let named = sqlx::query_scalar!(
-        r#"SELECT count(DISTINCT space_id) AS "n!" FROM space_grants WHERE group_ids @> ARRAY[$1]::bigint[]"#,
+    let named = sqlx::query!(
+        r#"SELECT (SELECT count(DISTINCT space_id) FROM space_grants
+                   WHERE group_ids @> ARRAY[$1]::bigint[]) AS "spaces!",
+                  (SELECT count(*) FROM threads
+                   WHERE read_group_ids @> ARRAY[$1]::bigint[]
+                      OR reply_group_ids @> ARRAY[$1]::bigint[]) AS "threads!""#,
         id
     )
     .fetch_one(&mut *tx)
     .await?;
-    if named > 0 {
-        return Ok(Change::Refused(named_in(named)));
+    if named.spaces > 0 || named.threads > 0 {
+        return Ok(Change::Refused(named_in(named.spaces, named.threads)));
     }
     let deleted = sqlx::query!("DELETE FROM groups WHERE id = $1", id)
         .execute(&mut *tx)
@@ -159,9 +187,12 @@ pub async fn delete(db: &Db, owner: i64, id: i64) -> sqlx::Result<Change> {
             tx.commit().await?;
             Ok(Change::Done)
         }
-        // A grant naming it arrived in the meantime.
+        // A grant or a restriction naming it arrived in the meantime.
         Err(sqlx::Error::Database(err)) if err.is_foreign_key_violation() => {
-            Ok(Change::Refused(named_in(1)))
+            Ok(Change::Refused(
+                "The list can’t be deleted now that something names it. You can rename it, or take everyone off it, instead."
+                    .to_owned(),
+            ))
         }
         Err(err) => Err(err),
     }
@@ -359,7 +390,9 @@ mod tests {
 
     #[test]
     fn says_how_many_spaces_name_a_list() {
-        assert!(named_in(1).contains("while 1 space names it"));
-        assert!(named_in(3).contains("while 3 spaces name it"));
+        assert!(named_in(1, 0).contains("while 1 space names it"));
+        assert!(named_in(3, 0).contains("while 3 spaces name it"));
+        assert!(named_in(0, 1).contains("while 1 thread names it"));
+        assert!(named_in(2, 1).contains("while 2 spaces and 1 thread name it"));
     }
 }

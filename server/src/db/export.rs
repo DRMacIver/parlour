@@ -50,7 +50,7 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
                   p.deleted_at IS NOT NULL AS "deleted!", p.hidden_at IS NOT NULL AS "hidden!",
                   t.visibility = 'private' AS "conversation!",
                   CASE WHEN t.deleted_at IS NULL
-                        AND (thread_readable(t.visibility, t.space_id, $2, $3)
+                        AND (thread_readable(t, $2, $3, $4, $5)
                              OR dm_readable(t.id, t.visibility, $4))
                        THEN t.title END AS thread_title
            FROM posts p JOIN threads t ON t.id = p.thread_id
@@ -60,6 +60,7 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(pool)
     .await?;
@@ -91,7 +92,7 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
     let held = sqlx::query!(
         r#"SELECT h.created_at, h.title, h.body_md, h.status, h.decided_at, h.post_id, h.thread_id,
                   CASE WHEN t.deleted_at IS NULL
-                        AND (thread_readable(t.visibility, t.space_id, $2, $3)
+                        AND (thread_readable(t, $2, $3, $4, $5)
                              OR dm_readable(t.id, t.visibility, $4))
                        THEN t.title END AS thread_title
            FROM held_posts h LEFT JOIN threads t ON t.id = h.thread_id
@@ -101,6 +102,7 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(pool)
     .await?;
@@ -154,7 +156,7 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
     let subscriptions = sqlx::query!(
         r#"SELECT s.thread_id,
                   CASE WHEN t.deleted_at IS NULL
-                        AND (thread_readable(t.visibility, t.space_id, $2, $3)
+                        AND (thread_readable(t, $2, $3, $4, $5)
                              OR dm_readable(t.id, t.visibility, $4))
                        THEN t.title END AS title
            FROM thread_subscriptions s JOIN threads t ON t.id = s.thread_id
@@ -163,6 +165,7 @@ pub async fn export(db: &Db, viewer: &Viewer) -> sqlx::Result<Option<Value>> {
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(pool)
     .await?;

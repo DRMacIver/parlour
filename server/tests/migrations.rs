@@ -433,3 +433,100 @@ async fn notices_of_moved_spaces_go_only_to_their_readers(db: PgPool) {
     .await;
     assert!(refused.is_err());
 }
+
+/// Migration 0029 (DESIGN.md §3.4, milestone 14): threads gain their own
+/// read and reply restrictions, none to begin with. Every thread keeps its
+/// visibility, now with its space's beside it, and the post counts kept
+/// per member and space stay as they were, for threads that inherit.
+#[sqlx::test(migrations = false)]
+async fn threads_start_with_no_restriction_of_their_own(db: PgPool) {
+    run_to(&db, 28).await;
+    exec(
+        &db,
+        "INSERT INTO users (id, username, display_name, email) OVERRIDING SYSTEM VALUE VALUES
+             (1, 'ruth', 'Ruth', 'ruth@example.com'), (2, 'jonah', 'Jonah', 'jonah@example.com');
+         INSERT INTO spaces (id, slug, name, visibility) OVERRIDING SYSTEM VALUE VALUES
+             (11, 'games', 'Games', 'public'), (12, 'lounge', 'Lounge', 'members');
+         INSERT INTO space_grants (space_id, verb, level) VALUES
+             (11, 'read', 'public'), (11, 'reply', 'members'), (11, 'start', 'members'),
+             (11, 'administer', 'staff'),
+             (12, 'read', 'members'), (12, 'reply', 'members'), (12, 'start', 'members'),
+             (12, 'administer', 'staff');
+         INSERT INTO threads (id, space_id, visibility, title, slug, author_id) OVERRIDING SYSTEM VALUE VALUES
+             (1, 11, 'public', 'Brass', 'brass', 1),
+             (2, 12, 'members', 'Heat', 'heat', 2),
+             (3, NULL, 'private', 'Tuesday', 'message', 1);
+         INSERT INTO posts (id, thread_id, seq, author_id, body_md, body_html) OVERRIDING SYSTEM VALUE VALUES
+             (1, 1, 1, 1, 'a', 'a'), (2, 1, 2, 2, 'b', 'b'), (3, 2, 1, 2, 'c', 'c'),
+             (4, 3, 1, 1, 'd', 'd');",
+    )
+    .await;
+
+    run_to(&db, 29).await;
+
+    assert_eq!(
+        pairs(
+            &db,
+            "SELECT visibility || ' ' || space_visibility,
+                    coalesce(read_user_ids::text, 'none') || ' ' || coalesce(reply_user_ids::text, 'none')
+             FROM threads ORDER BY id"
+        )
+        .await,
+        vec![
+            ("public public".to_owned(), "none none".to_owned()),
+            ("members members".to_owned(), "none none".to_owned()),
+            ("private private".to_owned(), "none none".to_owned()),
+        ]
+    );
+    assert_eq!(
+        pairs(
+            &db,
+            "SELECT user_id || ' in ' || space_id, posts || coalesce(' in ' || thread_id, '')
+             FROM user_space_post_counts WHERE posts <> 0 ORDER BY user_id, space_id"
+        )
+        .await,
+        vec![
+            ("1 in 11".to_owned(), "1".to_owned()),
+            ("2 in 11".to_owned(), "1".to_owned()),
+            ("2 in 12".to_owned(), "1".to_owned()),
+        ]
+    );
+    // Restricting a thread moves its posts' counts to it, and makes it
+    // restricted; a conversation can't be given a restriction.
+    exec(
+        &db,
+        "UPDATE threads SET read_group_ids = '{}', read_user_ids = '{1}' WHERE id = 1",
+    )
+    .await;
+    assert_eq!(
+        pairs(
+            &db,
+            "SELECT user_id || ' in ' || space_id, posts || coalesce(' in ' || thread_id, '')
+             FROM user_space_post_counts WHERE posts <> 0 ORDER BY user_id, space_id"
+        )
+        .await,
+        vec![
+            ("1 in 11".to_owned(), "1 in 1".to_owned()),
+            ("2 in 11".to_owned(), "1 in 1".to_owned()),
+            ("2 in 12".to_owned(), "1".to_owned()),
+        ]
+    );
+    assert_eq!(
+        pairs(
+            &db,
+            "SELECT visibility, space_visibility FROM threads WHERE id = 1"
+        )
+        .await,
+        vec![("restricted".to_owned(), "public".to_owned())]
+    );
+    let refused = sqlx::raw_sql(
+        "UPDATE threads SET read_group_ids = '{}', read_user_ids = '{1}' WHERE id = 3",
+    )
+    .execute(&db)
+    .await;
+    assert!(refused.is_err());
+    let half = sqlx::raw_sql("UPDATE threads SET reply_user_ids = '{1}' WHERE id = 2")
+        .execute(&db)
+        .await;
+    assert!(half.is_err());
+}

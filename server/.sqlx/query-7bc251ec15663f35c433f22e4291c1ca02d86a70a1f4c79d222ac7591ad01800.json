@@ -1,0 +1,111 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT h.created_at, h.title, h.body_md, h.status, h.decided_at, h.post_id, h.thread_id,\n                  CASE WHEN t.deleted_at IS NULL\n                        AND (thread_readable(t, $2, $3, $4, $5)\n                             OR dm_readable(t.id, t.visibility, $4))\n                       THEN t.title END AS thread_title\n           FROM held_posts h LEFT JOIN threads t ON t.id = h.thread_id\n           WHERE h.author_id = $1\n           ORDER BY h.created_at, h.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "held_posts",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "held_posts",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "body_md",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "held_posts",
+            "name": "body_md"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "held_posts",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "decided_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "held_posts",
+            "name": "decided_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "post_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "held_posts",
+            "name": "post_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "thread_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "held_posts",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "thread_title",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "7bc251ec15663f35c433f22e4291c1ca02d86a70a1f4c79d222ac7591ad01800"
+}

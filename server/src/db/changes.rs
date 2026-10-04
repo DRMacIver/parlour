@@ -18,8 +18,9 @@ pub enum Change {
     ReactionChanged { post_id: i64 },
     /// A post was deleted, hidden, or restored.
     PostRemoved { post_id: i64 },
-    /// A thread was renamed, pinned, locked, deleted, restored or moved. For
-    /// a move, `previous_space_id` is where it was before.
+    /// A thread was renamed, pinned, locked, deleted, restored or moved, or
+    /// its own restriction changed. For a move, `previous_space_id` is
+    /// where it was before.
     ThreadChanged {
         thread_id: i64,
         previous_space_id: Option<i64>,
@@ -94,8 +95,8 @@ pub async fn tags_for(db: &Db, change: Change) -> sqlx::Result<Vec<Tag>> {
                 tags.extend(thread.space_id.map(Tag::Space));
                 tags.extend(thread.forked_from_thread_id.map(Tag::Thread));
             }
-            // Deleting, restoring or moving a thread can take a feed out
-            // of view or bring it in.
+            // Deleting, restoring, moving or restricting a thread can take
+            // a feed out of view or bring it in.
             if feed_came_or_went(db, previous_space_id).await?
                 || feed_came_or_went(db, thread.and_then(|t| t.space_id)).await?
             {
@@ -151,11 +152,14 @@ pub async fn post_seq(db: &Db, post_id: i64) -> sqlx::Result<Option<(i64, i64)>>
 }
 
 /// Whether a change in this space's threads may have brought a feed into
-/// view or taken it out (DESIGN.md §3.2): it is a feed with at most one
-/// thread that isn't deleted. A feed without threads is left out of the
-/// space index, front pages and the like, which are tagged `site`; clearing
-/// that only when a feed has one thread or none keeps busy feeds from
-/// clearing it on every post.
+/// visitors' view or taken it out (DESIGN.md §3.2): it is a feed with at
+/// most one public thread that isn't deleted. A feed without threads its
+/// viewer can read is left out of the space index, front pages and the
+/// like, which are tagged `site`, and only visitors' pages are cached, so
+/// only public threads count; clearing it only when a feed has one or none
+/// keeps busy feeds from clearing it on every post. (A thread that gains
+/// or loses its own read restriction has just stopped or started being
+/// public, so it is counted as it is now.)
 async fn feed_came_or_went(db: &Db, space_id: Option<i64>) -> sqlx::Result<bool> {
     let Some(space_id) = space_id else {
         return Ok(false);
@@ -163,7 +167,8 @@ async fn feed_came_or_went(db: &Db, space_id: Option<i64>) -> sqlx::Result<bool>
     sqlx::query_scalar!(
         r#"SELECT c.kind = 'feed'
                   AND (SELECT count(*) FROM threads t
-                       WHERE t.space_id = c.id AND t.deleted_at IS NULL) <= 1 AS "turned!"
+                       WHERE t.space_id = c.id AND t.deleted_at IS NULL
+                         AND t.visibility = 'public') <= 1 AS "turned!"
            FROM spaces c WHERE c.id = $1"#,
         space_id
     )

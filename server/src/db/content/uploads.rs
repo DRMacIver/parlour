@@ -48,12 +48,12 @@ pub async fn upload_access(
                     JOIN posts p ON p.id = s.post_id JOIN threads t ON t.id = p.thread_id
                     WHERE p.deleted_at IS NULL AND p.hidden_at IS NULL
                       AND t.deleted_at IS NULL
-                      AND thread_readable(t.visibility, t.space_id, $3, $4)) AS "public!",
+                      AND thread_readable(t, $3, $4, NULL, NULL)) AS "public!",
             EXISTS (SELECT 1 FROM shown_in s
                     JOIN posts p ON p.id = s.post_id JOIN threads t ON t.id = p.thread_id
                     WHERE p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $8)
                       AND t.deleted_at IS NULL
-                      AND (thread_readable(t.visibility, t.space_id, $5, $6)
+                      AND (thread_readable(t, $5, $6, $7, $10)
                            OR dm_readable(t.id, t.visibility, $7))) AS "readable!",
             $8 AND EXISTS (SELECT 1 FROM held_post_uploads hu WHERE hu.sha256 = $1) AS "held!",
             EXISTS (SELECT 1 FROM uploads u WHERE u.sha256 = $1 AND u.user_id = $9) AS "mine!"
@@ -67,6 +67,7 @@ pub async fn upload_access(
         filter.dm_viewer,
         viewer.is_staff(),
         viewer.user_id(),
+        &filter.group_ids,
     )
     .fetch_one(db.pool())
     .await?;

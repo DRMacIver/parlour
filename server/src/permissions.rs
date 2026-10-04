@@ -1,11 +1,12 @@
-//! Who may do what in a space, and the "at most as visible" rule for
-//! quote-forks (DESIGN.md §3.1, §3.6).
+//! Who may do what in a space or a thread, and the "at most as visible"
+//! rule for quote-forks (DESIGN.md §3.1, §3.4, §3.6).
 //!
 //! Reading is checked in SQL by the access layer ([`crate::content`]);
 //! these are the decisions made in Rust before a write. A space holds a
 //! [`Grant`] for each of four verbs: reading, replying, starting threads
 //! and administering. A grant is a [`Level`] and, for the `listed` level,
-//! the groups and people named.
+//! the groups and people named. A thread may narrow reading and replying
+//! further with its own [`ThreadRestriction`].
 
 use std::collections::BTreeSet;
 
@@ -167,6 +168,63 @@ pub enum Audience {
     },
     /// The participants of a private thread (a DM).
     Private,
+    /// A thread's own read restriction within its space's audience
+    /// (DESIGN.md §3.4): those who can read the space and whom the
+    /// restriction names. Made by [`Audience::narrowed`], whose `space` is
+    /// never public, members or private.
+    Within {
+        space: Box<Audience>,
+        groups: BTreeSet<i64>,
+        users: BTreeSet<i64>,
+    },
+}
+
+impl Audience {
+    /// The audience of a thread in a space with this audience, given its
+    /// own read restriction if it has one: the intersection of the two.
+    /// Restricting a thread in a public or members-only space leaves just
+    /// the people named (visitors and suspended members are never named),
+    /// and a conversation has no restriction.
+    pub fn narrowed(self, restriction: Option<&Grant>) -> Audience {
+        let Some(restriction) = restriction else {
+            return self;
+        };
+        let (groups, users) = (restriction.group_ids.clone(), restriction.user_ids.clone());
+        match self {
+            Audience::Public | Audience::Members => Audience::Restricted { groups, users },
+            Audience::Private => Audience::Private,
+            space @ (Audience::Staff | Audience::Restricted { .. } | Audience::Within { .. }) => {
+                Audience::Within {
+                    space: Box::new(space),
+                    groups,
+                    users,
+                }
+            }
+        }
+    }
+
+    /// The audiences whose intersection this is.
+    fn terms(&self) -> Vec<&Audience> {
+        match self {
+            Audience::Within { space, .. } => {
+                let mut terms = space.terms();
+                terms.push(self);
+                terms
+            }
+            other => vec![other],
+        }
+    }
+
+    /// The names a restriction adds, as an audience of its own.
+    fn own_names(&self) -> Audience {
+        match self {
+            Audience::Within { groups, users, .. } => Audience::Restricted {
+                groups: groups.clone(),
+                users: users.clone(),
+            },
+            other => other.clone(),
+        }
+    }
 }
 
 /// Whether everyone who can see `dest` can also see `source`, computed
@@ -175,10 +233,28 @@ pub enum Audience {
 /// not the people behind them, so the answer doesn't change as groups
 /// change. Content in DMs can never be quoted out, and DMs never contain
 /// quote-forks.
+///
+/// A thread narrowed by its own restriction ([`Audience::Within`]) is the
+/// intersection of its space's audience and the names it gives, so the
+/// table is applied to each part: every part of the source must hold
+/// everyone in some part of the destination.
 pub fn at_most_as_visible(source: &Audience, dest: &Audience) -> bool {
+    let (sources, dests) = (source.terms(), dest.terms());
+    sources.iter().all(|s| {
+        dests
+            .iter()
+            .any(|d| basic_at_most_as_visible(&s.own_names(), &d.own_names()))
+    })
+}
+
+/// The table in DESIGN.md §3.1, for audiences that aren't intersections.
+fn basic_at_most_as_visible(source: &Audience, dest: &Audience) -> bool {
     use Audience::*;
     match (source, dest) {
         (Private, _) | (_, Private) => false,
+        (Within { .. }, _) | (_, Within { .. }) => {
+            unreachable!("intersections are taken apart first")
+        }
         (Public, _) => true,
         (Members, Members | Staff | Restricted { .. }) => true,
         (Members, Public) => false,
@@ -213,6 +289,9 @@ pub fn user_can_read(user: &UserCtx, audience: &Audience) -> bool {
         }
         // DMs check their participant list instead.
         Audience::Private => false,
+        Audience::Within { space, .. } => {
+            user_can_read(user, space) && user_can_read(user, &audience.own_names())
+        }
     }
 }
 
@@ -267,6 +346,81 @@ impl SpaceRules {
         viewer
             .user()
             .is_some_and(|user| user.may_act() && self.administer.allows(user))
+    }
+}
+
+/// A thread's own restriction (DESIGN.md §3.4): of those its space lets
+/// read and reply, which may read it and which may reply in it. Each part
+/// is a `listed` grant naming groups, lists and people, or `None` when the
+/// thread inherits its space's grant. Starting threads and administering
+/// stay with the space, and "nobody may reply" is the lock.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ThreadRestriction {
+    pub read: Option<Grant>,
+    pub reply: Option<Grant>,
+}
+
+impl ThreadRestriction {
+    /// A restriction as the database holds it: each part's group and user
+    /// ids, or `None` for a part the thread inherits.
+    pub fn from_parts(
+        read_groups: Option<&[i64]>,
+        read_users: Option<&[i64]>,
+        reply_groups: Option<&[i64]>,
+        reply_users: Option<&[i64]>,
+    ) -> ThreadRestriction {
+        let part = |groups: Option<&[i64]>, users: Option<&[i64]>| match (groups, users) {
+            (None, None) => None,
+            (groups, users) => Some(Grant::listed(
+                groups.unwrap_or_default().iter().copied(),
+                users.unwrap_or_default().iter().copied(),
+            )),
+        };
+        ThreadRestriction {
+            read: part(read_groups, read_users),
+            reply: part(reply_groups, reply_users),
+        }
+    }
+
+    /// Whether the thread simply inherits its space's audience.
+    pub fn is_inherited(&self) -> bool {
+        self.read.is_none() && self.reply.is_none()
+    }
+
+    /// Whether each part names people and groups, as a restriction must:
+    /// it can only narrow, so "every member" or "staff" mean nothing here.
+    pub fn is_valid(&self) -> bool {
+        [&self.read, &self.reply]
+            .into_iter()
+            .flatten()
+            .all(|grant| grant.level == Level::Listed)
+    }
+
+    /// The same restriction with this member named in each part, so that
+    /// it can never leave them out.
+    pub fn naming(mut self, user_id: i64) -> ThreadRestriction {
+        for grant in [&mut self.read, &mut self.reply].into_iter().flatten() {
+            grant.user_ids.insert(user_id);
+        }
+        self
+    }
+
+    /// Who can read the thread: its space's readers, narrowed by its own
+    /// read restriction.
+    pub fn audience(&self, space: &SpaceRules) -> Audience {
+        space.read.audience().narrowed(self.read.as_ref())
+    }
+
+    /// Whether the viewer may add posts to the thread: the space lets them
+    /// reply (and it isn't locked, or they are staff), they can read the
+    /// thread, since repliers must be readers, and its own reply
+    /// restriction, if any, names them.
+    pub fn may_reply(&self, space: &SpaceRules, viewer: &Viewer, locked: bool) -> bool {
+        space.may_reply(viewer, locked)
+            && viewer.user().is_some_and(|user| {
+                user_can_read(user, &self.audience(space))
+                    && self.reply.as_ref().is_none_or(|grant| grant.allows(user))
+            })
     }
 }
 
@@ -361,7 +515,11 @@ mod tests {
     }
 
     fn sees(person: &Person, place: &Place) -> bool {
-        match (person, &place.audience) {
+        sees_audience(person, &place.audience, &place.participants)
+    }
+
+    fn sees_audience(person: &Person, audience: &Audience, participants: &BTreeSet<i64>) -> bool {
+        match (person, audience) {
             (_, Audience::Public) => true,
             (Person::Anonymous, _) => false,
             (Person::Member { .. }, Audience::Members) => true,
@@ -374,7 +532,20 @@ mod tests {
                 },
             ) => *staff || users.contains(id) || !groups.is_disjoint(allowed),
             // Staff don't read DMs.
-            (Person::Member { id, .. }, Audience::Private) => place.participants.contains(id),
+            (Person::Member { id, .. }, Audience::Private) => participants.contains(id),
+            // A thread's restriction: they read its space, and it names
+            // them (staff read every thread for now).
+            (
+                Person::Member { id, staff, groups },
+                Audience::Within {
+                    space,
+                    groups: allowed,
+                    users,
+                },
+            ) => {
+                sees_audience(person, space, participants)
+                    && (*staff || users.contains(id) || !groups.is_disjoint(allowed))
+            }
         }
     }
 
@@ -383,7 +554,7 @@ mod tests {
     }
 
     fn audience(tc: &TestCase) -> Audience {
-        match tc.draw(gs::integers::<u8>().max_value(4)) {
+        let space = match tc.draw(gs::integers::<u8>().max_value(4)) {
             0 => Audience::Public,
             1 => Audience::Members,
             2 => Audience::Staff,
@@ -392,6 +563,12 @@ mod tests {
                 users: tc.draw(ids()),
             },
             _ => Audience::Private,
+        };
+        // A thread in the space may have its own read restriction.
+        if tc.draw(gs::booleans()) {
+            space.narrowed(Some(&Grant::listed(tc.draw(ids()), tc.draw(ids()))))
+        } else {
+            space
         }
     }
 
@@ -430,7 +607,11 @@ mod tests {
 
     /// The rule refuses only what it must: whenever it says no to a
     /// destination outside DMs, there is somebody (not staff) who could see
-    /// the destination but not the source.
+    /// the destination but not the source. This holds of spaces and of
+    /// threads that inherit their space's audience; for a thread narrowed
+    /// by its own restriction the rule is applied to each part of the
+    /// intersection, which may refuse more than it must (see
+    /// `narrowing_only_ever_takes_destinations_away`).
     #[hegel::test(test_cases = 1000)]
     fn forks_are_refused_only_when_someone_would_see_more(tc: TestCase) {
         let source = place(&tc);
@@ -438,6 +619,8 @@ mod tests {
         // DMs are never quoted out of or into, whoever is in them.
         tc.assume(source.audience != Audience::Private);
         tc.assume(dest.audience != Audience::Private);
+        tc.assume(!matches!(source.audience, Audience::Within { .. }));
+        tc.assume(!matches!(dest.audience, Audience::Within { .. }));
         if at_most_as_visible(&source.audience, &dest.audience) {
             return;
         }
@@ -493,6 +676,64 @@ mod tests {
                 .any(|p| sees(p, &dest) && !sees(p, &source)),
             "{source:?} -> {dest:?} refused, but nobody would see more"
         );
+    }
+
+    /// Narrowing a thread with its own restriction (DESIGN.md §3.4) can
+    /// only take away places its posts may be quoted, and narrowing a
+    /// destination can only add them: a narrower source is seen by fewer,
+    /// a narrower destination by fewer still.
+    #[hegel::test(test_cases = 1000)]
+    fn narrowing_only_ever_takes_destinations_away(tc: TestCase) {
+        let source = audience(&tc);
+        let dest = audience(&tc);
+        let restriction = Grant::listed(tc.draw(ids()), tc.draw(ids()));
+        let narrowed_source = source.clone().narrowed(Some(&restriction));
+        if at_most_as_visible(&narrowed_source, &dest) {
+            assert!(
+                at_most_as_visible(&source, &dest),
+                "{source:?} -> {dest:?} refused, {narrowed_source:?} allowed"
+            );
+        }
+        let narrowed_dest = dest.clone().narrowed(Some(&restriction));
+        if at_most_as_visible(&source, &dest) {
+            assert!(
+                at_most_as_visible(&source, &narrowed_dest),
+                "{source:?} -> {dest:?} allowed, -> {narrowed_dest:?} refused"
+            );
+        }
+        // And a thread's posts may always go somewhere no wider than the
+        // thread itself, its own space with the same restriction.
+        if source != Audience::Private {
+            assert!(at_most_as_visible(&narrowed_source, &narrowed_source));
+        }
+    }
+
+    #[test]
+    fn a_restriction_narrows_its_space() {
+        let names = Grant::listed([1], [7]);
+        let r17 = restricted(&[1], &[7]);
+        assert_eq!(Audience::Public.narrowed(Some(&names)), r17);
+        assert_eq!(Audience::Members.narrowed(Some(&names)), r17);
+        assert_eq!(Audience::Private.narrowed(Some(&names)), Audience::Private);
+        assert_eq!(Audience::Members.narrowed(None), Audience::Members);
+        let within = restricted(&[1, 2], &[]).narrowed(Some(&names));
+        // Quoting a post from a thread restricted to group 1 and person 7
+        // in a space for groups 1 and 2: into a space for group 1, but not
+        // one for group 2 alone or for all members.
+        assert!(at_most_as_visible(&within, &restricted(&[1], &[])));
+        assert!(!at_most_as_visible(&within, &restricted(&[2], &[])));
+        assert!(!at_most_as_visible(&within, &Audience::Members));
+        assert!(at_most_as_visible(&restricted(&[1, 2], &[]), &within));
+        assert!(!at_most_as_visible(&restricted(&[2], &[]), &within));
+        let mut ruth = user(Role::User, [2].into());
+        ruth.id = 7;
+        assert!(user_can_read(&ruth, &within));
+        ruth.group_ids = vec![3];
+        assert!(!user_can_read(&ruth, &within));
+        assert!(user_can_read(
+            &user(Role::Moderator, BTreeSet::new()),
+            &within
+        ));
     }
 
     fn user(role: Role, groups: BTreeSet<i64>) -> UserCtx {

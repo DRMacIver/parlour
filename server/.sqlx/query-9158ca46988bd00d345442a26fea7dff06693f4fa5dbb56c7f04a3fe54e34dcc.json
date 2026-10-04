@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (SELECT count(DISTINCT space_id) FROM space_grants\n                   WHERE group_ids @> ARRAY[$1]::bigint[]) AS \"spaces!\",\n                  (SELECT count(*) FROM threads\n                   WHERE read_group_ids @> ARRAY[$1]::bigint[]\n                      OR reply_group_ids @> ARRAY[$1]::bigint[]) AS \"threads!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "spaces!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "threads!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "9158ca46988bd00d345442a26fea7dff06693f4fa5dbb56c7f04a3fe54e34dcc"
+}

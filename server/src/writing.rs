@@ -1,5 +1,6 @@
 //! Writes made by members (DESIGN.md §3.2–3.5): new threads, replies,
-//! edits, deletions, reactions, quote-forks and read markers.
+//! edits, deletions, reactions, quote-forks, read markers and threads' own
+//! restrictions.
 //!
 //! Each operation finds what it is about through [`crate::content`] as the
 //! viewer, so that nothing the viewer can't see can be written to; checks
@@ -14,9 +15,9 @@ use crate::content::{
 };
 use crate::error::AppError;
 use crate::markdown;
-use crate::mod_records::{self, HeldPlace};
+use crate::mod_records::{self, HeldPlace, NewAction};
 use crate::notify;
-use crate::permissions::at_most_as_visible;
+use crate::permissions::{Audience, ThreadRestriction, at_most_as_visible};
 use crate::ratelimit::{Action, Scope};
 use crate::social;
 use crate::store::{self, Edited, NewPost, NewThread};
@@ -210,6 +211,19 @@ pub fn may_reply_in(viewer: &Viewer, space: &SpaceTarget, locked: bool) -> bool 
     space.rules.may_reply(viewer, locked)
 }
 
+/// Whether the viewer may reply in a space's thread they can read: the
+/// space lets them, they can read the thread, and its own reply
+/// restriction, if any, names them (DESIGN.md §3.4). Never for a
+/// conversation, which [`reply_refusal`] asks about instead.
+pub fn may_reply_to(viewer: &Viewer, thread: &ThreadTarget) -> bool {
+    match &thread.place {
+        Place::Space(space) => thread
+            .restriction
+            .may_reply(&space.rules, viewer, thread.locked),
+        Place::Conversation(_) | Place::Unreadable => false,
+    }
+}
+
 /// Why the viewer may not reply in a thread or conversation they can
 /// read, if they may not.
 pub async fn reply_refusal(
@@ -230,7 +244,9 @@ pub async fn reply_refusal(
                 Some("This space is archived, so nothing more can be posted in it.")
             } else if !may_reply_in(viewer, space, false) {
                 Some("You can’t reply in this space.")
-            } else if !may_reply_in(viewer, space, thread.locked) {
+            } else if !thread.restriction.may_reply(&space.rules, viewer, false) {
+                Some("You can’t reply in this thread.")
+            } else if !may_reply_to(viewer, thread) {
                 Some("This thread is locked.")
             } else {
                 None
@@ -543,6 +559,87 @@ pub async fn react(
         thread_id: post.thread.thread.id,
         post_id,
     }))
+}
+
+/// Gives a thread its own read and reply restriction, changes it, or takes
+/// it away to leave the space's audience (DESIGN.md §3.4). Its author may,
+/// while they can read it, and so may the space's administrators, staff
+/// included, whether or not they can read it. A restriction only names
+/// groups, lists and people, and always names the author, who could
+/// otherwise shut themselves out of their own thread. Staff changing a
+/// thread in a space they don't run in their own right, and that isn't
+/// theirs, is recorded in the moderation log.
+pub async fn restrict_thread(
+    state: &AppState,
+    viewer: &Viewer,
+    thread_id: i64,
+    restriction: &ThreadRestriction,
+) -> Outcome<()> {
+    let Some(user) = viewer.user() else {
+        return Ok(Err(Refused::LogIn));
+    };
+    let Some(target) = content::restriction_target(state.db(), viewer, thread_id).await? else {
+        return Ok(Err(Refused::NotFound));
+    };
+    let author = target.author_id == user.id && target.readable;
+    let runs = target.space.rules.may_administer(viewer);
+    if !author && !runs {
+        return Ok(Err(if target.readable {
+            Refused::NotAllowed(
+                "Only the thread’s author and the people who run its space can change who may read it and reply in it.",
+            )
+        } else {
+            Refused::NotFound
+        }));
+    }
+    if !user.may_act() {
+        return Ok(Err(Refused::NotAllowed(
+            "You can’t change anything while you are suspended.",
+        )));
+    }
+    if !restriction.is_valid() {
+        return Ok(Err(Refused::Invalid(vec![
+            "A thread can only be narrowed to groups, lists and people.".to_owned(),
+        ])));
+    }
+    let restriction = restriction.clone().naming(target.author_id);
+    if restriction == target.restriction {
+        return Ok(Ok(()));
+    }
+    let before = target.audience();
+    let after = restriction.audience(&target.space.rules);
+    if !store::set_thread_restriction(state.db(), thread_id, &restriction).await? {
+        return Ok(Err(Refused::NotFound));
+    }
+    if !author && viewer.is_staff() && !target.space.rules.administers_by_grant(viewer) {
+        mod_records::record(
+            state.db(),
+            &NewAction {
+                actor_id: user.id,
+                action: "restrict_thread",
+                target_kind: "thread",
+                target_id: thread_id,
+                user_id: Some(target.author_id),
+                thread_id: Some(thread_id),
+                post_id: None,
+                reason: "",
+                public: before == Audience::Public && after == Audience::Public,
+                details: serde_json::json!({
+                    "read": restriction.read.is_some(),
+                    "reply": restriction.reply.is_some(),
+                }),
+            },
+        )
+        .await?;
+        state.changed(Change::ModLogged).await?;
+    }
+    state
+        .changed(Change::ThreadChanged {
+            thread_id,
+            previous_space_id: None,
+        })
+        .await?;
+    Ok(Ok(()))
 }
 
 /// The spaces a post could be quoted into: those the viewer may post

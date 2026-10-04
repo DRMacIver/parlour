@@ -1,0 +1,140 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,\n               c.archived_at IS NOT NULL AS \"archived!\",\n               site_group_names(r.group_ids) AS \"group_names!\",\n               list_labels(r.group_ids, $4) AS \"list_names!\",\n               (SELECT count(*) FROM threads t\n                WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                  AND thread_readable(t, $2, $3, $5, $6)) AS \"thread_count!\",\n               o.id AS \"owner_id?\", o.username::text AS \"owner_username?\",\n               o.display_name AS \"owner_display_name?\"\n        FROM spaces c\n        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'\n        LEFT JOIN users o ON o.id = c.owner_user_id AND o.deleted_at IS NULL\n        WHERE c.slug = $1 AND space_readable(c.visibility, c.id, $2, $3)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "read_level",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_grants",
+            "name": "level"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "archived!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "group_names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "list_names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "thread_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "owner_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "owner_username?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "owner_display_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "deb76d2380c78f2430d7a4fc1ec9d5597559b0bae2256d54b81fd21a7521944f"
+}

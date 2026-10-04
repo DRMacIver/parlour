@@ -24,7 +24,7 @@ pub async fn load(db: &Db, viewer: &Viewer) -> sqlx::Result<Header> {
     let row = sqlx::query!(
         r#"SELECT (SELECT value FROM settings WHERE key = 'site_name') AS site_name,
                   CASE WHEN $1::bigint IS NULL THEN 0
-                       ELSE unread_notification_count($1, $2, $3, $4) END AS "notifications!",
+                       ELSE unread_notification_count($1, $2, $3, $4, $7) END AS "notifications!",
                   CASE WHEN $4::bigint IS NULL THEN 0
                        ELSE unread_conversation_count($4) END AS "messages!",
                   CASE WHEN $5 THEN moderation_queue_size() END AS queue,
@@ -35,6 +35,7 @@ pub async fn load(db: &Db, viewer: &Viewer) -> sqlx::Result<Header> {
         filter.dm_viewer,
         viewer.is_staff(),
         restricted,
+        &filter.group_ids,
     )
     .fetch_one(db.pool())
     .await?;

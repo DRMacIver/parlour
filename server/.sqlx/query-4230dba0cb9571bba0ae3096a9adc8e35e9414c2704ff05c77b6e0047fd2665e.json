@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id FROM threads t\n           WHERE t.space_id = ANY($1) AND t.deleted_at IS NULL\n             AND thread_readable(t, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4230dba0cb9571bba0ae3096a9adc8e35e9414c2704ff05c77b6e0047fd2665e"
+}

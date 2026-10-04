@@ -130,11 +130,11 @@ async fn rows(
                u.id AS "user_id?", u.username AS "username?: String", u.display_name AS "user_name?",
                t.id AS "thread_id?", t.title AS "thread_title?", t.slug AS "thread_slug?",
                t.space_id IS NULL AS "thread_private?", t.deleted_at IS NULL AS "thread_live?",
-               (thread_readable(t.visibility, t.space_id, $4, $5)
+               (thread_readable(t, $4, $5, $6, $9)
                 OR dm_readable(t.id, t.visibility, $6)) AS "thread_readable?",
                t2.id AS "to_thread_id?", t2.title AS "to_title?", t2.slug AS "to_slug?",
                t2.deleted_at IS NULL AS "to_live?",
-               thread_readable(t2.visibility, t2.space_id, $4, $5) AS "to_readable?",
+               thread_readable(t2, $4, $5, $6, $9) AS "to_readable?",
                CASE WHEN space_readable(c1.visibility, c1.id, $4, $5) THEN c1.name END AS "from_space?",
                CASE WHEN space_readable(c1.visibility, c1.id, $4, $5) THEN c1.slug END AS "from_space_slug?",
                CASE WHEN space_readable(c2.visibility, c2.id, $4, $5) THEN c2.name END AS "to_space?",
@@ -159,6 +159,7 @@ async fn rows(
         filter.dm_viewer,
         limit,
         offset,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -234,7 +235,7 @@ pub async fn entry_for_member(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result
                u.id AS "user_id?", u.username AS "username?: String", u.display_name AS "user_name?",
                t.id AS "thread_id?", t.title AS "thread_title?", t.slug AS "thread_slug?",
                t.space_id IS NULL AS "thread_private?", t.deleted_at IS NULL AS "thread_live?",
-               (thread_readable(t.visibility, t.space_id, $2, $3)
+               (thread_readable(t, $2, $3, $4, $5)
                 OR dm_readable(t.id, t.visibility, $4)) AS "thread_readable?",
                NULL::bigint AS "to_thread_id?", NULL::text AS "to_title?", NULL::text AS "to_slug?",
                NULL::boolean AS "to_live?", NULL::boolean AS "to_readable?",
@@ -250,6 +251,7 @@ pub async fn entry_for_member(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -392,6 +394,7 @@ fn describe(row: Row, staff: bool) -> LogEntry {
             }
             bits
         }
+        "restrict_thread" => vec![text("changed who can read or reply in "), thread],
         "move_thread" => vec![
             text("moved "),
             thread,
@@ -561,10 +564,12 @@ pub async fn deleted_thread(
            JOIN spaces c ON c.id = t.space_id
            LEFT JOIN threads d ON d.id = t.merged_into_thread_id
            WHERE t.id = $1 AND t.deleted_at IS NOT NULL
-             AND thread_readable(t.visibility, t.space_id, $2, $3)"#,
+             AND thread_readable(t, $2, $3, $4, $5)"#,
         thread_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_optional(db.pool())
     .await?;
@@ -587,11 +592,13 @@ pub async fn merged_into(
     let row = sqlx::query!(
         r#"SELECT d.id, d.slug FROM threads t JOIN threads d ON d.id = t.merged_into_thread_id
            WHERE t.id = $1 AND t.deleted_at IS NOT NULL AND d.deleted_at IS NULL
-             AND thread_readable(t.visibility, t.space_id, $2, $3)
-             AND thread_readable(d.visibility, d.space_id, $2, $3)"#,
+             AND thread_readable(t, $2, $3, $4, $5)
+             AND thread_readable(d, $2, $3, $4, $5)"#,
         thread_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_optional(db.pool())
     .await?;

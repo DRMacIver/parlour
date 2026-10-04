@@ -121,7 +121,7 @@ pub async fn search(
             CROSS JOIN q
             WHERE p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $5)
               AND t.deleted_at IS NULL
-              AND (thread_readable(t.visibility, t.space_id, $2, $3)
+              AND (thread_readable(t, $2, $3, $4, $12)
                    OR dm_searchable(t.id, t.visibility, $4))
               AND ($6::text IS NULL OR c.slug = $6)
               AND ($7::text IS NULL OR a.username = $7::citext)
@@ -152,6 +152,7 @@ pub async fn search(
         per_page + 1,
         offset,
         viewer.user_id(),
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await?;

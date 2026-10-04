@@ -1,0 +1,171 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH q AS (SELECT websearch_to_tsquery('english', $1) AS q),\n        found AS (\n            SELECT p.id FROM posts p, q WHERE p.search @@ q.q\n            UNION\n            SELECT p.id FROM threads t JOIN posts p ON p.thread_id = t.id AND p.seq = 1, q\n            WHERE t.search @@ q.q\n        ),\n        page AS (\n            SELECT p.id, p.seq, p.created_at, p.body_md, p.hidden_at IS NOT NULL AS hidden,\n                   t.id AS thread_id, t.title, c.slug AS space_slug, c.name AS space_name,\n                   a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name,\n                   ts_rank_cd(p.search, q.q) + CASE WHEN p.seq = 1 AND t.search @@ q.q THEN 1 ELSE 0 END AS rank\n            FROM found\n            JOIN posts p ON p.id = found.id\n            JOIN threads t ON t.id = p.thread_id\n            LEFT JOIN spaces c ON c.id = t.space_id\n            JOIN users a ON a.id = p.author_id\n            CROSS JOIN q\n            WHERE p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $5)\n              AND t.deleted_at IS NULL\n              AND (thread_readable(t, $2, $3, $4, $12)\n                   OR dm_searchable(t.id, t.visibility, $4))\n              AND ($6::text IS NULL OR c.slug = $6)\n              AND ($7::text IS NULL OR a.username = $7::citext)\n              AND ($6::text IS NOT NULL OR $11::bigint IS NULL\n                   OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $11 AND m.space_id = t.space_id))\n            ORDER BY CASE WHEN $8 THEN p.created_at END DESC,\n                     rank DESC, p.created_at DESC, p.id DESC\n            LIMIT $9 OFFSET $10\n        )\n        SELECT page.id AS \"id!\", page.seq AS \"seq!\", page.created_at AS \"created_at!\",\n               page.hidden AS \"hidden!\", page.thread_id AS \"thread_id!\", page.title AS \"title!\",\n               page.space_slug AS \"space_slug?\", page.space_name AS \"space_name?\",\n               page.author_id AS \"author_id!\", page.author_username AS \"author_username!\",\n               page.author_display_name AS \"author_display_name!\",\n               page.body_md AS \"body_md!\"\n        FROM page\n        ORDER BY CASE WHEN $8 THEN page.created_at END DESC,\n                 page.rank DESC, page.created_at DESC, page.id DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "seq!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "hidden!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "thread_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "title!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "space_slug?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "space_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "author_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "author_username!",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "author_display_name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "body_md!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "body_md"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Bool",
+        "Text",
+        "Text",
+        "Bool",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b3765619e451a970f151d2ff8357308e45009673c617dde0f5fbf8c1dc434877"
+}

@@ -81,7 +81,7 @@
 <section class="panel" aria-labelledby="delete-heading">
   <h2 class="panel-bar" id="delete-heading">Delete</h2>
   <div class="form">
-    {% if named_in > 0 %}
+    {% if !self.deletable() %}
     <p class="form-note">{{ self.named_in() }}</p>
     {% else %}
     <p class="form-note">Deleting the list takes everyone off it. It can’t be undone.</p>

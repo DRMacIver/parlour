@@ -154,13 +154,29 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<Result<bool, String>> {
             crate::format::plural(named, "space", "spaces")
         )));
     }
+    // A thread's own restriction (DESIGN.md §3.4) holds on to it too.
+    let threads = crate::lists::threads_naming(db, id).await?;
+    if threads > 0 {
+        return Ok(Err(format!(
+            "The group can’t be deleted while {} {} it. Their authors and the people who run their spaces can take it out.",
+            crate::format::plural(threads, "thread", "threads"),
+            if threads == 1 { "names" } else { "name" }
+        )));
+    }
     let done = sqlx::query!(
         "DELETE FROM groups WHERE id = $1 AND owner_user_id IS NULL",
         id
     )
     .execute(db.pool())
-    .await?;
-    Ok(Ok(done.rows_affected() == 1))
+    .await;
+    match done {
+        Ok(done) => Ok(Ok(done.rows_affected() == 1)),
+        // Something came to name it in the meantime.
+        Err(sqlx::Error::Database(err)) if err.is_foreign_key_violation() => Ok(Err(
+            "The group can’t be deleted now that something names it.".to_owned(),
+        )),
+        Err(err) => Err(err),
+    }
 }
 
 /// Adds a member to a group, returning whether they weren't in it already.

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.kind = 'feed'\n                  AND (SELECT count(*) FROM threads t\n                       WHERE t.space_id = c.id AND t.deleted_at IS NULL\n                         AND t.visibility = 'public') <= 1 AS \"turned!\"\n           FROM spaces c WHERE c.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "turned!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7e313942a99dd55d594ea793a43a6e3648b16827743cf4d0e9a4bb06fa205a66"
+}

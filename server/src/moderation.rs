@@ -1122,7 +1122,8 @@ pub async fn moderate_thread(
     let after = thread.audience();
     let public = is_public(&audience.unwrap_or(after.clone()))
         && match &destination {
-            Some(to) => is_public(&to.audience()),
+            // A thread keeps its own restriction wherever it goes.
+            Some(to) => is_public(&thread.restriction.audience(&to.rules)),
             None => true,
         };
     let author_id = content::moderation::thread_author(db, thread_id).await?;
@@ -1217,7 +1218,7 @@ pub async fn move_posts(
     }
     // Where to: an existing thread the moderator can read, or a new one.
     enum To {
-        Existing(ThreadTarget),
+        Existing(Box<ThreadTarget>),
         New(Box<content::SpaceTarget>, String),
     }
     let to = match destination {
@@ -1227,7 +1228,7 @@ pub async fn move_posts(
                 None
             }
             Some(id) => match content::thread_target(db, viewer, id).await? {
-                Some(t) if t.space().is_some() => Some(To::Existing(t)),
+                Some(t) if t.space().is_some() => Some(To::Existing(Box::new(t))),
                 Some(_) => {
                     problems.push("Posts can’t be moved into a conversation.".to_owned());
                     None

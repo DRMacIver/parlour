@@ -195,6 +195,8 @@ struct ListTemplate {
     /// How many spaces name it, readable by the viewer or not: only a list
     /// none name can be deleted.
     named_in: i64,
+    /// How many threads' own restrictions name it (DESIGN.md §3.4).
+    threads_naming: i64,
     /// The name and username typed into the forms, if refused.
     name: String,
     username: String,
@@ -210,7 +212,12 @@ impl ListTemplate {
     }
 
     fn named_in(&self) -> String {
-        lists::named_in(self.named_in)
+        lists::named_in(self.named_in, self.threads_naming)
+    }
+
+    /// Whether nothing names it, so that it can be deleted.
+    fn deletable(&self) -> bool {
+        self.named_in == 0 && self.threads_naming == 0
     }
 
     /// For its owner, how many spaces they can't read name the list. Only
@@ -260,6 +267,7 @@ async fn render_list(
             layout: Layout::load(state, viewer, Nav::Account).await?,
             spaces: content::spaces_naming(db, viewer, list.id).await?,
             named_in: lists::spaces_naming(db, list.id).await?,
+            threads_naming: lists::threads_naming(db, list.id).await?,
             notice: outcome.notice,
             errors: outcome.errors,
             name: outcome.name.unwrap_or_else(|| list.name.clone()),

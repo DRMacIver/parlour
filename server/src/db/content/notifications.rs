@@ -99,7 +99,7 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
         WHERE n.user_id = $1
           AND (n.post_id IS NULL
                OR (p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
-                   AND (thread_readable(t.visibility, t.space_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))))
+                   AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))))
           AND NOT EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id
                           WHERE b.user_id = $1 AND b.blocked_user_id = n.actor_id AND bu.role = 'user')
         "#,
@@ -107,6 +107,7 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_one(db.pool())
     .await?;
@@ -129,7 +130,7 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
         WHERE n.user_id = $1
           AND (n.post_id IS NULL
                OR (p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
-                   AND (thread_readable(t.visibility, t.space_id, $2, $3) OR dm_readable(t.id, t.visibility, $6))))
+                   AND (thread_readable(t, $2, $3, $6, $7) OR dm_readable(t.id, t.visibility, $6))))
           AND NOT EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id
                           WHERE b.user_id = $1 AND b.blocked_user_id = n.actor_id AND bu.role = 'user')
         ORDER BY n.created_at DESC, n.id DESC
@@ -141,6 +142,7 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
         NOTIFICATIONS_PER_PAGE,
         offset,
         filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -204,11 +206,12 @@ pub async fn unread_count(db: &Db, viewer: &Viewer) -> sqlx::Result<i64> {
     };
     let filter = viewer.filter();
     sqlx::query_scalar!(
-        r#"SELECT unread_notification_count($1, $2, $3, $4) AS "n!""#,
+        r#"SELECT unread_notification_count($1, $2, $3, $4, $5) AS "n!""#,
         user_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_one(db.pool())
     .await

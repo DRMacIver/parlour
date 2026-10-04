@@ -71,29 +71,33 @@ use parlour::groups::{self, GroupFields};
 use parlour::layouts::{self, MuteOutcome};
 use parlour::lists;
 use parlour::pagination::page_href;
-use parlour::permissions::{Grant, Level};
+use parlour::permissions::{Grant, Level, ThreadRestriction};
 use parlour::sessions;
 use parlour::store::{self, NewPost, NewSpace, NewThread, NewUser, SpaceSettings};
 use parlour::users::{self, RoleChange};
 use parlour::viewer::Viewer;
-use parlour::writing;
+use parlour::writing::{self, Refused};
 use sqlx::PgPool;
 use tokio::runtime::Handle;
 
-/// Counts the (member, space) pairs whose maintained post count, as
-/// thread pages and profiles show it, differs from counting the posts
-/// afresh: live posts in live threads in that space.
+/// Counts the (member, space, restricted thread) rows whose maintained
+/// post count, as thread pages and profiles show it, differs from counting
+/// the posts afresh: live posts in live threads in that space, those in a
+/// thread with its own read restriction counted for that thread.
 const STALE_POST_COUNTS: &str = "
     WITH actual AS (
-        SELECT p.author_id AS user_id, t.space_id, count(*) AS posts
+        SELECT p.author_id AS user_id, t.space_id,
+               coalesce(CASE WHEN t.read_user_ids IS NOT NULL THEN t.id END, 0) AS thread_id,
+               count(*) AS posts
         FROM posts p JOIN threads t ON t.id = p.thread_id
         WHERE t.space_id IS NOT NULL AND t.deleted_at IS NULL
           AND p.deleted_at IS NULL AND p.hidden_at IS NULL
-        GROUP BY 1, 2
+        GROUP BY 1, 2, 3
     ), kept AS (
-        SELECT user_id, space_id, posts FROM user_space_post_counts WHERE posts <> 0
+        SELECT user_id, space_id, coalesce(thread_id, 0) AS thread_id, posts
+        FROM user_space_post_counts WHERE posts <> 0
     )
-    SELECT count(*) FROM actual FULL JOIN kept USING (user_id, space_id)
+    SELECT count(*) FROM actual FULL JOIN kept USING (user_id, space_id, thread_id)
     WHERE actual.posts IS DISTINCT FROM kept.posts";
 
 const LEVELS: [&str; 3] = ["public", "members", "listed"];
@@ -162,6 +166,10 @@ struct ThreadModel {
     old_titles: Vec<String>,
     /// The thread it was merged into, by moving all its posts there.
     merged_into: Option<usize>,
+    /// Its own read restriction (DESIGN.md §3.4), if it has one: the
+    /// groups (indexes into `World::groups`) and the members (by id) it
+    /// names.
+    read: Option<(BTreeSet<usize>, BTreeSet<i64>)>,
 }
 
 /// A new member's post, held for a moderator.
@@ -533,6 +541,7 @@ impl World {
             last_seq: 1,
             old_titles: Vec::new(),
             merged_into: None,
+            read: None,
         });
         // Starting a thread subscribes its author to it.
         self.subscriptions.insert((author, created.thread_id));
@@ -593,10 +602,36 @@ impl World {
         });
     }
 
-    /// Whether space `c` is out of sight in lists of spaces (DESIGN.md
-    /// §3.2): a feed with no thread that isn't deleted.
-    fn out_of_sight(&self, c: usize) -> bool {
-        self.spaces[c].feed && !self.threads.iter().any(|t| t.space == c && !t.deleted)
+    /// Gives thread `t` this read restriction, or none, as the handler
+    /// would.
+    fn set_read_restriction(&mut self, t: usize, read: Option<(BTreeSet<usize>, BTreeSet<i64>)>) {
+        let restriction = ThreadRestriction {
+            read: read.as_ref().map(|(groups, users)| {
+                Grant::listed(
+                    groups.iter().map(|&g| self.groups[g]),
+                    users.iter().copied(),
+                )
+            }),
+            reply: None,
+        };
+        let id = self.threads[t].id;
+        assert!(
+            self.block(store::set_thread_restriction(self.db(), id, &restriction))
+                .unwrap()
+        );
+        self.threads[t].read = read;
+        self.changed(Change::ThreadChanged {
+            thread_id: id,
+            previous_space_id: None,
+        });
+    }
+
+    /// Whether space `c` is out of sight in `who`'s lists of spaces
+    /// (DESIGN.md §3.2): a feed with no thread they can read.
+    fn out_of_sight(&self, c: usize, who: Who) -> bool {
+        self.spaces[c].feed
+            && !(0..self.threads.len())
+                .any(|t| self.threads[t].space == c && self.thread_readable(t, who))
     }
 
     /// Has space `c`'s read grant name these groups and lists (indexes
@@ -709,7 +744,7 @@ impl World {
                 return told;
             }
             for user in self.dm_people() {
-                if user == p.author || !self.space_readable_by(t.space, user) {
+                if user == p.author || !self.thread_readable_by(p.thread, user) {
                     continue;
                 }
                 if p.mentions && (user == self.member_id || user == self.staff_id) {
@@ -858,9 +893,25 @@ impl World {
         }
     }
 
+    /// DESIGN.md §3.4: a thread with its own read restriction is read by
+    /// those who read its space and whom it names; staff read every
+    /// thread for now.
     fn thread_readable(&self, thread: usize, who: Who) -> bool {
         let t = &self.threads[thread];
-        !t.deleted && self.space_readable(t.space, who)
+        !t.deleted
+            && self.space_readable(t.space, who)
+            && match (&t.read, who) {
+                (None, _) | (_, Who::Staff) => true,
+                (Some(_), Who::Anonymous) => false,
+                (Some(names), Who::Member) => {
+                    !self.member_suspended && self.named(names, self.member_id)
+                }
+            }
+    }
+
+    /// Whether a thread's restriction names member `user`.
+    fn named(&self, (groups, users): &(BTreeSet<usize>, BTreeSet<i64>), user: i64) -> bool {
+        users.contains(&user) || self.lets_in(groups, user)
     }
 
     fn post_readable(&self, post: usize, who: Who) -> bool {
@@ -930,17 +981,30 @@ impl World {
         }
     }
 
+    /// Whether member `user` reads a thread now: its space, and, if it
+    /// has its own read restriction, it names them (staff read every
+    /// thread for now; a suspended member is named by nothing).
+    fn thread_readable_by(&self, thread: usize, user: i64) -> bool {
+        let t = &self.threads[thread];
+        !t.deleted
+            && self.space_readable_by(t.space, user)
+            && t.read.as_ref().is_none_or(|names| {
+                user == self.staff_id
+                    || (!(user == self.member_id && self.member_suspended)
+                        && self.named(names, user))
+            })
+    }
+
     /// Tokens the member `user` may read now.
     fn tokens_for_user(&self, user: i64) -> BTreeSet<&str> {
         let mut tokens = BTreeSet::new();
-        for t in &self.threads {
-            if !t.deleted && self.space_readable_by(t.space, user) {
+        for (i, t) in self.threads.iter().enumerate() {
+            if self.thread_readable_by(i, user) {
                 tokens.insert(t.title_token.as_str());
             }
         }
         for p in &self.posts {
-            let t = &self.threads[p.thread];
-            if !p.deleted && !p.hidden && !t.deleted && self.space_readable_by(t.space, user) {
+            if !p.deleted && !p.hidden && self.thread_readable_by(p.thread, user) {
                 tokens.insert(p.body_token.as_str());
             }
         }
@@ -1476,7 +1540,7 @@ impl World {
                 let listed = response
                     .body
                     .contains(&format!("href=\"/c/{}\"", space.slug));
-                if self.out_of_sight(c) {
+                if self.out_of_sight(c, who) {
                     assert!(
                         !response.body.contains(&space.token) && !listed,
                         "{path} shows the empty feed {c} to {who:?}:\n{}",
@@ -1691,31 +1755,78 @@ impl World {
         self.start_thread(&tc, space, author);
     }
 
-    /// Ruth's feed gets its first thread, or loses the threads it has
-    /// (DESIGN.md §3.2): either moves it into or out of every list of
-    /// spaces. Cached pages are checked at once, before anything else
-    /// clears them.
+    /// Ruth's feed gets its first thread visitors can read, or loses the
+    /// ones it has (DESIGN.md §3.2): either moves it into or out of
+    /// visitors' lists of spaces. A thread comes into their sight by being
+    /// started or by losing its own read restriction (§3.4), and goes by
+    /// being deleted or restricted to Ruth, so that a feed with threads
+    /// visitors can't read is covered too. Cached pages are checked at
+    /// once, before anything else clears them.
     #[rule]
     fn feed_comes_or_goes(&mut self, tc: TestCase) {
         let feed = self.spaces.iter().position(|c| c.feed).unwrap();
-        if self.out_of_sight(feed) {
-            self.start_thread(&tc, feed, self.users[0]);
+        let ruth = self.users[0];
+        if self.out_of_sight(feed, Who::Anonymous) {
+            let restricted: Vec<usize> = (0..self.threads.len())
+                .filter(|&t| {
+                    let thread = &self.threads[t];
+                    thread.space == feed && !thread.deleted && thread.read.is_some()
+                })
+                .collect();
+            if !restricted.is_empty() && tc.draw(gs::booleans()) {
+                let t = tc.draw(gs::sampled_from(restricted));
+                self.set_read_restriction(t, None);
+            } else {
+                self.start_thread(&tc, feed, ruth);
+            }
         } else {
             for t in 0..self.threads.len() {
-                if self.threads[t].space == feed && !self.threads[t].deleted {
-                    self.threads[t].deleted = true;
-                    let id = self.threads[t].id;
-                    self.exec(format!(
-                        "UPDATE threads SET deleted_at = now() WHERE id = {id}"
-                    ));
-                    self.changed(Change::ThreadChanged {
-                        thread_id: id,
-                        previous_space_id: None,
-                    });
+                if self.threads[t].space == feed && self.thread_readable(t, Who::Anonymous) {
+                    if tc.draw(gs::booleans()) {
+                        self.set_read_restriction(
+                            t,
+                            Some((BTreeSet::new(), BTreeSet::from([ruth]))),
+                        );
+                    } else {
+                        self.threads[t].deleted = true;
+                        let id = self.threads[t].id;
+                        self.exec(format!(
+                            "UPDATE threads SET deleted_at = now() WHERE id = {id}"
+                        ));
+                        self.changed(Change::ThreadChanged {
+                            thread_id: id,
+                            previous_space_id: None,
+                        });
+                    }
                 }
             }
         }
         if self.mode == Mode::Coherence {
+            self.check_coherence();
+        }
+    }
+
+    /// Gives a thread its own read restriction, naming random groups,
+    /// lists and members, or takes it away (DESIGN.md §3.4). A thread in
+    /// Ruth's feed may take the feed into or out of visitors' sight, so the
+    /// cached pages are then checked at once.
+    #[rule]
+    fn restrict_thread(&mut self, tc: TestCase) {
+        tc.assume(!self.threads.is_empty());
+        let t = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
+        let read = tc.draw(gs::booleans()).then(|| {
+            let groups: BTreeSet<usize> = (0..self.groups.len())
+                .filter(|_| tc.draw(gs::booleans()))
+                .collect();
+            let users: BTreeSet<i64> = self
+                .dm_people()
+                .into_iter()
+                .filter(|_| tc.draw(gs::booleans()))
+                .collect();
+            (groups, users)
+        });
+        self.set_read_restriction(t, read);
+        if self.mode == Mode::Coherence && self.spaces[self.threads[t].space].feed {
             self.check_coherence();
         }
     }
@@ -2146,10 +2257,7 @@ impl World {
         } else {
             let t = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
             let thread = &self.threads[t];
-            (
-                thread.id,
-                !thread.deleted && self.space_readable_by(thread.space, user),
-            )
+            (thread.id, self.thread_readable_by(t, user))
         };
         let on = !self.subscriptions.contains(&(user, thread_id));
         let who = if user == self.member_id {
@@ -2383,6 +2491,7 @@ impl World {
                     last_seq: 0,
                     old_titles: Vec::new(),
                     merged_into: None,
+                    read: None,
                 });
                 self.threads.len() - 1
             }
@@ -2465,6 +2574,7 @@ impl World {
                     last_seq: 1,
                     old_titles: Vec::new(),
                     merged_into: None,
+                    read: None,
                 });
                 // An approved thread is its author's, who is subscribed.
                 self.subscriptions.insert((author, thread_id));
@@ -2634,6 +2744,11 @@ struct AccessSpace {
     write_groups: BTreeSet<usize>,
     /// The people the write grant names, with a `listed` level.
     write_users: BTreeSet<usize>,
+    /// The reply grant, which is the write grant but for a feed as it is
+    /// made, where members reply and only its owner starts threads.
+    reply_level: &'static str,
+    reply_groups: BTreeSet<usize>,
+    reply_users: BTreeSet<usize>,
     essential: bool,
     /// Whether it is in the default layout's one section.
     on_default: bool,
@@ -2644,9 +2759,23 @@ struct AccessSpace {
 struct AccessThread {
     id: i64,
     space: usize,
+    author: usize,
     deleted: bool,
     /// The post this thread quote-forks.
     fork_of: Option<usize>,
+    /// Its own read restriction (DESIGN.md §3.4), if it has one: the
+    /// groups and the people it names.
+    read: Option<Names>,
+    /// Its own reply restriction, if it has one.
+    reply: Option<Names>,
+}
+
+/// The groups (indexes into `Access::groups`) and members (indexes into
+/// `Access::users`) a thread's restriction names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Names {
+    groups: BTreeSet<usize>,
+    users: BTreeSet<usize>,
 }
 
 struct AccessPost {
@@ -2803,6 +2932,9 @@ impl Access {
                 write_level: "listed",
                 write_groups: BTreeSet::new(),
                 write_users: BTreeSet::from([u]),
+                reply_level: "members",
+                reply_groups: BTreeSet::new(),
+                reply_users: BTreeSet::new(),
                 essential: false,
                 on_default: false,
                 owner: Some(u),
@@ -2904,6 +3036,9 @@ impl Access {
             write_level: "members",
             write_groups: BTreeSet::new(),
             write_users: BTreeSet::new(),
+            reply_level: "members",
+            reply_groups: BTreeSet::new(),
+            reply_users: BTreeSet::new(),
             essential: false,
             on_default: true,
             owner: None,
@@ -2935,15 +3070,25 @@ impl Access {
     }
 
     /// Whether lists of spaces show space `c` to `who` (DESIGN.md §3.2):
-    /// a topic space always, a feed once it has a thread that isn't
-    /// deleted, and a member's own feed always.
+    /// a topic space always, a feed once it has a thread they can read,
+    /// and a member's own feed always.
     fn in_view(&self, who: Option<usize>, c: usize) -> bool {
-        match self.spaces[c].owner {
-            None => true,
-            Some(owner) => {
-                who == Some(owner) || self.threads.iter().any(|t| t.space == c && !t.deleted)
-            }
-        }
+        self.listed_for(who, c) || (who.is_some() && self.spaces[c].owner == who)
+    }
+
+    /// Whether lists of spaces that make no exception for a feed's owner,
+    /// such as the space index, show space `c` to `who`: a topic space, or
+    /// a feed with a thread they can read.
+    fn listed_for(&self, who: Option<usize>, c: usize) -> bool {
+        self.spaces[c].owner.is_none()
+            || (0..self.threads.len())
+                .any(|t| self.threads[t].space == c && self.reads_thread(who, t))
+    }
+
+    /// Whether a thread's restriction names member `u`: they are named
+    /// themselves, or are on a group or list it names, or own such a list.
+    fn names(&self, names: &Names, u: usize) -> bool {
+        names.users.contains(&u) || self.lets_in(&names.groups, u)
     }
 
     /// The spaces the viewer's front page sections hold: their own
@@ -2998,6 +3143,37 @@ impl Access {
         self.moved_from.push(BTreeSet::new());
     }
 
+    /// Random names for a thread's restriction, or none.
+    fn draw_names(&self, tc: &TestCase) -> Option<Names> {
+        if !tc.draw(gs::booleans()) {
+            return None;
+        }
+        Some(Names {
+            groups: (0..self.groups.len())
+                .filter(|_| tc.draw(gs::booleans()))
+                .collect(),
+            users: (0..self.users.len())
+                .filter(|_| tc.draw(gs::booleans()))
+                .collect(),
+        })
+    }
+
+    /// A thread's restriction as the store takes it.
+    fn restriction(&self, read: &Option<Names>, reply: &Option<Names>) -> ThreadRestriction {
+        let grant = |names: &Option<Names>| {
+            names.as_ref().map(|names| {
+                Grant::listed(
+                    names.groups.iter().map(|&g| self.groups[g]),
+                    names.users.iter().map(|&u| self.users[u].id),
+                )
+            })
+        };
+        ThreadRestriction {
+            read: grant(read),
+            reply: grant(reply),
+        }
+    }
+
     // -- The reference permission function, from DESIGN.md §3.1.
 
     /// `who` is an index into `users`, or `None` for an anonymous visitor.
@@ -3030,9 +3206,39 @@ impl Access {
         !p.deleted && (!p.hidden || self.sees_hidden(who))
     }
 
+    /// DESIGN.md §3.4: a thread's readers are its space's readers, and,
+    /// if it has its own read restriction, only those it names (staff
+    /// read everything for now; a suspended member is named by nothing).
     fn reads_thread(&self, who: Option<usize>, thread: usize) -> bool {
         let t = &self.threads[thread];
-        !t.deleted && self.reads_space(who, t.space)
+        !t.deleted
+            && self.reads_space(who, t.space)
+            && match &t.read {
+                None => true,
+                Some(names) => who.is_some_and(|u| {
+                    self.users[u].acts_as_staff()
+                        || (!self.users[u].suspended && self.names(names, u))
+                }),
+            }
+    }
+
+    /// Whether the viewer may reply in a thread: they may post in its
+    /// space as far as replying goes, they can read the thread (repliers
+    /// must be readers), and its own reply restriction, if any, names them;
+    /// staff are no exception to that (DESIGN.md §3.1, §3.4).
+    fn replies_in(&self, who: Option<usize>, thread: usize) -> bool {
+        let Some(u) = who else { return false };
+        let t = &self.threads[thread];
+        let (c, user) = (&self.spaces[t.space], &self.users[u]);
+        !user.silenced
+            && !user.suspended
+            && self.reads_thread(who, thread)
+            && match c.reply_level {
+                "members" => true,
+                "listed" => self.lets_in(&c.reply_groups, u) || c.reply_users.contains(&u),
+                _ => user.staff,
+            }
+            && t.reply.as_ref().is_none_or(|names| self.names(names, u))
     }
 
     fn post_live(&self, post: usize) -> bool {
@@ -3230,10 +3436,14 @@ impl Access {
     }
 
     /// The "at most as visible" table in DESIGN.md §3.1: may content from
-    /// space `source` be quoted into space `dest`?
-    fn may_quote_into(&self, source: usize, dest: usize) -> bool {
-        let (s, d) = (&self.spaces[source], &self.spaces[dest]);
-        match (s.level, d.level) {
+    /// a thread be quoted into space `dest`? The thread's audience is its
+    /// space's, narrowed by its own read restriction if it has one, and the
+    /// table holds for each: the destination must be at most as visible as
+    /// the space, and name no more than the restriction does.
+    fn may_quote_into(&self, thread: usize, dest: usize) -> bool {
+        let t = &self.threads[thread];
+        let (s, d) = (&self.spaces[t.space], &self.spaces[dest]);
+        let from_space = match (s.level, d.level) {
             ("public", _) => true,
             ("members", "members" | "staff" | "listed") => true,
             ("staff", "staff") => true,
@@ -3241,7 +3451,13 @@ impl Access {
                 d.read_groups.is_subset(&s.read_groups) && d.read_users.is_subset(&s.read_users)
             }
             _ => false,
-        }
+        };
+        let from_restriction = t.read.as_ref().is_none_or(|names| {
+            d.level == "listed"
+                && d.read_groups.is_subset(&names.groups)
+                && d.read_users.is_subset(&names.users)
+        });
+        from_space && from_restriction
     }
 
     /// Where the viewer may start new threads, and where they may quote
@@ -3270,10 +3486,9 @@ impl Access {
                 .iter()
                 .map(|c| c.space.id)
                 .collect();
-            let from = self.threads[post.thread].space;
             let expected = Self::ids(
                 &self.spaces,
-                |c| self.posts_in_space(who, c) && self.may_quote_into(from, c),
+                |c| self.posts_in_space(who, c) && self.may_quote_into(post.thread, c),
                 |c| c.id,
             );
             assert_eq!(
@@ -3352,6 +3567,9 @@ impl Access {
             BTreeSet::new()
         };
         space.write_users = write_users;
+        space.reply_level = space.write_level;
+        space.reply_groups = space.write_groups.clone();
+        space.reply_users = space.write_users.clone();
     }
 
     fn viewer(&self, who: Option<usize>) -> Viewer {
@@ -3463,7 +3681,7 @@ impl Access {
         // first thread aside.
         assert_eq!(
             front.any_spaces,
-            (0..self.spaces.len()).any(|c| self.reads_space(who, c) && self.in_view(None, c)),
+            (0..self.spaces.len()).any(|c| self.reads_space(who, c) && self.listed_for(who, c)),
             "{who:?}: any spaces"
         );
 
@@ -3719,7 +3937,7 @@ impl Access {
                     let feed = self.spaces[c].owner.is_some();
                     self.reads_space(who, c)
                         && !self.muted(who, c)
-                        && self.in_view(None, c)
+                        && self.listed_for(who, c)
                         && match kinds {
                             KindFilter::Both => true,
                             KindFilter::Topic => !feed,
@@ -3756,15 +3974,25 @@ impl Access {
                 .block(content::thread_page(db, &viewer, thread.id, 1, &mut deps))
                 .unwrap();
             assert_eq!(page.is_some(), visible, "{who:?}: thread {t}");
-            for found in [
+            assert_eq!(
                 self.block(content::thread_slug(db, &viewer, thread.id))
                     .unwrap()
                     .is_some(),
-                self.block(content::thread_target(db, &viewer, thread.id))
-                    .unwrap()
-                    .is_some(),
-            ] {
-                assert_eq!(found, visible, "{who:?}: thread {t}");
+                visible,
+                "{who:?}: thread {t}"
+            );
+            let target = self
+                .block(content::thread_target(db, &viewer, thread.id))
+                .unwrap();
+            assert_eq!(target.is_some(), visible, "{who:?}: thread {t}");
+            // Who may reply (DESIGN.md §3.4): readers whom the space and
+            // the thread's own reply restriction let reply.
+            if let Some(target) = &target {
+                assert_eq!(
+                    writing::may_reply_to(&viewer, target),
+                    self.replies_in(who, t),
+                    "{who:?}: replying in thread {t}"
+                );
             }
             // A thread whose posts have all moved away has none to jump to.
             let has_posts = self.posts.iter().any(|p| p.thread == t);
@@ -4446,8 +4674,11 @@ impl Access {
         self.threads.push(AccessThread {
             id: created.thread_id,
             space,
+            author,
             deleted: false,
             fork_of,
+            read: None,
+            reply: None,
         });
         self.posts.push(AccessPost {
             id: created.first_post_id,
@@ -4551,6 +4782,87 @@ impl Access {
             .unwrap();
         assert_eq!(previous, Some(self.spaces[self.threads[t].space].id));
         self.threads[t].space = c;
+    }
+
+    /// Gives a thread its own read and reply restrictions, naming random
+    /// groups, lists and members, or takes them away (DESIGN.md §3.4).
+    #[rule]
+    fn restrict_thread(&mut self, tc: TestCase) {
+        tc.assume(!self.threads.is_empty());
+        let t = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
+        let read = self.draw_names(&tc);
+        let reply = self.draw_names(&tc);
+        let restriction = self.restriction(&read, &reply);
+        assert!(
+            self.block(store::set_thread_restriction(
+                &self.pool,
+                self.threads[t].id,
+                &restriction
+            ))
+            .unwrap()
+        );
+        self.threads[t].read = read;
+        self.threads[t].reply = reply;
+    }
+
+    /// A member tries to change a thread's restriction as the writing
+    /// layer lets them: its author while they can read it, and those who
+    /// run its space, whether or not they can; the author is always named.
+    #[rule]
+    fn restrict_thread_as(&mut self, tc: TestCase) {
+        tc.assume(!self.threads.is_empty());
+        let t = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
+        let u = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
+        let read = self.draw_names(&tc);
+        let reply = self.draw_names(&tc);
+        let restriction = self.restriction(&read, &reply);
+        let viewer = self.viewer(Some(u));
+        let outcome = self
+            .block(writing::restrict_thread(
+                &self.state,
+                &viewer,
+                self.threads[t].id,
+                &restriction,
+            ))
+            .unwrap();
+        let thread = &self.threads[t];
+        let user = &self.users[u];
+        let space = &self.spaces[thread.space];
+        let reads = self.reads_thread(Some(u), t);
+        let runs = !user.suspended
+            && self.reads_space(Some(u), thread.space)
+            && (user.staff || space.owner == Some(u));
+        let author = thread.author == u && reads;
+        if thread.deleted || !self.reads_space(Some(u), thread.space) {
+            assert_eq!(outcome, Err(Refused::NotFound), "{u} restricting {t}");
+            return;
+        }
+        if !author && !runs {
+            assert_eq!(
+                matches!(outcome, Err(Refused::NotAllowed(_))),
+                reads,
+                "{u} restricting {t}: {outcome:?}"
+            );
+            assert!(outcome.is_err());
+            return;
+        }
+        if user.suspended {
+            assert!(
+                matches!(outcome, Err(Refused::NotAllowed(_))),
+                "{outcome:?}"
+            );
+            return;
+        }
+        assert_eq!(outcome, Ok(()), "{u} restricting {t}");
+        let author = thread.author;
+        let with_author = |names: Option<Names>| {
+            names.map(|mut names| {
+                names.users.insert(author);
+                names
+            })
+        };
+        self.threads[t].read = with_author(read);
+        self.threads[t].reply = with_author(reply);
     }
 
     #[rule]
@@ -4872,15 +5184,20 @@ impl Access {
         assert_eq!(stale, 0, "maintained post counts are stale");
     }
 
-    /// The denormalised `threads.visibility` is always the space's
-    /// visibility, however threads move and read grants change.
+    /// The denormalised `threads.space_visibility` is always the space's
+    /// visibility, and `threads.visibility` the thread's effective one:
+    /// restricted while it has its own read restriction, its space's
+    /// otherwise (DESIGN.md §3.1, §3.4), however threads move and read
+    /// grants and restrictions change.
     #[invariant(always_run)]
     fn visibility_copies_are_current(&self, _: TestCase) {
         let stale: i64 = self
             .block(
                 sqlx::query_scalar(
                     "SELECT count(*) FROM threads t JOIN spaces c ON c.id = t.space_id
-                     WHERE t.visibility <> c.visibility",
+                     WHERE t.space_visibility <> c.visibility
+                        OR t.visibility <> CASE WHEN t.read_user_ids IS NULL THEN c.visibility
+                                                ELSE 'restricted' END",
                 )
                 .fetch_one(&self.pool),
             )
@@ -4894,9 +5211,10 @@ impl Access {
                         .fetch_one(&self.pool),
                 )
                 .unwrap();
-            let expected = match self.spaces[t.space].level {
-                "public" => "public",
-                "members" => "members",
+            let expected = match (self.spaces[t.space].level, &t.read) {
+                (_, Some(_)) => "restricted",
+                ("public", None) => "public",
+                ("members", None) => "members",
                 _ => "restricted",
             };
             assert_eq!(level, expected);

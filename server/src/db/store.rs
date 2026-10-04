@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 
 use crate::layouts;
 use crate::markdown;
-use crate::permissions::{Grant, Level};
+use crate::permissions::{Grant, Level, ThreadRestriction};
 use crate::social;
 
 /// Turns a title into the readable part of a thread URL.
@@ -522,6 +522,39 @@ pub async fn move_thread<'c>(
     .await?;
     tx.commit().await?;
     Ok(Some(previous))
+}
+
+/// Gives a thread in a space its own read and reply restriction, or takes
+/// it away (DESIGN.md §3.4), returning whether there is such a thread.
+/// Its visibility follows (a trigger sees to that): restricted while it
+/// has a read restriction, its space's otherwise.
+pub async fn set_thread_restriction<'c>(
+    db: impl Handle<'c>,
+    thread_id: i64,
+    restriction: &ThreadRestriction,
+) -> sqlx::Result<bool> {
+    let part = |grant: &Option<Grant>| {
+        grant
+            .as_ref()
+            .map(|grant| (grant.group_ids(), grant.user_ids()))
+    };
+    let (read_groups, read_users) = part(&restriction.read).unzip();
+    let (reply_groups, reply_users) = part(&restriction.reply).unzip();
+    let mut conn = db.open(KEY).acquire().await?;
+    let done = sqlx::query!(
+        "UPDATE threads
+         SET read_group_ids = $2, read_user_ids = $3, reply_group_ids = $4, reply_user_ids = $5,
+             version = version + 1
+         WHERE id = $1 AND space_id IS NOT NULL",
+        thread_id,
+        read_groups.as_deref(),
+        read_users.as_deref(),
+        reply_groups.as_deref(),
+        reply_users.as_deref(),
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(done.rows_affected() == 1)
 }
 
 #[derive(Clone, Debug)]

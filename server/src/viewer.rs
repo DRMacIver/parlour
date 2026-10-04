@@ -9,7 +9,9 @@
 //!
 //! Logged-in members can read public and members-only spaces; staff can
 //! read every space (DESIGN.md §3.1). Group membership adds the
-//! group-restricted spaces a member's groups may read to [`ReadFilter`].
+//! group-restricted spaces a member's groups may read to [`ReadFilter`],
+//! and the member's groups and lists, with who they are, decide which
+//! threads with their own restriction (§3.4) they read.
 
 use std::convert::Infallible;
 
@@ -93,9 +95,15 @@ pub struct ReadFilter {
     pub visibilities: Vec<String>,
     /// Group-restricted spaces this viewer may read.
     pub restricted_space_ids: Vec<i64>,
-    /// Who the viewer is, for `dm_readable`: `None` for visitors and for
-    /// suspended members, who read no conversations.
+    /// Who the viewer is, for `dm_readable` and for the people a thread's
+    /// own restriction names in `thread_readable`: `None` for visitors and
+    /// for suspended members, who read no conversations and are named by
+    /// no restriction.
     pub dm_viewer: Option<i64>,
+    /// The groups and lists that let the viewer in where they are named,
+    /// for a thread's own restriction: empty for visitors and suspended
+    /// members.
+    pub group_ids: Vec<i64>,
 }
 
 impl Viewer {
@@ -114,6 +122,7 @@ impl Viewer {
                 .map(|user| user.restricted_space_ids.clone())
                 .unwrap_or_default(),
             dm_viewer: user.map(|user| user.id),
+            group_ids: user.map(|user| user.group_ids.clone()).unwrap_or_default(),
         }
     }
 
@@ -226,6 +235,7 @@ mod tests {
                 visibilities: vec!["public".into()],
                 restricted_space_ids: vec![],
                 dm_viewer: None,
+                group_ids: vec![],
             }
         );
     }
@@ -254,6 +264,7 @@ mod tests {
                 visibilities: vec!["public".into(), "members".into()],
                 restricted_space_ids: vec![7, 9],
                 dm_viewer: Some(1),
+                group_ids: vec![4],
             }
         );
         assert!(user(Role::Moderator).is_staff());
@@ -268,6 +279,7 @@ mod tests {
                 unreachable!()
             };
             ctx.restricted_space_ids = vec![7];
+            ctx.group_ids = vec![3];
             ctx.suspended_until = Some(Utc::now() + chrono::Duration::days(1));
             let viewer = Viewer::User(ctx.clone());
             assert_eq!(viewer.filter(), Viewer::Anonymous.filter());

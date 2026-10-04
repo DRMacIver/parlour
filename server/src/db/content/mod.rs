@@ -21,7 +21,7 @@ use crate::db::Db;
 use chrono::{DateTime, Utc};
 
 use crate::cache::Tag;
-use crate::permissions::{Audience, Grant, Level, SpaceRules};
+use crate::permissions::{Audience, Grant, Level, SpaceRules, ThreadRestriction};
 use crate::store::SpaceSettings;
 use crate::viewer::Viewer;
 
@@ -210,13 +210,13 @@ pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Resu
             FROM threads t
             LEFT JOIN thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $3
             WHERE t.space_id = c.id AND t.deleted_at IS NULL
-              AND thread_readable(t.visibility, t.space_id, $1, $2)
+              AND thread_readable(t, $1, $2, $4, $5)
         ) counts
         LEFT JOIN LATERAL (
             SELECT t.id, t.title, t.slug, t.last_post_at
             FROM threads t
             WHERE t.space_id = c.id AND t.deleted_at IS NULL
-              AND thread_readable(t.visibility, t.space_id, $1, $2)
+              AND thread_readable(t, $1, $2, $4, $5)
             ORDER BY t.last_post_at DESC, t.id DESC
             LIMIT 1
         ) lt ON true
@@ -230,7 +230,7 @@ pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Resu
         WHERE (c.essential OR p.space_id IS NOT NULL)
           AND c.archived_at IS NULL
           AND space_readable(c.visibility, c.id, $1, $2)
-          AND space_in_view(c.kind, c.owner_user_id, c.id, $3)
+          AND space_in_view(c.kind, c.owner_user_id, c.id, $3, $1, $2, $4, $5)
           AND ($3::bigint IS NULL
                OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $3 AND m.space_id = c.id))
         ORDER BY c.essential DESC, p.section_position NULLS LAST, p.section_id NULLS LAST,
@@ -239,6 +239,8 @@ pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Resu
         &filter.visibilities,
         &filter.restricted_space_ids,
         user_id,
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -248,9 +250,11 @@ pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Resu
         || sqlx::query_scalar!(
             r#"SELECT EXISTS (SELECT 1 FROM spaces c
                               WHERE c.archived_at IS NULL AND space_readable(c.visibility, c.id, $1, $2)
-                                AND space_in_view(c.kind, c.owner_user_id, c.id, NULL)) AS "e!""#,
+                                AND space_in_view(c.kind, c.owner_user_id, c.id, NULL, $1, $2, $3, $4)) AS "e!""#,
             &filter.visibilities,
             &filter.restricted_space_ids,
+            filter.dm_viewer,
+            &filter.group_ids,
         )
         .fetch_one(db.pool())
         .await?;
@@ -382,7 +386,7 @@ pub async fn space_page(
                list_labels(r.group_ids, $4) AS "list_names!",
                (SELECT count(*) FROM threads t
                 WHERE t.space_id = c.id AND t.deleted_at IS NULL
-                  AND thread_readable(t.visibility, t.space_id, $2, $3)) AS "thread_count!",
+                  AND thread_readable(t, $2, $3, $5, $6)) AS "thread_count!",
                o.id AS "owner_id?", o.username::text AS "owner_username?",
                o.display_name AS "owner_display_name?"
         FROM spaces c
@@ -394,6 +398,8 @@ pub async fn space_page(
         &filter.visibilities,
         &filter.restricted_space_ids,
         viewer.user_id(),
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_optional(db.pool())
     .await?
@@ -503,7 +509,7 @@ pub async fn layout_sections(
                (SELECT count(*) FROM layout_section_spaces x JOIN spaces c ON c.id = x.space_id
                 WHERE x.section_id = s.id AND c.archived_at IS NULL
                   AND space_readable(c.visibility, c.id, $1, $2)
-                  AND space_in_view(c.kind, c.owner_user_id, c.id, $3)
+                  AND space_in_view(c.kind, c.owner_user_id, c.id, $3, $1, $2, $4, $5)
                   AND ($3::bigint IS NULL
                        OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $3 AND m.space_id = c.id))
                ) AS "spaces!",
@@ -515,6 +521,8 @@ pub async fn layout_sections(
         &filter.visibilities,
         &filter.restricted_space_ids,
         viewer.user_id(),
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -559,7 +567,7 @@ async fn scoped_spaces(
         SELECT c.id,
                (SELECT count(*) FROM threads t
                 WHERE t.space_id = c.id AND t.deleted_at IS NULL
-                  AND thread_readable(t.visibility, t.space_id, $1, $2)) AS "thread_count!"
+                  AND thread_readable(t, $1, $2, $6, $7)) AS "thread_count!"
         FROM spaces c
         WHERE space_readable(c.visibility, c.id, $1, $2)
           AND ($3::bigint IS NULL
@@ -578,6 +586,8 @@ async fn scoped_spaces(
         viewer.user_id(),
         scope.as_str(),
         scope.section_id(),
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -673,12 +683,12 @@ async fn thread_rows(
         LEFT JOIN users lu ON lu.id = lp.author_id
         LEFT JOIN LATERAL (
             SELECT st.id, st.title, st.slug,
-                   st.deleted_at IS NULL AND thread_readable(st.visibility, st.space_id, $1, $2) AS visible
+                   st.deleted_at IS NULL AND thread_readable(st, $1, $2, $8, $9) AS visible
             FROM posts sp JOIN threads st ON st.id = sp.thread_id
             WHERE sp.id = t.forked_from_post_id
         ) src ON true
         WHERE t.deleted_at IS NULL
-          AND thread_readable(t.visibility, t.space_id, $1, $2)
+          AND thread_readable(t, $1, $2, $8, $9)
           AND t.space_id = ANY($3)
         ORDER BY CASE WHEN $7 THEN t.pinned ELSE false END DESC,
                  t.last_post_at DESC, t.id DESC
@@ -691,6 +701,8 @@ async fn thread_rows(
         offset,
         viewer.user_id(),
         pins_first,
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -758,6 +770,8 @@ pub struct ThreadPage {
     pub last_seq: i64,
     pub pinned: bool,
     pub locked: bool,
+    /// Its own read and reply restriction, if it has one (DESIGN.md §3.4).
+    pub restriction: ThreadRestriction,
     /// For a quote-fork, the post it quotes.
     pub embed: Option<Embed>,
     pub posts: Vec<PostView>,
@@ -776,6 +790,7 @@ impl ThreadPage {
             thread: self.thread.clone(),
             name: self.thread.title.clone(),
             place: Place::Space(Box::new(self.space.clone())),
+            restriction: self.restriction.clone(),
             locked: self.locked,
             last_seq: self.last_seq,
         }
@@ -883,6 +898,8 @@ pub async fn thread_page(
     let Some(thread) = sqlx::query!(
         r#"
         SELECT t.id, t.title, t.slug, t.created_at, t.last_seq, t.pinned, t.locked, t.forked_from_post_id,
+               t.read_group_ids AS thread_read_group_ids, t.read_user_ids AS thread_read_user_ids,
+               t.reply_group_ids AS thread_reply_group_ids, t.reply_user_ids AS thread_reply_user_ids,
                c.id AS "space_id!", c.slug AS "space_slug!", c.name AS "space_name!",
                c.description AS "space_description!", c.essential AS "essential!",
                c.visibility AS "visibility!", c.created_by AS "created_by?",
@@ -905,13 +922,14 @@ pub async fn thread_page(
         JOIN space_targets c ON c.id = t.space_id
         JOIN users a ON a.id = t.author_id
         LEFT JOIN users o ON o.id = c.owner_user_id
-        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.space_id, $2, $3)
+        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t, $2, $3, $4, $6)
         "#,
         thread_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
         viewer.user_id(),
+        &filter.group_ids,
     )
     .fetch_optional(db.pool())
     .await?
@@ -992,6 +1010,12 @@ pub async fn thread_page(
         last_seq: i64::from(thread.last_seq),
         pinned: thread.pinned,
         locked: thread.locked,
+        restriction: ThreadRestriction::from_parts(
+            thread.thread_read_group_ids.as_deref(),
+            thread.thread_read_user_ids.as_deref(),
+            thread.thread_reply_group_ids.as_deref(),
+            thread.thread_reply_user_ids.as_deref(),
+        ),
         embed,
         posts,
         read_marker: thread.read_marker.map(i64::from),
@@ -1107,7 +1131,7 @@ pub(super) async fn posts_on_page(
     let moves = sqlx::query!(
         r#"
         SELECT m.post_id, m.from_seq, m.moved_at, t.id AS thread_id, t.title, t.slug,
-               t.deleted_at IS NULL AND thread_readable(t.visibility, t.space_id, $4, $5) AS "readable!"
+               t.deleted_at IS NULL AND thread_readable(t, $4, $5, $6, $7) AS "readable!"
         FROM post_moves m
         JOIN posts p ON p.id = m.post_id
         JOIN threads t ON t.id = p.thread_id
@@ -1118,6 +1142,8 @@ pub(super) async fn posts_on_page(
         last,
         &filter.visibilities,
         &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -1169,8 +1195,10 @@ async fn author_infos(
                av.sha256 AS "avatar_sha256?", av.ext AS "avatar_ext?",
                (SELECT coalesce(sum(pc.posts), 0)::bigint
                 FROM user_space_post_counts pc JOIN spaces c ON c.id = pc.space_id
+                LEFT JOIN threads t ON t.id = pc.thread_id
                 WHERE pc.user_id = u.id
-                  AND space_readable(c.visibility, c.id, $2, $3)) AS "post_count!"
+                  AND CASE WHEN pc.thread_id IS NULL THEN space_readable(c.visibility, c.id, $2, $3)
+                           ELSE thread_readable(t, $2, $3, $4, $5) END) AS "post_count!"
         FROM users u
         LEFT JOIN uploads av ON av.id = u.avatar_upload_id
         WHERE u.id = ANY($1)
@@ -1178,6 +1206,8 @@ async fn author_infos(
         ids,
         &filter.visibilities,
         &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -1259,7 +1289,7 @@ async fn forks_of(
     let rows = sqlx::query!(
         r#"
         SELECT f.id, f.title, f.slug, f.last_seq, f.forked_from_post_id AS "source_post_id!",
-               f.deleted_at IS NULL AND thread_readable(f.visibility, f.space_id, $2, $3) AS "visible!",
+               f.deleted_at IS NULL AND thread_readable(f, $2, $3, $4, $5) AS "visible!",
                a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name
         FROM threads f
         JOIN users a ON a.id = f.author_id
@@ -1269,6 +1299,8 @@ async fn forks_of(
         post_ids,
         &filter.visibilities,
         &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -1304,7 +1336,7 @@ async fn embed(db: &Db, viewer: &Viewer, post_id: i64, deps: &mut Deps) -> sqlx:
         r#"
         SELECT p.id, p.seq, p.created_at, p.edited_at, p.thread_id,
                (p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
-                AND thread_readable(t.visibility, t.space_id, $2, $3)) AS "available!"
+                AND thread_readable(t, $2, $3, $4, $5)) AS "available!"
         FROM posts p
         JOIN threads t ON t.id = p.thread_id
         WHERE p.id = $1
@@ -1312,6 +1344,8 @@ async fn embed(db: &Db, viewer: &Viewer, post_id: i64, deps: &mut Deps) -> sqlx:
         post_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_optional(db.pool())
     .await?
@@ -1366,21 +1400,27 @@ async fn embed(db: &Db, viewer: &Viewer, post_id: i64, deps: &mut Deps) -> sqlx:
 // ---------------------------------------------------------------------------
 // Profiles
 
-/// How many of a member's posts the viewer can see, from the counts per
-/// space that triggers keep (migration 0019), so it costs the same
-/// however much they have posted. A post in a thread counts in the
-/// thread's space, whose read level the thread's visibility always
-/// copies. Pages showing it depend on `user:N`, which new posts and thread
-/// moves clear.
+/// How many of a member's posts the viewer can see, from the counts that
+/// triggers keep (migrations 0019 and 0029), so it costs the same however
+/// much they have posted. A post in a thread that inherits its space's
+/// audience counts in the space; one in a thread with its own read
+/// restriction counts in that thread, and only for those who can read it.
+/// Pages showing it depend on `user:N`, which new posts and changes to
+/// threads clear.
 pub async fn visible_post_count(db: &Db, viewer: &Viewer, user_id: i64) -> sqlx::Result<i64> {
     let filter = viewer.filter();
     sqlx::query_scalar!(
         r#"SELECT coalesce(sum(pc.posts), 0)::bigint AS "n!"
            FROM user_space_post_counts pc JOIN spaces c ON c.id = pc.space_id
-           WHERE pc.user_id = $1 AND space_readable(c.visibility, c.id, $2, $3)"#,
+           LEFT JOIN threads t ON t.id = pc.thread_id
+           WHERE pc.user_id = $1
+             AND CASE WHEN pc.thread_id IS NULL THEN space_readable(c.visibility, c.id, $2, $3)
+                      ELSE thread_readable(t, $2, $3, $4, $5) END"#,
         user_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_one(db.pool())
     .await
@@ -1444,12 +1484,13 @@ pub async fn post_location(
         SELECT t.id, t.slug, p.seq, t.visibility = 'private' AS "private!"
         FROM posts p JOIN threads t ON t.id = p.thread_id
         WHERE p.id = $1 AND t.deleted_at IS NULL
-          AND (thread_readable(t.visibility, t.space_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
+          AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))
         "#,
         post_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_optional(db.pool())
     .await?;
@@ -1467,11 +1508,13 @@ pub async fn thread_slug(db: &Db, viewer: &Viewer, thread_id: i64) -> sqlx::Resu
     sqlx::query_scalar!(
         r#"
         SELECT t.slug FROM threads t
-        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.space_id, $2, $3)
+        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t, $2, $3, $4, $5)
         "#,
         thread_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_optional(db.pool())
     .await
@@ -1790,8 +1833,9 @@ async fn space_targets(
                list_labels(c.read_group_ids, $5) AS "list_names!",
                o.id AS "owner_id?", o.username::text AS "owner_username?",
                o.display_name AS "owner_display_name?", o.deleted_at IS NOT NULL AS "owner_deleted?",
-               EXISTS (SELECT 1 FROM threads t WHERE t.space_id = c.id AND t.deleted_at IS NULL)
-                   AS "has_threads!"
+               EXISTS (SELECT 1 FROM threads t
+                       WHERE t.space_id = c.id AND t.deleted_at IS NULL
+                         AND thread_readable(t, $1, $2, $6, $7)) AS "has_threads!"
         FROM space_targets c
         LEFT JOIN users o ON o.id = c.owner_user_id
         WHERE space_readable(c.visibility, c.id, $1, $2)
@@ -1804,6 +1848,8 @@ async fn space_targets(
         id,
         slug,
         viewer.user_id(),
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -1967,14 +2013,14 @@ pub async fn space_index(
             SELECT count(*) AS threads, max(t.last_post_at) AS last_post_at
             FROM threads t
             WHERE t.space_id = c.id AND t.deleted_at IS NULL
-              AND thread_readable(t.visibility, t.space_id, $1, $2)
+              AND thread_readable(t, $1, $2, $8, $9)
         ) counts
         WHERE space_readable(c.visibility, c.id, $1, $2)
           AND ($3 OR c.archived_at IS NULL)
           AND ($6 OR $5::bigint IS NULL
                OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $5 AND m.space_id = c.id))
           AND ($7 = 'both' OR c.kind = $7)
-          AND space_in_view(c.kind, c.owner_user_id, c.id, NULL)
+          AND space_in_view(c.kind, c.owner_user_id, c.id, NULL, $1, $2, $8, $9)
         ORDER BY CASE WHEN $4 = 'name' THEN lower(c.name) END,
                  CASE WHEN $4 = 'activity' THEN counts.last_post_at END DESC NULLS LAST,
                  c.created_at DESC, c.id DESC
@@ -1986,6 +2032,8 @@ pub async fn space_index(
         viewer.user_id(),
         include_muted,
         kinds.as_str(),
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await?;
@@ -2022,6 +2070,9 @@ pub struct ThreadTarget {
     /// people in it, other than the viewer.
     pub name: String,
     pub place: Place,
+    /// A space's thread's own read and reply restriction (DESIGN.md §3.4);
+    /// none for a conversation, or a thread the viewer can't read.
+    pub restriction: ThreadRestriction,
     pub locked: bool,
     pub last_seq: i64,
 }
@@ -2058,11 +2109,12 @@ impl ThreadTarget {
         !matches!(self.place, Place::Unreadable)
     }
 
-    /// Who can read it. For a thread the viewer can't read, nobody they
-    /// may count on: it is not theirs to share.
+    /// Who can read it: its space's readers, narrowed by its own read
+    /// restriction. For a thread the viewer can't read, nobody they may
+    /// count on: it is not theirs to share.
     pub fn audience(&self) -> Audience {
         match &self.place {
-            Place::Space(space) => space.audience(),
+            Place::Space(space) => self.restriction.audience(&space.rules),
             Place::Conversation(_) => Audience::Private,
             Place::Unreadable => Audience::Restricted {
                 groups: BTreeSet::new(),
@@ -2090,15 +2142,17 @@ pub async fn thread_target(
     let filter = viewer.filter();
     let Some(row) = sqlx::query!(
         r#"
-        SELECT t.id, t.title, t.slug, t.locked, t.last_seq, t.space_id
+        SELECT t.id, t.title, t.slug, t.locked, t.last_seq, t.space_id,
+               t.read_group_ids, t.read_user_ids, t.reply_group_ids, t.reply_user_ids
         FROM threads t
         WHERE t.id = $1 AND t.deleted_at IS NULL
-          AND (thread_readable(t.visibility, t.space_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
+          AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))
         "#,
         thread_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_optional(db.pool())
     .await?
@@ -2126,8 +2180,80 @@ pub async fn thread_target(
         },
         name,
         place,
+        restriction: ThreadRestriction::from_parts(
+            row.read_group_ids.as_deref(),
+            row.read_user_ids.as_deref(),
+            row.reply_group_ids.as_deref(),
+            row.reply_user_ids.as_deref(),
+        ),
         locked: row.locked,
         last_seq: i64::from(row.last_seq),
+    }))
+}
+
+/// A space's thread as somewhere whose restriction may be changed
+/// (DESIGN.md §3.4): by its author, or by the administrators of its space,
+/// who may not be able to read it themselves. Only what that needs is
+/// given, and nothing of what it says.
+#[derive(Clone, Debug)]
+pub struct RestrictionTarget {
+    pub thread_id: i64,
+    pub author_id: i64,
+    /// Its space, which the viewer can read.
+    pub space: SpaceTarget,
+    pub restriction: ThreadRestriction,
+    /// Whether the viewer can read the thread itself.
+    pub readable: bool,
+}
+
+impl RestrictionTarget {
+    /// Who can read the thread.
+    pub fn audience(&self) -> Audience {
+        self.restriction.audience(&self.space.rules)
+    }
+}
+
+/// A live thread in a space the viewer can read, for changing its
+/// restriction, whether or not the restriction lets the viewer read it.
+pub async fn restriction_target(
+    db: &Db,
+    viewer: &Viewer,
+    thread_id: i64,
+) -> sqlx::Result<Option<RestrictionTarget>> {
+    let filter = viewer.filter();
+    let Some(row) = sqlx::query!(
+        r#"
+        SELECT t.author_id, t.space_id AS "space_id!",
+               t.read_group_ids, t.read_user_ids, t.reply_group_ids, t.reply_user_ids,
+               thread_readable(t, $2, $3, $4, $5) AS "readable!"
+        FROM threads t
+        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.space_id IS NOT NULL
+        "#,
+        thread_id,
+        &filter.visibilities,
+        &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
+    )
+    .fetch_optional(db.pool())
+    .await?
+    else {
+        return Ok(None);
+    };
+    let Some(space) = space_by_id(db, viewer, row.space_id).await? else {
+        return Ok(None);
+    };
+    Ok(Some(RestrictionTarget {
+        thread_id,
+        author_id: row.author_id,
+        space,
+        restriction: ThreadRestriction::from_parts(
+            row.read_group_ids.as_deref(),
+            row.read_user_ids.as_deref(),
+            row.reply_group_ids.as_deref(),
+            row.reply_user_ids.as_deref(),
+        ),
+        readable: row.readable,
     }))
 }
 
@@ -2177,13 +2303,14 @@ pub async fn post_target(
         JOIN threads t ON t.id = p.thread_id
         JOIN users u ON u.id = p.author_id
         WHERE p.id = $1 AND t.deleted_at IS NULL
-          AND (thread_readable(t.visibility, t.space_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
+          AND (thread_readable(t, $2, $3, $4, $6) OR dm_readable(t.id, t.visibility, $4))
         "#,
         post_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
         viewer.is_staff(),
+        &filter.group_ids,
     )
     .fetch_optional(db.pool())
     .await?
@@ -2258,6 +2385,7 @@ pub async fn post_target_or_own(
             },
             name: String::new(),
             place: Place::Unreadable,
+            restriction: ThreadRestriction::default(),
             locked: row.locked,
             last_seq: i64::from(row.last_seq),
         },
@@ -2286,10 +2414,12 @@ pub async fn visible_thread_ids(
     sqlx::query_scalar!(
         r#"SELECT t.id FROM threads t
            WHERE t.space_id = ANY($1) AND t.deleted_at IS NULL
-             AND thread_readable(t.visibility, t.space_id, $2, $3)"#,
+             AND thread_readable(t, $2, $3, $4, $5)"#,
         space_ids,
         &filter.visibilities,
         &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await
@@ -2327,12 +2457,13 @@ pub async fn first_unread(
             LIMIT 1
         ) p ON true
         WHERE t.id = $1 AND t.deleted_at IS NULL
-          AND (thread_readable(t.visibility, t.space_id, $2, $3) OR dm_readable(t.id, t.visibility, $4))
+          AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))
         "#,
         thread_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_optional(db.pool())
     .await?;
