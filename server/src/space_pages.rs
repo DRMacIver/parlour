@@ -247,17 +247,26 @@ pub async fn mute(
     }
 }
 
+/// Unmutes the space, then goes back to it, or to `next` (a path on this
+/// site) if the form says: the layout editor's list of mutes comes back
+/// to itself.
 pub async fn unmute(
     State(state): State<AppState>,
     viewer: Viewer,
     Path(slug): Path<String>,
+    Form(fields): Form<Vec<(String, String)>>,
 ) -> Result<Response, AppError> {
     let (user, space) = match member_and_space(&state, &viewer, &slug).await? {
         Ok(found) => found,
         Err(response) => return Ok(response),
     };
     layouts::unmute(state.db(), user.id, space.space.id).await?;
-    Ok(see_other(&format!("/c/{}", space.space.slug)))
+    let back = format!("/c/{}", space.space.slug);
+    let next = fields
+        .iter()
+        .find(|(key, _)| key == "next")
+        .and_then(|(_, value)| web::safe_next(value));
+    Ok(see_other(next.unwrap_or(&back)))
 }
 
 // ---------------------------------------------------------------------------
@@ -689,10 +698,21 @@ async fn log_staff_action(
     let Some(user) = viewer.user() else {
         return Ok(());
     };
+    record_space_action(state, user.id, space, action).await
+}
+
+/// Records something a member of staff did to a space in the moderation
+/// log, public if the space is.
+pub(crate) async fn record_space_action(
+    state: &AppState,
+    actor_id: i64,
+    space: &SpaceTarget,
+    action: &str,
+) -> Result<(), AppError> {
     mod_records::record(
         state.db(),
         &NewAction {
-            actor_id: user.id,
+            actor_id,
             action,
             target_kind: "space",
             target_id: space.space.id,
@@ -776,7 +796,11 @@ pub async fn save_settings(
                 } else {
                     "unmark_space_essential"
                 };
-                log_staff_action(&state, &viewer, &space, action).await?;
+                // Only admins mark spaces essential, as admins and never as
+                // the space's administrators, so this is always logged.
+                if let Some(user) = viewer.user() {
+                    record_space_action(&state, user.id, &space, action).await?;
+                }
             }
             log_staff_action(&state, &viewer, &space, "edit_space").await?;
             // A new read grant changes every page that could show the

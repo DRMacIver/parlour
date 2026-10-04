@@ -613,10 +613,10 @@ img.avatar { object-fit: cover; background: var(--rule); filter: none; }
 .page-title .flag-access { font-size: 15px; vertical-align: middle; }
 .flag-icon { margin-right: 4px; vertical-align: -1px; }
 
-/* The admin pages for spaces and groups. */
-.admin-section-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
-.admin-section-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
-.admin-section-bar input {
+/* The admin pages for spaces and groups, and the layout editors. */
+.layout-section-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.layout-section-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.layout-section-bar input {
   min-height: 28px;
   min-width: 0;
   max-width: 100%;
@@ -628,8 +628,21 @@ img.avatar { object-fit: cover; background: var(--rule); filter: none; }
   font-variant: normal;
   letter-spacing: 0;
 }
-.admin-section-bar input[type="number"] { width: 5em; }
-.admin-section-bar .button-quiet { color: var(--on-ink); border-color: var(--on-ink); }
+.layout-section-bar .button-quiet { color: var(--on-ink); border-color: var(--on-ink); }
+.layout-section-bar .button-quiet:hover,
+.layout-section-bar .button-quiet:focus-visible { color: var(--on-ink); border-color: var(--accent); background: var(--accent); }
+.index-arrange { margin: 0 0 16px; font-size: 15px; }
+.layout-add { padding: 8px 14px; border-top: 1px solid var(--rule); }
+.layout-add select { min-height: 28px; min-width: 0; max-width: 100%; }
+.layout-spaces .flag { margin-left: 4px; }
+.layout-editor > .panel, .layout-editor .layout-section { margin-bottom: 16px; }
+/* The editor island: spaces are dragged between sections. */
+.layout-drag { cursor: grab; color: var(--ink-muted); user-select: none; }
+.layout-spaces li[draggable="true"] { cursor: grab; }
+.layout-spaces li.layout-dragging { opacity: 0.5; }
+.layout-drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.layout-drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.layout-move { min-height: 28px; min-width: 0; max-width: 100%; }
 .admin-space-name { display: grid; flex: 1 1 220px; min-width: 0; }
 .choice-group { display: grid; gap: 2px; margin: 2px 0 0 24px; }
 .with-sidebar > div > .panel { margin-bottom: 16px; }

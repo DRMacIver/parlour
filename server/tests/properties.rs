@@ -859,6 +859,9 @@ impl World {
                 "/mod/users/ruth",
                 // What the notifications island fetches.
                 "/api/notifications",
+                // The layout editors.
+                "/settings/layout",
+                "/admin/layout",
             ] {
                 paths.push(path.to_owned());
             }
@@ -2755,6 +2758,70 @@ impl Access {
         );
         assert_eq!(front.any_spaces, !readable_spaces.is_empty());
 
+        // The layout editor (DESIGN.md §3.5): the viewer's layout (the
+        // default for a visitor, as the admin's editor shows it) with the
+        // spaces in its sections that they can read, in the layout's
+        // order; the readable spaces in no section, less their mutes, to
+        // add; and the readable spaces they have muted.
+        let arranged_layout = match who {
+            None => self.default_layout,
+            Some(u) => self.users[u].layout,
+        };
+        let arrangement = self
+            .block(content::arrangement(db, &viewer, arranged_layout))
+            .unwrap()
+            .expect("the layout exists");
+        let stored = self
+            .block(layouts::read(db, arranged_layout))
+            .unwrap()
+            .expect("the layout exists");
+        assert_eq!(
+            arrangement
+                .sections
+                .iter()
+                .map(|s| (s.id, s.spaces.iter().map(|c| c.id).collect::<Vec<_>>()))
+                .collect::<Vec<_>>(),
+            stored
+                .sections
+                .iter()
+                .map(|s| (
+                    s.id,
+                    s.spaces
+                        .iter()
+                        .map(|c| c.id)
+                        .filter(|id| readable_spaces.contains(id))
+                        .collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>(),
+            "{who:?}: the editor's sections"
+        );
+        let arranged: BTreeSet<i64> = arrangement
+            .sections
+            .iter()
+            .flat_map(|s| &s.spaces)
+            .map(|c| c.id)
+            .collect();
+        let expected = Self::ids(
+            &self.spaces,
+            |c| following.contains(&c) && self.reads_space(who, c),
+            |c| c.id,
+        );
+        assert_eq!(arranged, expected, "{who:?}: the editor's spaces");
+        let available: BTreeSet<i64> = arrangement.available.iter().map(|c| c.id).collect();
+        let expected = Self::ids(
+            &self.spaces,
+            |c| !following.contains(&c) && self.reads_space(who, c) && !self.muted(who, c),
+            |c| c.id,
+        );
+        assert_eq!(available, expected, "{who:?}: spaces to add");
+        let muted: BTreeSet<i64> = arrangement.muted.iter().map(|c| c.id).collect();
+        let expected = Self::ids(
+            &self.spaces,
+            |c| self.muted(who, c) && self.reads_space(who, c),
+            |c| c.id,
+        );
+        assert_eq!(muted, expected, "{who:?}: muted spaces in the editor");
+
         // The /latest tabs (DESIGN.md §3.5). All: every thread the viewer
         // can read, less those in spaces they have muted. Front page: those
         // in the essential spaces and the spaces in their sections. Each
@@ -3302,6 +3369,39 @@ impl Access {
             self.users[u].muted.remove(&c);
         }
         self.users[u].edited = true;
+    }
+
+    /// A member arranges their front page in the editor: a space goes to
+    /// the top of a new section of their own. Like following, this unmutes
+    /// it and makes the layout theirs.
+    #[rule]
+    fn arrange(&mut self, tc: TestCase) {
+        let u = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
+        let c = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
+        let (layout, space_id) = (self.users[u].layout, self.spaces[c].id);
+        let section = self
+            .block(layouts::add_section(&self.db, layout, "Arranged"))
+            .unwrap();
+        assert!(
+            self.block(layouts::move_space(&self.db, layout, space_id, section, 0))
+                .unwrap()
+        );
+        let sections: Vec<i64> = vec![section];
+        assert!(
+            self.block(layouts::reorder_sections(&self.db, layout, &sections))
+                .unwrap()
+        );
+        self.users[u].sections.insert(c);
+        self.users[u].muted.remove(&c);
+        self.users[u].edited = true;
+    }
+
+    /// An admin applies the default front page again to everyone who
+    /// follows it ("apply to members who haven't edited theirs").
+    #[rule]
+    fn reapply_default(&mut self, _: TestCase) {
+        self.block(layouts::default_changed(&self.db)).unwrap();
+        self.default_changed();
     }
 
     #[rule]

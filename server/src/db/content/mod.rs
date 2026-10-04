@@ -8,6 +8,7 @@
 //! recorded even for things the viewer can't see (such as a fork in a
 //! private space), because a later change could make them visible.
 
+pub mod arrangement;
 pub mod messages;
 pub mod moderation;
 pub mod notifications;
@@ -23,6 +24,8 @@ use crate::cache::Tag;
 use crate::permissions::{Audience, Grant, SpaceRules};
 use crate::store::SpaceSettings;
 use crate::viewer::Viewer;
+
+pub use arrangement::{ArrangedSection, ArrangedSpace, Arrangement, arrangement};
 
 pub const POSTS_PER_PAGE: i64 = 50;
 pub const THREADS_PER_PAGE: i64 = 30;

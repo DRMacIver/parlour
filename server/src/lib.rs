@@ -17,6 +17,7 @@ pub mod format;
 pub mod http_cache;
 mod invite_pages;
 pub mod islands;
+mod layout_pages;
 pub mod live;
 pub mod mail;
 pub mod markdown;
@@ -55,7 +56,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::middleware;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use sqlx::PgPool;
 
 use crate::db::Db;
@@ -440,6 +441,20 @@ pub fn app(state: AppState) -> Router {
             get(auth_pages::verify_page).post(auth_pages::verify_email),
         )
         .route("/settings", get(auth_pages::settings_page))
+        // The layout editors: a member's own front page, and the default.
+        .merge(layout_routes::<false>())
+        .merge(layout_routes::<true>())
+        .route(
+            "/admin/layout/spaces/{id}/essential",
+            post(layout_pages::essential),
+        )
+        .route("/admin/layout/apply", post(layout_pages::apply))
+        .route(
+            "/api/admin/layout/spaces/{id}/essential",
+            post(layout_pages::api_essential),
+        )
+        // Any other address under /api answers in JSON too.
+        .route("/api/{*rest}", any(api::unknown))
         .route("/settings/password", post(auth_pages::change_password))
         .route("/settings/profile", post(auth_pages::save_profile))
         .route("/settings/email", post(auth_pages::change_email))
@@ -476,12 +491,6 @@ pub fn app(state: AppState) -> Router {
         .route("/admin/spaces", get(admin_forum::spaces_page))
         .route("/admin/spaces/new", get(admin_forum::new_space_page))
         .route("/admin/spaces/{id}", get(admin_forum::space_page))
-        .route("/admin/sections", post(admin_forum::create_section))
-        .route("/admin/sections/{id}", post(admin_forum::update_section))
-        .route(
-            "/admin/sections/{id}/delete",
-            get(admin_forum::delete_section_page).post(admin_forum::delete_section),
-        )
         .route(
             "/admin/groups",
             get(admin_forum::groups_page).post(admin_forum::create_group),
@@ -531,6 +540,66 @@ pub fn app(state: AppState) -> Router {
         .merge(pages)
         .layer(middleware::from_fn(security_headers))
         .with_state(state)
+}
+
+/// The routes of one layout editor (`layout_pages`): the member's own at
+/// `/settings/layout` and `/api/layout`, or (`ADMIN`) the default's at
+/// `/admin/layout` and `/api/admin/layout`.
+fn layout_routes<const ADMIN: bool>() -> Router<AppState> {
+    use layout_pages::*;
+    let (page, api) = if ADMIN {
+        ("/admin/layout", "/api/admin/layout")
+    } else {
+        ("/settings/layout", "/api/layout")
+    };
+    Router::new()
+        .route(page, get(editor_page::<ADMIN>))
+        .route(&format!("{page}/sections"), post(add_section::<ADMIN>))
+        .route(
+            &format!("{page}/sections/{{id}}"),
+            post(rename_section::<ADMIN>),
+        )
+        .route(
+            &format!("{page}/sections/{{id}}/move"),
+            post(move_section::<ADMIN>),
+        )
+        .route(
+            &format!("{page}/sections/{{id}}/delete"),
+            get(delete_section_page::<ADMIN>).post(delete_section::<ADMIN>),
+        )
+        .route(
+            &format!("{page}/sections/{{id}}/spaces"),
+            post(add_space::<ADMIN>),
+        )
+        .route(
+            &format!("{page}/spaces/{{id}}/move"),
+            post(move_space::<ADMIN>),
+        )
+        .route(
+            &format!("{page}/spaces/{{id}}/remove"),
+            post(remove_space::<ADMIN>),
+        )
+        .route(&format!("{api}/sections"), post(api_add_section::<ADMIN>))
+        .route(
+            &format!("{api}/sections/order"),
+            post(api_order_sections::<ADMIN>),
+        )
+        .route(
+            &format!("{api}/sections/{{id}}"),
+            post(api_rename_section::<ADMIN>),
+        )
+        .route(
+            &format!("{api}/sections/{{id}}/delete"),
+            post(api_delete_section::<ADMIN>),
+        )
+        .route(
+            &format!("{api}/spaces/{{id}}/move"),
+            post(api_move_space::<ADMIN>),
+        )
+        .route(
+            &format!("{api}/spaces/{{id}}/remove"),
+            post(api_remove_space::<ADMIN>),
+        )
 }
 
 /// Headers every response carries: no other site may show a page of this

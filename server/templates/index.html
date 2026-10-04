@@ -68,6 +68,9 @@
   {% for section in front.sections %}
     {% call space_table(section.name, Some(section.id), &section.spaces) %}{% endcall %}
   {% endfor %}
+  {% if layout.user.is_some() %}
+    <p class="index-arrange"><a href="/settings/layout">Arrange your front page</a></p>
+  {% endif %}
   </div>
   <aside class="panel latest" aria-labelledby="latest-heading">
     <h2 class="panel-bar" id="latest-heading">Latest</h2>

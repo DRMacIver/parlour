@@ -6,6 +6,9 @@
 //!
 //! Errors are `{"error": "…"}` with a fitting status: 401 for visitors,
 //! 404 for anything the viewer can't see, 403, 400 or 429 otherwise.
+//!
+//! The layout editor's endpoints (`/api/layout` and `/api/admin/layout`)
+//! live with its pages in [`crate::layout_pages`].
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -25,22 +28,28 @@ use crate::store;
 use crate::viewer::Viewer;
 use crate::writing::{self, Refused};
 
-fn error(status: StatusCode, message: &str) -> Response {
+pub(crate) fn error(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
-fn log_in() -> Response {
+pub(crate) fn log_in() -> Response {
     error(StatusCode::UNAUTHORIZED, "Log in first.")
 }
 
-fn not_found() -> Response {
+pub(crate) fn not_found() -> Response {
     error(
         StatusCode::NOT_FOUND,
         "That isn’t there, or you can’t see it.",
     )
 }
 
-fn refused(refusal: Refused) -> Response {
+/// Any address under `/api` that isn't one: an error the islands can
+/// read, rather than the not-found page.
+pub async fn unknown() -> Response {
+    not_found()
+}
+
+pub(crate) fn refused(refusal: Refused) -> Response {
     match refusal {
         Refused::LogIn => log_in(),
         Refused::NotFound => not_found(),

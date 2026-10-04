@@ -642,7 +642,7 @@ async fn setup_ends_by_pointing_at_spaces_and_held_posts(db: PgPool) {
     let sam = forum.member("sam", "admin", None).await;
     let cookie = forum.session(sam).await;
     let page = forum.page_as("/setup/invites", &cookie).await;
-    assert!(page.contains("href=\"/admin/spaces\""), "{page}");
+    assert!(page.contains("href=\"/admin/layout\""), "{page}");
     assert!(page.contains("href=\"/admin/moderation\""), "{page}");
     assert!(page.contains("first 2 posts"), "{page}");
     parlour::settings::set(

@@ -16,10 +16,12 @@
 //! default is being copied out isn't copied over.
 //!
 //! Sections keep the positions they are given and sort by `(position,
-//! id)`, so a layout editor may number them as it likes. Within a section
-//! a space is placed at an index, and the section's spaces are renumbered
-//! from 0. A space is in at most one section of a layout (a trigger makes
-//! sure): following it again moves it.
+//! id)`, so a layout editor may number them as it likes, or hand
+//! [`reorder_sections`] the order it wants. Within a section a space is
+//! placed at an index, and the section's spaces are renumbered from 0. A
+//! space is in at most one section of a layout (a trigger makes sure):
+//! following it again moves it. Putting a space in a member's sections,
+//! by following or moving it, unmutes it for them.
 //!
 //! Also here: muting a space (it leaves the member's sections and front
 //! page, and is left out of the All tab, the default view of the space
@@ -454,6 +456,56 @@ pub async fn delete_section<'c>(
     Ok(true)
 }
 
+/// Puts the sections named first, in this order, before any others of
+/// the layout (which keep their order after them), renumbering them all
+/// from 0. False if any of them isn't a section of the layout.
+pub async fn reorder_sections<'c>(
+    db: impl Handle<'c>,
+    layout_id: i64,
+    first: &[i64],
+) -> sqlx::Result<bool> {
+    let mut tx = db.open(KEY).begin().await?;
+    lock_layout(&mut tx, layout_id).await?;
+    let current = sqlx::query_scalar!(
+        "SELECT id FROM layout_sections WHERE layout_id = $1 ORDER BY position, id",
+        layout_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    if first.iter().any(|id| !current.contains(id)) {
+        return Ok(false);
+    }
+    let mut order: Vec<i64> = Vec::with_capacity(current.len());
+    for id in first.iter().chain(current.iter()) {
+        if !order.contains(id) {
+            order.push(*id);
+        }
+    }
+    sqlx::query!(
+        "UPDATE layout_sections s SET position = o.ord - 1
+         FROM unnest($2::bigint[]) WITH ORDINALITY AS o (id, ord)
+         WHERE s.layout_id = $1 AND s.id = o.id",
+        layout_id,
+        &order
+    )
+    .execute(&mut *tx)
+    .await?;
+    after_write(&mut tx, layout_id).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// How many members follow the default: have a layout they haven't
+/// edited.
+pub async fn follower_count<'c>(db: impl Handle<'c>) -> sqlx::Result<i64> {
+    let mut conn = db.open(KEY).acquire().await?;
+    sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM layouts WHERE user_id IS NOT NULL AND edited_at IS NULL"#
+    )
+    .fetch_one(&mut *conn)
+    .await
+}
+
 // ---------------------------------------------------------------------------
 // Following
 
@@ -507,17 +559,28 @@ pub async fn follow<'c>(
         Err(err) if no_such_space(&err) => return Ok(false),
         Err(err) => return Err(err),
     }
+    unmute_for_owner(&mut tx, layout_id, space_id).await?;
+    after_write(&mut tx, layout_id).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Putting a space in a member's sections unmutes it for them (a default
+/// layout has no owner, so this does nothing to it).
+async fn unmute_for_owner(
+    conn: &mut PgConnection,
+    layout_id: i64,
+    space_id: i64,
+) -> sqlx::Result<()> {
     sqlx::query!(
         "DELETE FROM space_mutes m USING layouts l
          WHERE l.id = $1 AND m.user_id = l.user_id AND m.space_id = $2",
         layout_id,
         space_id
     )
-    .execute(&mut *tx)
+    .execute(conn)
     .await?;
-    after_write(&mut tx, layout_id).await?;
-    tx.commit().await?;
-    Ok(true)
+    Ok(())
 }
 
 /// What "Follow" on a space's page does (DESIGN.md §3.5): puts the space
@@ -563,7 +626,8 @@ pub async fn unfollow<'c>(
 
 /// Puts a space at `index` (from 0; past the end means last) in a section
 /// of the layout, moving it from wherever in the layout it was, and
-/// renumbers that section's spaces. False if the layout has no such
+/// renumbers that section's spaces; for a member's layout, this also
+/// unmutes it, as following does. False if the layout has no such
 /// section, or there is no such space.
 pub async fn move_space<'c>(
     db: impl Handle<'c>,
@@ -608,6 +672,7 @@ pub async fn move_space<'c>(
     )
     .execute(&mut *tx)
     .await?;
+    unmute_for_owner(&mut tx, layout_id, space_id).await?;
     after_write(&mut tx, layout_id).await?;
     tx.commit().await?;
     Ok(true)
@@ -689,6 +754,17 @@ pub async fn is_muted<'c>(db: impl Handle<'c>, user_id: i64, space_id: i64) -> s
         space_id
     )
     .fetch_one(&mut *conn)
+    .await
+}
+
+/// The spaces a member has muted, by id.
+pub async fn muted_space_ids<'c>(db: impl Handle<'c>, user_id: i64) -> sqlx::Result<Vec<i64>> {
+    let mut conn = db.open(KEY).acquire().await?;
+    sqlx::query_scalar!(
+        "SELECT space_id FROM space_mutes WHERE user_id = $1 ORDER BY space_id",
+        user_id
+    )
+    .fetch_all(&mut *conn)
     .await
 }
 

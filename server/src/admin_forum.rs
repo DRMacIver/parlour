@@ -1,18 +1,15 @@
 //! Admin pages for the shape of the forum (DESIGN.md §3.1, §3.5), for
 //! admins only:
 //!
-//! - `/admin/spaces`: the default front page's sections and the spaces in
-//!   them, with who can read and post in each, and the spaces on no
-//!   section of it; `/admin/sections…` adds, renames, moves and deletes
-//!   those sections (a fuller layout editor is to come at
-//!   `/admin/layout`);
+//! - `/admin/spaces`: every space, with who can read and post in each,
+//!   leading to each space's settings and to the editor of the default
+//!   front page (`/admin/layout`, in `layout_pages`);
 //! - `/admin/spaces/new` and `/admin/spaces/{id}`, which lead to the
 //!   space's own pages (`space_pages`);
 //! - `/admin/groups` and `/admin/groups/{id}`: groups and their members.
 //!
-//! Changing the default layout clears every cached page, since visitors'
-//! front page is rendered from it; group changes matter only to logged-in
-//! members, whose pages are never cached.
+//! Group changes matter only to logged-in members, whose pages are never
+//! cached.
 
 use askama::Template;
 use axum::Form;
@@ -23,12 +20,10 @@ use serde::Deserialize;
 
 use crate::AppState;
 use crate::admin_pages::{DoneQuery, admin, not_admin};
-use crate::changes::Change;
 use crate::content::{self, SpaceTarget};
 use crate::error::AppError;
 use crate::format;
 use crate::groups::{self, GroupDetail, GroupFields, GroupSummary};
-use crate::layouts::{self, Section};
 use crate::pages::parse_id;
 use crate::users;
 use crate::viewer::Viewer;
@@ -47,10 +42,6 @@ fn notice_for(done: &str) -> Option<&'static str> {
     match done {
         "saved" => Some("Saved."),
         "deleted" => Some("Deleted."),
-        "section" => Some("Section saved."),
-        "section-deleted" => {
-            Some("Section deleted. Its spaces are off the default front page now.")
-        }
         "added" => Some("Added to the group."),
         "removed" => Some("Taken out of the group."),
         _ => None,
@@ -58,23 +49,14 @@ fn notice_for(done: &str) -> Option<&'static str> {
 }
 
 // ---------------------------------------------------------------------------
-// The default front page's sections and the spaces in them
-
-/// A section of the default layout with its spaces, or (`section` None)
-/// the spaces on no section of it.
-pub struct SectionRow {
-    pub section: Option<Section>,
-    pub spaces: Vec<SpaceTarget>,
-}
+// Every space, with who can read and post in each
 
 #[derive(Template)]
 #[template(path = "admin_spaces.html")]
 struct SpacesTemplate {
     layout: Layout,
     notice: Option<&'static str>,
-    errors: Vec<String>,
-    rows: Vec<SectionRow>,
-    any_spaces: bool,
+    spaces: Vec<SpaceTarget>,
 }
 
 impl SpacesTemplate {
@@ -88,217 +70,20 @@ impl SpacesTemplate {
     }
 }
 
-/// The default layout, with its sections in order.
-async fn default_layout(state: &AppState) -> Result<layouts::Layout, AppError> {
-    let db = state.db();
-    let id = layouts::default_id(db).await?;
-    Ok(layouts::read(db, id)
-        .await?
-        .expect("the default layout exists once asked for"))
-}
-
-async fn render_spaces(
-    state: &AppState,
-    viewer: &Viewer,
-    status: StatusCode,
-    notice: Option<&'static str>,
-    errors: Vec<String>,
-) -> Result<Response, AppError> {
-    let db = state.db();
-    let spaces = content::readable_spaces(db, viewer).await?;
-    let any_spaces = !spaces.is_empty();
-    let default = default_layout(state).await?;
-    let mut rows: Vec<SectionRow> = Vec::new();
-    let mut placed = std::collections::HashSet::new();
-    for section in default.sections {
-        let ids: Vec<i64> = section.spaces.iter().map(|c| c.id).collect();
-        placed.extend(ids.iter().copied());
-        // In the section's order; the admin may be unable to read some.
-        let spaces = ids
-            .iter()
-            .filter_map(|id| spaces.iter().find(|c| c.space.id == *id).cloned())
-            .collect();
-        rows.push(SectionRow {
-            section: Some(Section {
-                spaces: Vec::new(),
-                ..section
-            }),
-            spaces,
-        });
-    }
-    let unplaced: Vec<SpaceTarget> = spaces
-        .into_iter()
-        .filter(|c| !placed.contains(&c.space.id))
-        .collect();
-    if !unplaced.is_empty() {
-        rows.push(SectionRow {
-            section: None,
-            spaces: unplaced,
-        });
-    }
-    render(
-        status,
-        &SpacesTemplate {
-            layout: Layout::load(state, viewer, Nav::Admin).await?,
-            notice,
-            errors,
-            rows,
-            any_spaces,
-        },
-    )
-}
-
 pub async fn spaces_page(
     State(state): State<AppState>,
     viewer: Viewer,
     Query(query): Query<DoneQuery>,
 ) -> Result<Response, AppError> {
     admins_only!(state, viewer, "/admin/spaces");
-    render_spaces(
-        &state,
-        &viewer,
-        StatusCode::OK,
-        notice_for(&query.done),
-        Vec::new(),
-    )
-    .await
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-pub struct SectionForm {
-    name: String,
-    position: String,
-}
-
-impl SectionForm {
-    fn parse(&self) -> Result<(String, i32), Vec<String>> {
-        let mut problems = Vec::new();
-        let name = layouts::clean_section_name(&self.name).map_err(|why| problems.push(why));
-        let position = parse_position(&self.position).map_err(|why| problems.push(why));
-        match (name, position) {
-            (Ok(name), Ok(position)) => Ok((name, position)),
-            _ => Err(problems),
-        }
-    }
-}
-
-fn parse_position(text: &str) -> Result<i32, String> {
-    match text.trim() {
-        "" => Ok(0),
-        text => text
-            .parse::<i32>()
-            .map_err(|_| "The position should be a whole number, such as 3.".to_owned()),
-    }
-}
-
-pub async fn create_section(
-    State(state): State<AppState>,
-    viewer: Viewer,
-    Form(form): Form<SectionForm>,
-) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/spaces");
-    match form.parse() {
-        Err(problems) => {
-            render_spaces(&state, &viewer, StatusCode::BAD_REQUEST, None, problems).await
-        }
-        Ok((name, position)) => {
-            let db = state.db();
-            let default = layouts::default_id(db).await?;
-            let id = layouts::add_section(db, default, &name).await?;
-            layouts::move_section(db, default, id, position).await?;
-            state.changed(Change::SiteChanged).await?;
-            Ok(see_other("/admin/spaces?done=section"))
-        }
-    }
-}
-
-pub async fn update_section(
-    State(state): State<AppState>,
-    viewer: Viewer,
-    Path(id): Path<String>,
-    Form(form): Form<SectionForm>,
-) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/spaces");
-    let Some(id) = parse_id(&id) else {
-        return web::not_found(&state, &viewer).await;
-    };
-    match form.parse() {
-        Err(problems) => {
-            render_spaces(&state, &viewer, StatusCode::BAD_REQUEST, None, problems).await
-        }
-        Ok((name, position)) => {
-            let db = state.db();
-            let default = layouts::default_id(db).await?;
-            if !layouts::rename_section(db, default, id, &name).await? {
-                return web::not_found(&state, &viewer).await;
-            }
-            layouts::move_section(db, default, id, position).await?;
-            state.changed(Change::SiteChanged).await?;
-            Ok(see_other("/admin/spaces?done=section"))
-        }
-    }
-}
-
-#[derive(Template)]
-#[template(path = "admin_delete_section.html")]
-struct DeleteSectionTemplate {
-    layout: Layout,
-    section: Section,
-    spaces: Vec<SpaceTarget>,
-}
-
-/// Asks before deleting a section of the default front page, naming the
-/// spaces that will leave it.
-pub async fn delete_section_page(
-    State(state): State<AppState>,
-    viewer: Viewer,
-    Path(id): Path<String>,
-) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/spaces");
-    let section = match parse_id(&id) {
-        Some(id) => default_layout(&state)
-            .await?
-            .sections
-            .into_iter()
-            .find(|section| section.id == id),
-        None => None,
-    };
-    let Some(section) = section else {
-        return web::not_found(&state, &viewer).await;
-    };
-    let readable = content::readable_spaces(state.db(), &viewer).await?;
-    let spaces = section
-        .spaces
-        .iter()
-        .filter_map(|c| readable.iter().find(|r| r.space.id == c.id).cloned())
-        .collect();
     render(
         StatusCode::OK,
-        &DeleteSectionTemplate {
+        &SpacesTemplate {
             layout: Layout::load(&state, &viewer, Nav::Admin).await?,
-            section,
-            spaces,
+            notice: notice_for(&query.done),
+            spaces: content::readable_spaces(state.db(), &viewer).await?,
         },
     )
-}
-
-pub async fn delete_section(
-    State(state): State<AppState>,
-    viewer: Viewer,
-    Path(id): Path<String>,
-) -> Result<Response, AppError> {
-    admins_only!(state, viewer, "/admin/spaces");
-    let Some(id) = parse_id(&id) else {
-        return web::not_found(&state, &viewer).await;
-    };
-    let db = state.db();
-    let default = layouts::default_id(db).await?;
-    if !layouts::delete_section(db, default, id).await? {
-        return web::not_found(&state, &viewer).await;
-    }
-    state.changed(Change::SiteChanged).await?;
-    Ok(see_other("/admin/spaces?done=section-deleted"))
 }
 
 // ---------------------------------------------------------------------------

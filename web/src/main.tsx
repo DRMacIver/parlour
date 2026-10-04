@@ -15,6 +15,7 @@ const islands: Record<string, Loader> = {
   notifications: () => import("./islands/Notifications"),
   "new-posts": () => import("./islands/NewPosts"),
   "fork-dialog": () => import("./islands/ForkDialog"),
+  "layout-editor": () => import("./islands/LayoutEditor"),
 };
 
 export async function mount(element: HTMLElement): Promise<void> {

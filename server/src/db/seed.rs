@@ -1558,8 +1558,9 @@ impl Seeder<'_> {
 
     /// Nell and Otto, Iris and Jude, Rosa and Theo, Uma and Vic, and Wes
     /// and Xan: established members who keep to threads of their own (and
-    /// so are free for the browser tests to log in as); and Yara, an admin
-    /// for the same reason.
+    /// so are free for the browser tests to log in as); Yara, an admin for
+    /// the same reason; and newer members and admins for the tests of the
+    /// layout editors.
     async fn quiet_corner(&mut self, general: i64) -> sqlx::Result<()> {
         let nell = self.extra_member("nell", "Nell", "ana", 120).await?;
         let otto = self.extra_member("otto", "Otto", "nell", 110).await?;
@@ -1672,6 +1673,25 @@ impl Seeder<'_> {
         sqlx::query!("UPDATE users SET role = 'admin' WHERE id = $1", yara)
             .execute(&mut *self.db)
             .await?;
+        // Members who have yet to post, one for each browser test project
+        // to arrange the front page of, and two more admins for the tests
+        // of the default front page's editor.
+        for (username, name) in [
+            ("alma", "Alma"),
+            ("bram", "Bram"),
+            ("cleo", "Cleo"),
+            ("dara", "Dara"),
+            ("emil", "Emil"),
+            ("fern", "Fern"),
+        ] {
+            self.extra_member(username, name, "sam", 30).await?;
+        }
+        for (username, name) in [("gwen", "Gwen"), ("hal", "Hal")] {
+            let id = self.extra_member(username, name, "yara", 400).await?;
+            sqlx::query!("UPDATE users SET role = 'admin' WHERE id = $1", id)
+                .execute(&mut *self.db)
+                .await?;
+        }
         Ok(())
     }
 

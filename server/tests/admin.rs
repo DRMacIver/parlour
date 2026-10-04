@@ -278,11 +278,9 @@ async fn admins_arrange_the_default_front_page(db: PgPool) {
     assert!(page.contains("href=\"/admin/groups\""));
     assert!(page.contains("No spaces yet"));
 
+    assert!(page.contains("href=\"/admin/layout\""));
     let response = a
-        .submit(
-            "/admin/sections",
-            &[("name", " Hobbies "), ("position", "2")],
-        )
+        .submit("/admin/layout/sections", &[("name", " Hobbies ")])
         .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     let hobbies = a
@@ -330,7 +328,9 @@ async fn admins_arrange_the_default_front_page(db: PgPool) {
     assert!(index.contains("All about it."));
     assert_eq!(default_section(&a, games).await, section);
     let admin_page = a.page("/admin/spaces").await;
-    assert!(admin_page.contains("Hobbies") && admin_page.contains("Board games"));
+    assert!(admin_page.contains("Board games"));
+    let editor = a.page("/admin/layout").await;
+    assert!(editor.contains("Hobbies") && editor.contains("Board games"));
 
     // A clash or a bad address is refused, keeping what was typed.
     for slug in ["board-games", "Board Games!"] {
@@ -362,11 +362,10 @@ async fn admins_arrange_the_default_front_page(db: PgPool) {
     );
     assert_eq!(default_section(&a, games).await, "");
     let admin_page = a.page("/admin/spaces").await;
-    assert!(
-        admin_page.contains("Not on the default front page"),
-        "{admin_page}"
-    );
     assert!(admin_page.contains("href=\"/c/games/settings\""));
+    let editor = a.page("/admin/layout").await;
+    assert!(editor.contains("Not on the default front page"), "{editor}");
+    assert!(editor.contains("href=\"/c/games\""));
     // The old admin addresses lead to the space's own pages.
     let response = a
         .forum
@@ -377,11 +376,12 @@ async fn admins_arrange_the_default_front_page(db: PgPool) {
     let response = a.forum.get_as("/admin/spaces/new", Some(&a.cookie)).await;
     assert_eq!(response.location(), "/spaces/new");
 
-    // Sections are renamed, reordered and deleted; their spaces stay.
+    // Sections are renamed and deleted from the layout editor; their
+    // spaces stay.
     let response = a
         .submit(
-            &format!("/admin/sections/{hobbies}"),
-            &[("name", "Pastimes"), ("position", "3")],
+            &format!("/admin/layout/sections/{hobbies}"),
+            &[("name", "Pastimes")],
         )
         .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
@@ -392,7 +392,7 @@ async fn admins_arrange_the_default_front_page(db: PgPool) {
     .await;
     assert!(a.forum.page("/").await.contains("Pastimes"));
     let response = a
-        .submit(&format!("/admin/sections/{hobbies}/delete"), &[])
+        .submit(&format!("/admin/layout/sections/{hobbies}/delete"), &[])
         .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
     let index = a.forum.page("/").await;
@@ -729,7 +729,8 @@ async fn only_admins_manage_spaces_and_groups(db: PgPool) {
         "/admin/groups".to_owned(),
         format!("/admin/groups/{group}"),
         format!("/admin/groups/{group}/delete"),
-        format!("/admin/sections/{section}/delete"),
+        "/admin/layout".to_owned(),
+        format!("/admin/layout/sections/{section}/delete"),
     ];
     for path in &pages {
         assert_eq!(
@@ -742,9 +743,9 @@ async fn only_admins_manage_spaces_and_groups(db: PgPool) {
         assert!(response.location().starts_with("/login?next="));
     }
     let posts = [
-        "/admin/sections".to_owned(),
-        "/admin/sections/1".to_owned(),
-        "/admin/sections/1/delete".to_owned(),
+        "/admin/layout/sections".to_owned(),
+        format!("/admin/layout/sections/{section}"),
+        format!("/admin/layout/sections/{section}/delete"),
         "/admin/groups".to_owned(),
         format!("/admin/groups/{group}"),
         format!("/admin/groups/{group}/members"),
@@ -775,8 +776,8 @@ async fn unknown_spaces_and_groups_are_not_found(db: PgPool) {
         "/admin/groups/x",
         "/admin/groups/999/delete",
         "/admin/groups/x/delete",
-        "/admin/sections/999/delete",
-        "/admin/sections/x/delete",
+        "/admin/layout/sections/999/delete",
+        "/admin/layout/sections/x/delete",
     ] {
         assert_eq!(
             a.forum.get_as(path, Some(&a.cookie)).await.status,
@@ -785,8 +786,8 @@ async fn unknown_spaces_and_groups_are_not_found(db: PgPool) {
         );
     }
     for path in [
-        "/admin/sections/999",
-        "/admin/sections/999/delete",
+        "/admin/layout/sections/999",
+        "/admin/layout/sections/999/delete",
         "/admin/groups/999",
         "/admin/groups/999/members",
         "/admin/groups/999/delete",
@@ -876,9 +877,9 @@ async fn deleting_a_section_asks_first_and_names_its_spaces(db: PgPool) {
     a.forum
         .space("board-games", "public", Some(hobbies), 0)
         .await;
-    let delete_path = format!("/admin/sections/{hobbies}/delete");
+    let delete_path = format!("/admin/layout/sections/{hobbies}/delete");
 
-    let page = a.page("/admin/spaces").await;
+    let page = a.page("/admin/layout").await;
     assert!(page.contains(&format!("href=\"{delete_path}\"")));
     assert!(!page.contains(&format!("action=\"{delete_path}\"")));
 
@@ -886,7 +887,7 @@ async fn deleting_a_section_asks_first_and_names_its_spaces(db: PgPool) {
     assert!(confirm.contains("Hobbies"));
     assert!(confirm.contains("Board games"));
     assert!(confirm.contains(&format!("action=\"{delete_path}\"")));
-    assert!(confirm.contains("href=\"/admin/spaces\""));
+    assert!(confirm.contains("href=\"/admin/layout\""));
     let default = layouts::default_id(&a.forum.db).await.unwrap();
     let sections = |a: &Admin| {
         let db = a.forum.db.clone();
@@ -916,15 +917,13 @@ async fn deleting_a_section_asks_first_and_names_its_spaces(db: PgPool) {
     let hers = layouts::add_section(&a.forum.db, ruth_layout, "Hers")
         .await
         .unwrap();
-    let delete_hers = format!("/admin/sections/{hers}/delete");
+    let delete_hers = format!("/admin/layout/sections/{hers}/delete");
     assert_eq!(
         a.forum.get_as(&delete_hers, Some(&a.cookie)).await.status,
         StatusCode::NOT_FOUND
     );
-    for path in [delete_hers, format!("/admin/sections/{hers}")] {
-        let response = a
-            .submit(&path, &[("name", "Theirs"), ("position", "0")])
-            .await;
+    for path in [delete_hers, format!("/admin/layout/sections/{hers}")] {
+        let response = a.submit(&path, &[("name", "Theirs")]).await;
         assert_eq!(response.status, StatusCode::NOT_FOUND, "{path}");
     }
     assert!(

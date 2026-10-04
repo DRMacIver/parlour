@@ -195,6 +195,20 @@ pub fn fork_dialog_props() -> String {
     props(&serde_json::json!({ "endpoint": "/api/posts/{id}/fork" }))
 }
 
+/// The layout editor around the plain forms of `/settings/layout` or
+/// `/admin/layout`, starting from the layout as the page shows it.
+pub fn layout_editor_props(
+    endpoint: &str,
+    admin: bool,
+    layout: &crate::content::Arrangement,
+) -> String {
+    props(&serde_json::json!({
+        "endpoint": endpoint,
+        "admin": admin,
+        "layout": layout,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

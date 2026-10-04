@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{%- import "_admin_nav.html" as an -%}
+{% macro essential_form(space) %}
+<form class="form-inline" method="post" action="/admin/layout/spaces/{{ space.id }}/essential">
+  {% if space.essential %}
+  <input type="hidden" name="essential" value="0">
+  <button class="button button-small button-quiet" type="submit">Make it not essential</button>
+  {% else %}
+  <input type="hidden" name="essential" value="1">
+  <button class="button button-small button-quiet" type="submit">Make it essential</button>
+  {% endif %}
+</form>
+{% endmacro %}
+
+{% block title %}{% if admin %}Default front page{% else %}Your front page{% endif %} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+{% if admin %}
+<h1 class="page-title">Default front page</h1>
+{% call an::admin_nav("layout") %}{% endcall %}
+<p class="lede">The front page visitors see, and the one every new member starts from: sections, in order, each listing spaces in order. Essential spaces are at the top of everyone’s front page, wherever they are here, and can’t be muted. Sections are only headings: who can read and post in each space is set in the space’s own settings.</p>
+{% else %}
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/settings">Your account</a> › Your front page</nav>
+<h1 class="page-title">Your front page</h1>
+<p class="lede">Your <a href="/">front page</a> lists the spaces in your sections, in the order you put them here, under the essential spaces every member sees at the top. Following a space from its page puts it in your first section. Sections are only headings: arranging them changes nothing about what you can read or where you can post.</p>
+{% endif %}
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
+{% call f::errors(errors) %}{% endcall %}
+
+{% if admin %}
+<section class="panel" aria-labelledby="followers-heading">
+  <h2 class="panel-bar" id="followers-heading">Who follows it</h2>
+  <div class="panel-text">
+    <p>{% if followers == 1 %}1 member hasn’t arranged their own front page, and follows this one.{% else %}{{ followers }} members haven’t arranged their own front page, and follow this one.{% endif %} Each change here reaches them as it is made, less any space they have muted. Applying it again also puts back the spaces they have unmuted since.</p>
+    <form class="form-inline" method="post" action="/admin/layout/apply"><button class="button button-small" type="submit">Apply to members who haven’t edited theirs</button></form>
+  </div>
+</section>
+{% else if arrangement.edited %}
+<p class="toolbar-note">You have arranged your front page yourself, so changes to the default front page don’t reach it.</p>
+{% else %}
+<p class="toolbar-note">Your front page follows the default for now: when the admins change the default, yours changes with it. Once you change anything here it is yours, and stays as you leave it.</p>
+{% endif %}
+
+<div class="layout-editor"{% if props.is_some() %} data-island="layout-editor"{% endif %}>
+{% for section in arrangement.sections %}
+<section class="panel layout-section" aria-label="{{ section.name }}">
+  <div class="panel-bar layout-section-bar">
+    <form class="layout-section-form" method="post" action="{{ prefix }}/sections/{{ section.id }}">
+      <label class="visually-hidden" for="section-name-{{ section.id }}">Section name</label>
+      <input id="section-name-{{ section.id }}" name="name" type="text" maxlength="80" value="{{ section.name }}" required>
+      <button class="button button-small button-quiet" type="submit">Rename</button>
+    </form>
+    <form class="layout-section-form" method="post" action="{{ prefix }}/sections/{{ section.id }}/move">
+      {% if !self.is_first(section) %}<button class="button button-small button-quiet" type="submit" name="direction" value="up">Move up</button>{% endif %}
+      {% if !self.is_last(section) %}<button class="button button-small button-quiet" type="submit" name="direction" value="down">Move down</button>{% endif %}
+    </form>
+    <a class="button button-small button-quiet" href="{{ prefix }}/sections/{{ section.id }}/delete">Delete section…</a>
+  </div>
+  {% if section.spaces.is_empty() %}
+  <p class="empty">No spaces in this section.</p>
+  {% else %}
+  <ul class="member-list layout-spaces">
+  {% for space in section.spaces %}
+    <li>
+      <span class="admin-space-name">
+        <a href="/c/{{ space.slug }}">{{ space.name }}</a>
+        {% for flag in crate::layout_pages::flags(space) %}<span class="flag">{{ flag }}</span> {% endfor %}
+      </span>
+      <form class="form-inline" method="post" action="{{ prefix }}/spaces/{{ space.id }}/move">
+        {% if !loop.first %}<button class="button button-small button-quiet" type="submit" name="direction" value="up">Move up</button>{% endif %}
+        {% if !loop.last %}<button class="button button-small button-quiet" type="submit" name="direction" value="down">Move down</button>{% endif %}
+      </form>
+      <form class="form-inline" method="post" action="{{ prefix }}/spaces/{{ space.id }}/remove"><button class="button button-small button-quiet" type="submit">Take off the front page</button></form>
+      {% if admin %}{% call essential_form(space) %}{% endcall %}{% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+  {% let options = self.options(section) %}
+  <form class="form-inline-row layout-add" method="post" action="{{ prefix }}/sections/{{ section.id }}/spaces">
+    <label for="add-{{ section.id }}">Add a space</label>
+    <select id="add-{{ section.id }}" name="space"{% if options.is_empty() %} disabled{% endif %}>
+    {% for option in options.iter() %}
+      <option value="{{ option.id }}">{{ option.label }}</option>
+    {% else %}
+      <option value="">No other spaces to add</option>
+    {% endfor %}
+    </select>
+    <button class="button button-small" type="submit"{% if options.is_empty() %} disabled{% endif %}>Add</button>
+  </form>
+</section>
+{% endfor %}
+{% if arrangement.sections.is_empty() %}
+<section class="panel"><p class="empty">No sections yet.</p></section>
+{% endif %}
+
+{% if admin %}
+<section class="panel" aria-labelledby="unplaced-heading">
+  <h2 class="panel-bar" id="unplaced-heading">Not on the default front page</h2>
+  {% if arrangement.available.is_empty() %}
+  <p class="empty">Every space is in a section.</p>
+  {% else %}
+  <ul class="member-list layout-spaces">
+  {% for space in arrangement.available %}
+    <li>
+      <span class="admin-space-name">
+        <a href="/c/{{ space.slug }}">{{ space.name }}</a>
+        {% for flag in crate::layout_pages::flags(space) %}<span class="flag">{{ flag }}</span> {% endfor %}
+      </span>
+      {% call essential_form(space) %}{% endcall %}
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+
+<form class="panel" method="post" action="{{ prefix }}/sections">
+  <h2 class="panel-bar">New section</h2>
+  <div class="form">
+    <div class="field">
+      <label for="new-section-name">Name</label>
+      <input id="new-section-name" name="name" type="text" maxlength="80" required>
+    </div>
+    <div class="form-actions"><button class="button" type="submit">Add section</button></div>
+  </div>
+</form>
+</div>{% if let Some(props) = props %}<script type="application/json" data-island-props>{{ props|safe }}</script>{% endif %}
+
+{% if !admin %}
+<section class="panel" aria-labelledby="muted-heading">
+  <h2 class="panel-bar" id="muted-heading">Muted spaces</h2>
+  {% if arrangement.muted.is_empty() %}
+  <p class="empty">You haven’t muted any spaces. Muting a space, from its page, leaves it out of your front page, Latest, the list of spaces and search.</p>
+  {% else %}
+  <p class="panel-text">These are left out of your front page, Latest, the list of spaces and search. Their pages still work, and you can still post in them.</p>
+  <ul class="member-list layout-spaces">
+  {% for space in arrangement.muted %}
+    <li>
+      <span class="admin-space-name"><a href="/c/{{ space.slug }}">{{ space.name }}</a></span>
+      <form class="form-inline" method="post" action="/c/{{ space.slug }}/unmute">
+        <input type="hidden" name="next" value="{{ self.unmute_next() }}">
+        <button class="button button-small button-quiet" type="submit">Unmute</button>
+      </form>
+    </li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
