@@ -436,6 +436,28 @@ async fn messages_notify_the_others_in_the_conversation(pool: PgPool) {
     );
     assert_eq!(kinds(&s.f, s.maya).await.len(), 1);
     assert_eq!(kinds(&s.f, s.jonah).await.len(), 1);
+    // With notifications off, Maya still hears when she is mentioned.
+    let asked = anchored_post(
+        s.f.submit(
+            &format!("/messages/{conversation}"),
+            &[("body", "@maya can you bring the dice?")],
+            Some(&s.ruth_cookie),
+        )
+        .await
+        .location(),
+    );
+    assert_eq!(
+        kinds(&s.f, s.maya).await,
+        vec![format!("message:{first}"), format!("mention:{asked}")]
+    );
+    // Jonah has left, so a mention of him tells him nothing.
+    s.f.submit(
+        &format!("/messages/{conversation}"),
+        &[("body", "@jonah would know")],
+        Some(&s.ruth_cookie),
+    )
+    .await;
+    assert_eq!(kinds(&s.f, s.jonah).await.len(), 1);
     // A mention of someone outside the conversation tells them nothing.
     let kit = s.f.member("kit", "user", None).await;
     s.f.submit(
@@ -469,7 +491,21 @@ async fn messages_notify_the_others_in_the_conversation(pool: PgPool) {
         .location(),
     );
     assert_eq!(kinds(&s.f, kit).await, vec![format!("message:{third}")]);
-    assert_eq!(kinds(&s.f, s.maya).await.len(), 1);
+    assert_eq!(kinds(&s.f, s.maya).await.len(), 2);
+    // Someone subscribed who is mentioned hears of it once, as a message.
+    let fourth = anchored_post(
+        s.f.submit(
+            &format!("/messages/{conversation}"),
+            &[("body", "@kit what do you think?")],
+            Some(&s.ruth_cookie),
+        )
+        .await
+        .location(),
+    );
+    assert_eq!(
+        kinds(&s.f, kit).await,
+        vec![format!("message:{third}"), format!("message:{fourth}")]
+    );
     // Outsiders can't subscribe to it.
     let outsider = s.f.member("lee", "user", None).await;
     let outsider_cookie = s.f.session(outsider).await;

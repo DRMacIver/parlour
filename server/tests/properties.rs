@@ -38,11 +38,12 @@
 //!   counted directly and as the live badge stream sends it, counts exactly
 //!   the unread notifications about posts the viewer may read.
 //! - Who is notified of each new post is exactly what DESIGN.md §9 says,
-//!   judged by a model of thread subscriptions: those mentioned in it, then
-//!   those subscribed to its thread (authors to the threads they start,
-//!   everyone in a conversation to it, anyone to what they subscribe to
-//!   with the toggle on its page, which the viewers use), who may read it
-//!   and didn't write it. Replying subscribes nobody. The toggle on each
+//!   judged by a model of thread subscriptions: in a conversation those
+//!   subscribed to it, then those mentioned in it, subscribed or not;
+//!   elsewhere those mentioned in it, then those subscribed to its thread
+//!   (authors to the threads they start, everyone in a conversation to it,
+//!   anyone to what they subscribe to with the toggle on its page, which
+//!   the viewers use), who may read it and didn't write it. Replying subscribes nobody. The toggle on each
 //!   thread and conversation page shows the viewer's subscription.
 
 mod common;
@@ -135,6 +136,8 @@ struct MessageModel {
     conversation: usize,
     seq: i64,
     body_token: String,
+    /// Whether it mentions both logged-in viewers.
+    mentions: bool,
     deleted: bool,
 }
 
@@ -483,10 +486,11 @@ impl World {
         assert_eq!(made, expected, "notifications about post {post_id}");
     }
 
-    /// DESIGN.md §9: who should be told about a new post, and how. Someone
-    /// mentioned hears of it as a mention; otherwise someone subscribed to
-    /// its thread hears of it as a new post there, or in a conversation as
-    /// a message. Nobody hears of their own posts or of what they can't
+    /// DESIGN.md §9: who should be told about a new post, and how. In a
+    /// conversation, someone subscribed to it hears of it as a message.
+    /// Otherwise someone mentioned hears of it as a mention, subscribed or
+    /// not, and someone subscribed to its thread hears of it as a new post
+    /// there. Nobody hears of their own posts or of what they can't
     /// read. (The model has no blocks.)
     fn expected_notified(&self, post_id: i64) -> BTreeMap<i64, &'static str> {
         let mut told = BTreeMap::new();
@@ -520,12 +524,16 @@ impl World {
                 )
                 .unwrap();
             for &user in &c.participants {
-                if user != author
-                    && !m.deleted
-                    && self.conversation_readable_by(m.conversation, user)
-                    && self.subscriptions.contains(&(user, c.id))
+                if user == author
+                    || m.deleted
+                    || !self.conversation_readable_by(m.conversation, user)
                 {
+                    continue;
+                }
+                if self.subscriptions.contains(&(user, c.id)) {
                     told.insert(user, "message");
+                } else if m.mentions && (user == self.member_id || user == self.staff_id) {
+                    told.insert(user, "mention");
                 }
             }
         }
@@ -588,6 +596,7 @@ impl World {
             conversation,
             seq: self.conversations[conversation].last_seq,
             body_token: token,
+            mentions: mention,
             deleted: false,
         });
         self.changed(Change::PostCreated { post_id: id });
@@ -1712,6 +1721,7 @@ impl World {
             conversation: self.conversations.len() - 1,
             seq: 1,
             body_token,
+            mentions: mention,
             deleted: false,
         });
         self.changed(Change::PostCreated {

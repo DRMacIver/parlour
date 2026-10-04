@@ -4,15 +4,17 @@
 //! A new post queues a `notify` job in the same transaction that writes
 //! it. The job works out who might want to know:
 //!
+//! - members mentioned in it (`mention`), whether or not they are
+//!   subscribed;
 //! - in a conversation, everyone else in it who is subscribed to it (a
 //!   `message`): everyone in a conversation is, until they unsubscribe;
-//! - in a space thread, members mentioned (`mention`) and members
-//!   subscribed to the thread (`subscription`): its author, and anyone who
-//!   subscribed from its page. Replying subscribes nobody, and nothing
-//!   subscribes anyone to a space.
+//! - in a space thread, members subscribed to the thread
+//!   (`subscription`): its author, and anyone who subscribed from its
+//!   page. Replying subscribes nobody, and nothing subscribes anyone to a
+//!   space.
 //!
-//! Each member gets at most one notification per post, a mention rather
-//! than a subscription. Nobody is notified of their own posts, or of posts
+//! Each member gets at most one notification per post: a message rather
+//! than a mention, and a mention rather than a subscription. Nobody is notified of their own posts, or of posts
 //! by someone they blocked (unless that someone is staff). And nobody is
 //! notified of a post they can't read: each candidate is checked by asking
 //! the access layer for the post as them. Muting a space takes it off a
@@ -105,11 +107,13 @@ async fn candidates(state: &AppState, post: &PostFacts) -> sqlx::Result<BTreeMap
             for user in subscribers {
                 consider(&mut candidates, user, Kind::Subscription);
             }
-            let mentioned = store::render_post(db, &post.body_md).await?.mentions;
-            for user in stored::ids_named(db, &mentioned).await? {
-                consider(&mut candidates, user, Kind::Mention);
-            }
         }
+    }
+    // Mentioned members hear of it whether or not they are subscribed;
+    // in a conversation, the read check below drops anyone not in it.
+    let mentioned = store::render_post(db, &post.body_md).await?.mentions;
+    for user in stored::ids_named(db, &mentioned).await? {
+        consider(&mut candidates, user, Kind::Mention);
     }
     candidates.remove(&post.author_id);
     if !post.author_is_staff {
