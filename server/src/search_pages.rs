@@ -119,7 +119,12 @@ pub async fn search_page(
     };
     let mut template = SearchTemplate {
         layout: Layout::load(&state, &viewer, Nav::Search).await?,
-        spaces: content::readable_spaces(state.db(), &viewer).await?,
+        // Feeds without threads are left out (DESIGN.md §3.2).
+        spaces: content::readable_spaces(state.db(), &viewer)
+            .await?
+            .into_iter()
+            .filter(|c| c.listed())
+            .collect(),
         searched: !query.text.is_empty(),
         no_terms: false,
         hits: Vec::new(),

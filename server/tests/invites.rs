@@ -1563,3 +1563,37 @@ async fn without_a_mail_server_invites_arent_emailed(db: PgPool) {
         .unwrap();
     assert_eq!(jobs, 0);
 }
+
+/// Usernames and space addresses share one namespace (DESIGN.md §3.1): a
+/// new member can't take the address of a space, since their feed goes
+/// there (§3.2). Someone who joins gets their feed at once.
+#[sqlx::test]
+async fn a_new_username_cant_be_a_spaces_address(db: PgPool) {
+    let Inviter { forum, cookie, .. } = setup(db, "user").await;
+    forum.unlisted_space("games", "members").await;
+    for (n, name) in ["games", "Games", "otto"].into_iter().enumerate() {
+        let link = make_invite(
+            &forum,
+            &cookie,
+            &[("email", ""), ("note", ""), ("days", "7"), ("uses", "1")],
+        )
+        .await;
+        let response = join(&forum, &link, name, &format!("new{n}@example.com")).await;
+        if name == "otto" {
+            assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+        } else {
+            assert!(
+                response.body.contains("That username is taken."),
+                "{name}: {}",
+                response.body
+            );
+        }
+    }
+    let feeds: Vec<String> = sqlx::query_scalar(
+        "SELECT c.slug FROM spaces c JOIN users u ON u.id = c.owner_user_id ORDER BY c.id",
+    )
+    .fetch_all(&forum.db)
+    .await
+    .unwrap();
+    assert_eq!(feeds, ["ruth", "otto"]);
+}

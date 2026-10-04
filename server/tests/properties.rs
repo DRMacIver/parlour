@@ -63,8 +63,8 @@ use parlour::cache::PageCache;
 use parlour::changes::Change;
 use parlour::content::uploads::UploadAccess;
 use parlour::content::{
-    self, Deps, Embed, LatestScope, POSTS_PER_PAGE, PostBody, THREADS_PER_PAGE, page_count,
-    page_of_seq,
+    self, Deps, Embed, KindFilter, LatestScope, POSTS_PER_PAGE, PostBody, SpaceSort,
+    THREADS_PER_PAGE, page_count, page_of_seq,
 };
 use parlour::db::Db;
 use parlour::groups::{self, GroupFields};
@@ -123,6 +123,9 @@ struct SpaceModel {
     read_groups: BTreeSet<usize>,
     /// The token in the space's current name.
     token: String,
+    /// Whether it is a member's feed (DESIGN.md §3.2): Ruth's, which is
+    /// out of sight until it has a thread.
+    feed: bool,
 }
 
 struct ConversationModel {
@@ -423,6 +426,10 @@ impl World {
         // first step.
         world.name_read_groups(3, BTreeSet::from([0, 2, 4]));
         world.name_read_groups(4, BTreeSet::from([3]));
+        // Ruth's feed (DESIGN.md §3.2), which every member has: open to
+        // visitors, on the default front page, and named with a token, so
+        // that any page showing it before its first thread is caught.
+        world.add_feed(ruth);
         // Everyone can be emailed, as soon as a notification is made.
         world.exec("UPDATE users SET email_verified_at = now()".to_owned());
         world
@@ -485,7 +492,106 @@ impl World {
             read_level: level,
             read_groups: BTreeSet::new(),
             token,
+            feed: false,
         });
+    }
+
+    /// Starts a thread in space `space` by `author`, as the form does.
+    fn start_thread(&mut self, tc: &TestCase, space: usize, author: i64) {
+        let fork_of = if self.posts.is_empty() || !tc.draw(gs::booleans()) {
+            None
+        } else {
+            Some(tc.draw(gs::integers::<usize>().max_value(self.posts.len() - 1)))
+        };
+        let pinned = tc.draw(gs::booleans());
+        let title_token = self.token();
+        let body_token = self.token();
+        let created = self
+            .block(store::create_thread(
+                self.db(),
+                &NewThread {
+                    space_id: self.spaces[space].id,
+                    title: format!("Thread {title_token}"),
+                    author_id: author,
+                    body_md: format!("Opening {body_token}"),
+                    forked_from_post_id: fork_of.map(|p| self.posts[p].id),
+                    pinned,
+                    locked: false,
+                    created_at: None,
+                },
+            ))
+            .unwrap();
+        self.threads.push(ThreadModel {
+            id: created.thread_id,
+            space,
+            title_token,
+            deleted: false,
+            last_seq: 1,
+            old_titles: Vec::new(),
+            merged_into: None,
+        });
+        // Starting a thread subscribes its author to it.
+        self.subscriptions.insert((author, created.thread_id));
+        self.posts.push(PostModel {
+            id: created.first_post_id,
+            thread: self.threads.len() - 1,
+            seq: 1,
+            author,
+            body_token,
+            mentions: false,
+            deleted: false,
+            hidden: false,
+            history: Vec::new(),
+            settled: false,
+        });
+        self.changed(Change::PostCreated {
+            post_id: created.first_post_id,
+        });
+        self.notify(created.first_post_id);
+    }
+
+    /// Opens member `owner`'s feed to visitors, names it with a token and
+    /// puts it on the default front page, as its owner and an admin can.
+    fn add_feed(&mut self, owner: i64) {
+        let token = self.token();
+        let (id, slug): (i64, String) = self
+            .block(
+                sqlx::query_as(
+                    "SELECT id, slug FROM spaces WHERE kind = 'feed' AND owner_user_id = $1",
+                )
+                .bind(owner)
+                .fetch_one(self.db()),
+            )
+            .unwrap();
+        self.exec(format!(
+            "UPDATE spaces SET name = 'Space {token}' WHERE id = {id}"
+        ));
+        self.block(store::set_grant(self.db(), id, "read", &Grant::public()))
+            .unwrap();
+        assert!(
+            self.block(layouts::follow(
+                self.db(),
+                self.default_layout,
+                self.default_section,
+                id
+            ))
+            .unwrap()
+        );
+        self.changed(Change::SpaceChanged { space_id: id });
+        self.spaces.push(SpaceModel {
+            id,
+            slug,
+            read_level: "public",
+            read_groups: BTreeSet::new(),
+            token,
+            feed: true,
+        });
+    }
+
+    /// Whether space `c` is out of sight in lists of spaces (DESIGN.md
+    /// §3.2): a feed with no thread that isn't deleted.
+    fn out_of_sight(&self, c: usize) -> bool {
+        self.spaces[c].feed && !self.threads.iter().any(|t| t.space == c && !t.deleted)
     }
 
     /// Has space `c`'s read grant name these groups and lists (indexes
@@ -501,7 +607,12 @@ impl World {
             read: Grant::from_parts(space.read_level, &group_ids, &[]),
             reply: Grant::members(),
             start: Grant::members(),
-            administer: Grant::staff(),
+            // A feed's owner always runs it; the store names them.
+            administer: if space.feed {
+                Grant::listed([], [])
+            } else {
+                Grant::staff()
+            },
         }
         .clean()
         .unwrap();
@@ -1035,7 +1146,12 @@ impl World {
     }
 
     fn paths(&self, who: Who) -> Vec<String> {
-        let mut paths = vec!["/".to_owned(), "/users/tree".to_owned()];
+        let mut paths = vec![
+            "/".to_owned(),
+            "/users/tree".to_owned(),
+            "/spaces".to_owned(),
+            "/spaces?kind=feed".to_owned(),
+        ];
         for name in ["ruth", "jonah", "maya", "viewer"] {
             paths.push(format!("/u/{name}"));
         }
@@ -1345,6 +1461,29 @@ impl World {
                 );
             }
         }
+        // A feed with no threads is in no list of spaces (DESIGN.md §3.2);
+        // its owner, Ruth, is never the viewer.
+        for (c, space) in self.spaces.iter().enumerate() {
+            for path in ["/", "/spaces", "/spaces?kind=feed"] {
+                let response = pages.get(path);
+                let listed = response
+                    .body
+                    .contains(&format!("href=\"/c/{}\"", space.slug));
+                if self.out_of_sight(c) {
+                    assert!(
+                        !response.body.contains(&space.token) && !listed,
+                        "{path} shows the empty feed {c} to {who:?}:\n{}",
+                        response.body
+                    );
+                } else if path != "/" && self.space_readable(c, who) {
+                    assert_eq!(
+                        listed,
+                        space.feed || path == "/spaces",
+                        "{who:?} {path} {c}"
+                    );
+                }
+            }
+        }
         // Visible things can be found where they should be, and invisible
         // things are not found at all.
         for (i, t) in self.threads.iter().enumerate() {
@@ -1542,56 +1681,36 @@ impl World {
     fn create_thread(&mut self, tc: TestCase) {
         let space = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
         let author = tc.draw(gs::sampled_from(self.users.clone()));
-        let fork_of = if self.posts.is_empty() || !tc.draw(gs::booleans()) {
-            None
+        self.start_thread(&tc, space, author);
+    }
+
+    /// Ruth's feed gets its first thread, or loses the threads it has
+    /// (DESIGN.md §3.2): either moves it into or out of every list of
+    /// spaces. Cached pages are checked at once, before anything else
+    /// clears them.
+    #[rule]
+    fn feed_comes_or_goes(&mut self, tc: TestCase) {
+        let feed = self.spaces.iter().position(|c| c.feed).unwrap();
+        if self.out_of_sight(feed) {
+            self.start_thread(&tc, feed, self.users[0]);
         } else {
-            Some(tc.draw(gs::integers::<usize>().max_value(self.posts.len() - 1)))
-        };
-        let pinned = tc.draw(gs::booleans());
-        let title_token = self.token();
-        let body_token = self.token();
-        let created = self
-            .block(store::create_thread(
-                self.db(),
-                &NewThread {
-                    space_id: self.spaces[space].id,
-                    title: format!("Thread {title_token}"),
-                    author_id: author,
-                    body_md: format!("Opening {body_token}"),
-                    forked_from_post_id: fork_of.map(|p| self.posts[p].id),
-                    pinned,
-                    locked: false,
-                    created_at: None,
-                },
-            ))
-            .unwrap();
-        self.threads.push(ThreadModel {
-            id: created.thread_id,
-            space,
-            title_token,
-            deleted: false,
-            last_seq: 1,
-            old_titles: Vec::new(),
-            merged_into: None,
-        });
-        // Starting a thread subscribes its author to it.
-        self.subscriptions.insert((author, created.thread_id));
-        self.posts.push(PostModel {
-            id: created.first_post_id,
-            thread: self.threads.len() - 1,
-            seq: 1,
-            author,
-            body_token,
-            mentions: false,
-            deleted: false,
-            hidden: false,
-            history: Vec::new(),
-            settled: false,
-        });
-        self.changed(Change::PostCreated {
-            post_id: created.first_post_id,
-        });
-        self.notify(created.first_post_id);
+            for t in 0..self.threads.len() {
+                if self.threads[t].space == feed && !self.threads[t].deleted {
+                    self.threads[t].deleted = true;
+                    let id = self.threads[t].id;
+                    self.exec(format!(
+                        "UPDATE threads SET deleted_at = now() WHERE id = {id}"
+                    ));
+                    self.changed(Change::ThreadChanged {
+                        thread_id: id,
+                        previous_space_id: None,
+                    });
+                }
+            }
+        }
+        if self.mode == Mode::Coherence {
+            self.check_coherence();
+        }
     }
 
     #[rule]
@@ -2479,6 +2598,10 @@ struct UserModel {
     /// Whether they have edited the layout; until then it follows the
     /// default.
     edited: bool,
+    /// What their Feeds section holds while it follows the default, which
+    /// copies of the default keep: their own feed, until they mute it
+    /// (DESIGN.md §3.5).
+    kept: BTreeSet<usize>,
     muted: BTreeSet<usize>,
 }
 
@@ -2496,9 +2619,13 @@ struct AccessSpace {
     read_groups: BTreeSet<usize>,
     write_level: &'static str,
     write_groups: BTreeSet<usize>,
+    /// The people the write grant names, with a `listed` level.
+    write_users: BTreeSet<usize>,
     essential: bool,
     /// Whether it is in the default layout's one section.
     on_default: bool,
+    /// For a feed (DESIGN.md §3.2), the member whose it is.
+    owner: Option<usize>,
 }
 
 struct AccessThread {
@@ -2636,8 +2763,38 @@ impl Access {
                 layout,
                 sections: BTreeSet::new(),
                 edited: false,
+                kept: BTreeSet::new(),
                 muted: BTreeSet::new(),
             });
+        }
+        // Every member has a feed from the moment their account exists:
+        // members read and reply, they alone start threads and run it, and
+        // it waits in their own Feeds section (DESIGN.md §3.2).
+        for u in 0..world.users.len() {
+            let (id, slug): (i64, String) = world
+                .block(
+                    sqlx::query_as(
+                        "SELECT id, slug FROM spaces WHERE kind = 'feed' AND owner_user_id = $1",
+                    )
+                    .bind(world.users[u].id)
+                    .fetch_one(&world.pool),
+                )
+                .unwrap();
+            let c = world.spaces.len();
+            world.spaces.push(AccessSpace {
+                id,
+                slug,
+                level: "members",
+                read_groups: BTreeSet::new(),
+                write_level: "listed",
+                write_groups: BTreeSet::new(),
+                write_users: BTreeSet::from([u]),
+                essential: false,
+                on_default: false,
+                owner: Some(u),
+            });
+            world.users[u].kept.insert(c);
+            world.users[u].sections.insert(c);
         }
         for _ in 0..2 {
             world.add_group();
@@ -2731,8 +2888,10 @@ impl Access {
             read_groups: BTreeSet::new(),
             write_level: "members",
             write_groups: BTreeSet::new(),
+            write_users: BTreeSet::new(),
             essential: false,
             on_default: true,
+            owner: None,
         });
         self.default_changed();
     }
@@ -2745,12 +2904,29 @@ impl Access {
     }
 
     /// What a change to the default layout does: every member who hasn't
-    /// edited their copy gets the default again, less what they have muted.
+    /// edited their copy gets the default again, less what they have
+    /// muted, keeping what their Feeds section holds.
     fn default_changed(&mut self) {
         let default = self.default_set();
         for user in &mut self.users {
             if !user.edited {
-                user.sections = default.difference(&user.muted).copied().collect();
+                user.sections = default
+                    .difference(&user.muted)
+                    .chain(&user.kept)
+                    .copied()
+                    .collect();
+            }
+        }
+    }
+
+    /// Whether lists of spaces show space `c` to `who` (DESIGN.md §3.2):
+    /// a topic space always, a feed once it has a thread that isn't
+    /// deleted, and a member's own feed always.
+    fn in_view(&self, who: Option<usize>, c: usize) -> bool {
+        match self.spaces[c].owner {
+            None => true,
+            Some(owner) => {
+                who == Some(owner) || self.threads.iter().any(|t| t.space == c && !t.deleted)
             }
         }
     }
@@ -3031,7 +3207,7 @@ impl Access {
             && self.reads_space(who, space)
             && match c.write_level {
                 "members" => true,
-                "listed" => self.lets_in(&c.write_groups, u),
+                "listed" => self.lets_in(&c.write_groups, u) || c.write_users.contains(&u),
                 _ => user.staff,
             }
     }
@@ -3106,7 +3282,15 @@ impl Access {
         let to_ids = |groups: &BTreeSet<usize>| -> Vec<i64> {
             groups.iter().map(|&g| self.groups[g]).collect()
         };
-        let write = Grant::from_parts(write_level, &to_ids(&write_groups), &[]);
+        // A feed's owner keeps starting threads in it when the write grant
+        // lists who may, and always runs it: the form doesn't name them
+        // there, and the store does.
+        let write_users: BTreeSet<usize> = match (space.owner, write_level) {
+            (Some(owner), "listed") => BTreeSet::from([owner]),
+            _ => BTreeSet::new(),
+        };
+        let user_ids: Vec<i64> = write_users.iter().map(|&u| self.users[u].id).collect();
+        let write = Grant::from_parts(write_level, &to_ids(&write_groups), &user_ids);
         let settings = SpaceSettings {
             slug: space.slug.clone(),
             name: format!("Space {c}"),
@@ -3114,7 +3298,11 @@ impl Access {
             read: Grant::from_parts(level, &to_ids(&read_groups), &[]),
             reply: write.clone(),
             start: write,
-            administer: Grant::staff(),
+            administer: if space.owner.is_some() {
+                Grant::listed([], [])
+            } else {
+                Grant::staff()
+            },
         }
         .clean()
         .unwrap();
@@ -3134,6 +3322,7 @@ impl Access {
         } else {
             BTreeSet::new()
         };
+        space.write_users = write_users;
     }
 
     fn viewer(&self, who: Option<usize>) -> Viewer {
@@ -3210,7 +3399,12 @@ impl Access {
         let essential: BTreeSet<i64> = front.essential.iter().map(|s| s.space.id).collect();
         let expected = Self::ids(
             &self.spaces,
-            |c| self.spaces[c].essential && self.reads_space(who, c) && !self.muted(who, c),
+            |c| {
+                self.spaces[c].essential
+                    && self.reads_space(who, c)
+                    && !self.muted(who, c)
+                    && self.in_view(who, c)
+            },
             |c| c.id,
         );
         assert_eq!(essential, expected, "{who:?}: essential spaces");
@@ -3227,6 +3421,7 @@ impl Access {
                     && following.contains(&c)
                     && self.reads_space(who, c)
                     && !self.muted(who, c)
+                    && self.in_view(who, c)
             },
             |c| c.id,
         );
@@ -3235,7 +3430,13 @@ impl Access {
             front.sections.iter().all(|s| !s.spaces.is_empty()),
             "{who:?}: an empty section is shown"
         );
-        assert_eq!(front.any_spaces, !readable_spaces.is_empty());
+        // Whether there is anything to read, their own feed waiting for its
+        // first thread aside.
+        assert_eq!(
+            front.any_spaces,
+            (0..self.spaces.len()).any(|c| self.reads_space(who, c) && self.in_view(None, c)),
+            "{who:?}: any spaces"
+        );
 
         // The layout editor (DESIGN.md §3.5): the viewer's layout (the
         // default for a visitor, as the admin's editor shows it) with the
@@ -3287,9 +3488,16 @@ impl Access {
         );
         assert_eq!(arranged, expected, "{who:?}: the editor's spaces");
         let available: BTreeSet<i64> = arrangement.available.iter().map(|c| c.id).collect();
+        // A feed without threads is offered only to its owner, for their
+        // own layout (a visitor's is the default).
         let expected = Self::ids(
             &self.spaces,
-            |c| !following.contains(&c) && self.reads_space(who, c) && !self.muted(who, c),
+            |c| {
+                !following.contains(&c)
+                    && self.reads_space(who, c)
+                    && !self.muted(who, c)
+                    && self.in_view(who, c)
+            },
             |c| c.id,
         );
         assert_eq!(available, expected, "{who:?}: spaces to add");
@@ -3387,7 +3595,9 @@ impl Access {
             }
             let visible = spaces
                 .iter()
-                .filter(|&&c| self.reads_space(who, c) && !self.muted(who, c))
+                .filter(|&&c| {
+                    self.reads_space(who, c) && !self.muted(who, c) && self.in_view(who, c)
+                })
                 .count() as i64;
             assert_eq!(
                 tab.spaces, visible,
@@ -3446,6 +3656,50 @@ impl Access {
                 assert!(page.threads.is_empty(), "{who:?}: someone else's section");
                 assert_eq!(page.thread_count, 0);
             }
+        }
+
+        // The space index (DESIGN.md §3.5): the spaces of the kinds asked
+        // for that the viewer can read and hasn't muted, feeds only once
+        // they have a thread, their owners' included (§3.2).
+        for kinds in [KindFilter::Both, KindFilter::Topic, KindFilter::Feed] {
+            let index: BTreeSet<i64> = self
+                .block(content::space_index(
+                    db,
+                    &viewer,
+                    SpaceSort::Created,
+                    kinds,
+                    false,
+                    false,
+                    &mut deps,
+                ))
+                .unwrap()
+                .iter()
+                .map(|listing| {
+                    let c = self
+                        .spaces
+                        .iter()
+                        .position(|c| c.id == listing.space.id)
+                        .unwrap();
+                    assert_eq!(listing.feed, self.spaces[c].owner.is_some());
+                    listing.space.id
+                })
+                .collect();
+            let expected = Self::ids(
+                &self.spaces,
+                |c| {
+                    let feed = self.spaces[c].owner.is_some();
+                    self.reads_space(who, c)
+                        && !self.muted(who, c)
+                        && self.in_view(None, c)
+                        && match kinds {
+                            KindFilter::Both => true,
+                            KindFilter::Topic => !feed,
+                            KindFilter::Feed => feed,
+                        }
+                },
+                |c| c.id,
+            );
+            assert_eq!(index, expected, "{who:?}: the space index of {kinds:?}");
         }
 
         for (c, space) in self.spaces.iter().enumerate() {
@@ -3934,7 +4188,7 @@ impl Access {
 
     #[rule]
     fn new_space(&mut self, tc: TestCase) {
-        tc.assume(self.spaces.len() < 5);
+        tc.assume(self.spaces.iter().filter(|c| c.owner.is_none()).count() < 5);
         let level = tc.draw(gs::sampled_from(LEVELS.to_vec()));
         self.add_space(level);
     }
@@ -4058,6 +4312,7 @@ impl Access {
                 assert_eq!(outcome, MuteOutcome::Muted);
                 self.users[u].muted.insert(c);
                 self.users[u].sections.remove(&c);
+                self.users[u].kept.remove(&c);
             }
         }
     }
@@ -4076,6 +4331,7 @@ impl Access {
                     .unwrap()
             );
             self.users[u].sections.remove(&c);
+            self.users[u].kept.remove(&c);
         } else {
             let section = self
                 .block(layouts::read(&self.db, layout))
@@ -4518,6 +4774,31 @@ impl Access {
     /// Everything each viewer can get from the content module. It makes
     /// hundreds of queries, so it is sampled: it always runs on the first
     /// and last states, and now and then in between.
+    /// A feed's owner always runs it (DESIGN.md §3.2), whatever its
+    /// administrators have saved.
+    #[invariant]
+    fn feeds_are_run_by_their_owners(&self, _: TestCase) {
+        for c in &self.spaces {
+            let Some(owner) = c.owner else { continue };
+            let (level, user_ids): (String, Vec<i64>) = self
+                .block(
+                    sqlx::query_as(
+                        "SELECT level, user_ids FROM space_grants
+                         WHERE space_id = $1 AND verb = 'administer'",
+                    )
+                    .bind(c.id)
+                    .fetch_one(&self.pool),
+                )
+                .unwrap();
+            assert!(
+                level == "members"
+                    || (level == "listed" && user_ids.contains(&self.users[owner].id)),
+                "feed {} is run by {level} {user_ids:?}",
+                c.slug
+            );
+        }
+    }
+
     #[invariant]
     fn every_viewer_sees_exactly_what_they_may(&self, _: TestCase) {
         self.check_viewer(None);

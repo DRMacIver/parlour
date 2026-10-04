@@ -262,9 +262,10 @@ pub async fn section_of<'c>(
 // ---------------------------------------------------------------------------
 // Copies of the default
 
-/// Gives a member a layout: a copy of the default with an empty "Feeds"
-/// section at the end. Called wherever an account is made. A member who
-/// has one already keeps it.
+/// Gives a member a layout: a copy of the default with a "Feeds" section
+/// at the end holding their own feed (DESIGN.md §3.2, §3.5), so that they
+/// always see where to post. Called wherever an account is made. A member
+/// who has one already keeps it.
 pub async fn create_member_copy<'c>(db: impl Handle<'c>, user_id: i64) -> sqlx::Result<i64> {
     let mut tx = db.open(KEY).begin().await?;
     ensure_default(&mut tx).await?;
@@ -283,7 +284,13 @@ pub async fn create_member_copy<'c>(db: impl Handle<'c>, user_id: i64) -> sqlx::
         Some(id) => {
             sqlx::query_scalar!(r#"SELECT layout_copy_default($1) AS "id!""#, id)
                 .fetch_one(&mut *tx)
-                .await?
+                .await?;
+            // Copies of the default keep the Feeds section and what is in
+            // it, so the feed stays there until the member moves it.
+            sqlx::query!("SELECT layout_add_own_feed($1)", id)
+                .execute(&mut *tx)
+                .await?;
+            id
         }
         None => {
             sqlx::query_scalar!("SELECT id FROM layouts WHERE user_id = $1", user_id)

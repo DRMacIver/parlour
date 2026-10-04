@@ -7,12 +7,13 @@
 <div class="toolbar">
   {% if can_create %}<a class="button" href="/spaces/new">New space</a>{% endif %}
   <span class="toolbar-note">Sorted by {% if self.sort_is("created") %}newest first{% else %}<a href="{{ self.sort_href("created") }}">newest first</a>{% endif %} · {% if self.sort_is("activity") %}latest post{% else %}<a href="{{ self.sort_href("activity") }}">latest post</a>{% endif %} · {% if self.sort_is("name") %}name{% else %}<a href="{{ self.sort_href("name") }}">name</a>{% endif %}</span>
+  <span class="toolbar-note">Showing {% if self.kind_is("both") %}all{% else %}<a href="{{ self.kind_href("both") }}">all</a>{% endif %} · {% if self.kind_is("topic") %}topic spaces{% else %}<a href="{{ self.kind_href("topic") }}">topic spaces</a>{% endif %} · {% if self.kind_is("feed") %}members’ feeds{% else %}<a href="{{ self.kind_href("feed") }}">members’ feeds</a>{% endif %}</span>
   <span class="spacer"></span>
   {% if has_mutes || muted %}<a class="toolbar-note" href="{{ self.muted_href() }}">{% if muted %}Hide the spaces you’ve muted{% else %}Show the spaces you’ve muted{% endif %}</a>{% endif %}
   <a class="toolbar-note" href="{{ self.archived_href() }}">{% if archived %}Hide archived spaces{% else %}Show archived spaces{% endif %}</a>
 </div>
 {% if spaces.is_empty() %}
-<section class="panel"><p class="empty">There are no spaces yet.{% if can_create %} <a href="/spaces/new">Make the first one.</a>{% endif %}</p></section>
+<section class="panel"><p class="empty">{% if self.kind_is("feed") %}No member has started a thread in their feed yet.{% else %}There are no spaces yet.{% if can_create %} <a href="/spaces/new">Make the first one.</a>{% endif %}{% endif %}</p></section>
 {% else %}
 <table class="list space-list">
   <thead>
@@ -30,6 +31,7 @@
         <div class="row-title">
           <a href="/c/{{ space.space.slug }}">{{ space.space.name }}</a>
           {% call m::access_flag(space.read_level, space.group_names, space.list_names) %}{% endcall %}
+          {% if space.feed %}<span class="flag">Feed</span>{% endif %}
           {% if space.archived %}<span class="flag">Archived</span>{% endif %}
           {% if space.muted %}<span class="flag">Muted</span>{% endif %}
         </div>

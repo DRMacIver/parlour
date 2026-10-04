@@ -203,7 +203,7 @@ async fn members_arrange_their_own_front_page_with_plain_forms(pool: PgPool) {
         vec![
             section("Forum", &["general", "games"]),
             section("Reading", &["books"]),
-            section("Feeds", &[]),
+            section("Feeds", &["ruth"]),
             section("Mine", &[]),
         ]
     );
@@ -286,7 +286,7 @@ async fn members_arrange_their_own_front_page_with_plain_forms(pool: PgPool) {
             section("Home", &["general", "games"]),
             section("Reading", &[]),
             section("Mine", &["films", "books"]),
-            section("Feeds", &[]),
+            section("Feeds", &["ruth"]),
         ]
     );
 
@@ -342,7 +342,7 @@ async fn members_arrange_their_own_front_page_with_plain_forms(pool: PgPool) {
         vec![
             section("Home", &["general"]),
             section("Mine", &["books"]),
-            section("Feeds", &[]),
+            section("Feeds", &["ruth"]),
         ]
     );
     assert!(
@@ -445,7 +445,7 @@ async fn members_arrange_their_own_front_page_with_plain_forms(pool: PgPool) {
         vec![
             section("Forum", &["general", "games"]),
             section("Reading", &["books"]),
-            section("Feeds", &[]),
+            section("Feeds", &["jonah"]),
             section("His", &[])
         ]
     );
@@ -518,7 +518,7 @@ async fn the_editor_shows_only_what_the_member_can_read_and_keeps_the_rest(pool:
         shape(&f, layout).await,
         vec![
             section("Forum", &["general", "secret", "films"]),
-            section("Feeds", &[]),
+            section("Feeds", &["ruth"]),
         ]
     );
 }
@@ -780,7 +780,7 @@ async fn admins_arrange_the_default_front_page_for_everyone_who_follows_it(pool:
         vec![
             section("Forum", &["general", "games"]),
             section("Reading", &["books"]),
-            section("Feeds", &[]),
+            section("Feeds", &["ruth"]),
         ]
     );
     assert_eq!(shape(f, jonah_layout).await, jonah_before);
@@ -820,7 +820,7 @@ async fn admins_arrange_the_default_front_page_for_everyone_who_follows_it(pool:
     ];
     assert_eq!(shape(f, default).await, expected);
     let mut ruths = expected.clone();
-    ruths.push(section("Feeds", &[]));
+    ruths.push(section("Feeds", &["ruth"]));
     assert_eq!(shape(f, ruth_layout).await, ruths);
     let index = f.page("/").await;
     assert!(index.contains(">Books and films<"), "{index}");
@@ -846,7 +846,7 @@ async fn admins_arrange_the_default_front_page_for_everyone_who_follows_it(pool:
     assert_eq!(shape(f, default).await, vec![section("Forum", &["games"])]);
     assert_eq!(
         shape(f, ruth_layout).await,
-        vec![section("Forum", &["games"]), section("Feeds", &[])]
+        vec![section("Forum", &["games"]), section("Feeds", &["ruth"])]
     );
     assert!(!f.page("/").await.contains("Books and films"));
 
@@ -926,14 +926,14 @@ async fn admins_arrange_the_default_front_page_for_everyone_who_follows_it(pool:
     assert!(layouts::unmute(&f.db, ruth, games).await.unwrap());
     assert_eq!(
         shape(f, ruth_layout).await,
-        vec![section("Forum", &[]), section("Feeds", &[])]
+        vec![section("Forum", &[]), section("Feeds", &["ruth"])]
     );
     let response = a.submit(&format!("{DEFAULT}/apply"), &[]).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     assert_eq!(response.location(), format!("{DEFAULT}?done=applied"));
     assert_eq!(
         shape(f, ruth_layout).await,
-        vec![section("Forum", &["games"]), section("Feeds", &[])]
+        vec![section("Forum", &["games"]), section("Feeds", &["ruth"])]
     );
     assert_eq!(shape(f, jonah_layout).await, jonah_before);
     assert!(
@@ -1015,7 +1015,7 @@ async fn the_layout_editor_island_wraps_the_plain_forms_and_saves_through_the_ap
         island_shape(&props["layout"]),
         vec![
             section("Forum", &["general", "games"]),
-            section("Feeds", &[])
+            section("Feeds", &["ruth"])
         ]
     );
     assert_eq!(props["layout"]["sections"][0]["id"], my_forum);
@@ -1045,7 +1045,7 @@ async fn the_layout_editor_island_wraps_the_plain_forms_and_saves_through_the_ap
         island_shape(&body["layout"]),
         vec![
             section("Forum", &["general", "games"]),
-            section("Feeds", &[]),
+            section("Feeds", &["ruth"]),
             section("Mine", &[]),
         ]
     );
@@ -1074,7 +1074,7 @@ async fn the_layout_editor_island_wraps_the_plain_forms_and_saves_through_the_ap
         island_shape(&body["layout"]),
         vec![
             section("Forum", &["games"]),
-            section("Feeds", &[]),
+            section("Feeds", &["ruth"]),
             section("Mine", &["films", "general"]),
         ]
     );
@@ -1134,7 +1134,7 @@ async fn the_layout_editor_island_wraps_the_plain_forms_and_saves_through_the_ap
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         island_shape(&body["layout"]),
-        vec![section("Forum", &["games"]), section("Feeds", &[])]
+        vec![section("Forum", &["games"]), section("Feeds", &["ruth"])]
     );
     assert_eq!(
         slugs(&body["layout"]["available"]),
@@ -1176,7 +1176,7 @@ async fn the_layout_editor_island_wraps_the_plain_forms_and_saves_through_the_ap
     }
     assert_eq!(
         shape(&f, layout).await,
-        vec![section("Forum", &["games"]), section("Feeds", &[])]
+        vec![section("Forum", &["games"]), section("Feeds", &["ruth"])]
     );
     let default = layouts::default_id(&f.db).await.unwrap();
     assert_eq!(
@@ -1234,7 +1234,7 @@ async fn the_layout_editor_island_wraps_the_plain_forms_and_saves_through_the_ap
         vec![
             section("Forum", &["general", "games"]),
             section("Reading", &["films"]),
-            section("Feeds", &[]),
+            section("Feeds", &["jonah"]),
         ]
     );
     // Marking a space essential is logged, like the plain form.
@@ -1389,7 +1389,7 @@ async fn a_step_that_changes_nothing_leaves_the_layout_following_the_default(poo
         before,
         vec![
             section("Forum", &["general", "games"]),
-            section("Feeds", &[])
+            section("Feeds", &["ruth"])
         ]
     );
 

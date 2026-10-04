@@ -1,8 +1,8 @@
 //! Member profiles and the public invite tree (DESIGN.md §3.6).
 //!
 //! Profile details and who invited whom are public. The one thing on a
-//! profile that depends on the viewer, the post count, comes from
-//! [`crate::content`].
+//! profile that depend on the viewer, the post count and whether their
+//! feed is shown, come from [`crate::content`].
 
 use std::collections::HashMap;
 
@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 
 use crate::accounts::Role;
 use crate::cache::Tag;
-use crate::content::{self, Deps, UserRef};
+use crate::content::{self, Deps, SpaceRef, UserRef};
 use crate::db::Db;
 use crate::viewer::Viewer;
 
@@ -28,6 +28,8 @@ pub struct Profile {
     pub invited_by: Option<UserRef>,
     /// Members who joined with this member's invites, oldest first.
     pub invitees: Vec<Member>,
+    /// Their feed (DESIGN.md §3.2), if the viewer can read it.
+    pub feed: Option<SpaceRef>,
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +83,7 @@ pub async fn profile(
     // New invitees clear `members`; renames clear `site`.
     deps.add(Tag::Members);
     let post_count = content::visible_post_count(db, viewer, row.id).await?;
+    let feed = content::feed_of(db, viewer, row.id).await?;
     Ok(Some(Profile {
         user: UserRef {
             id: row.id,
@@ -111,6 +114,7 @@ pub async fn profile(
             _ => None,
         },
         invitees,
+        feed,
     }))
 }
 

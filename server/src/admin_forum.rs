@@ -83,7 +83,12 @@ pub async fn spaces_page(
         &SpacesTemplate {
             layout: Layout::load(&state, &viewer, Nav::Admin).await?,
             notice: notice_for(&query.done),
-            spaces: content::readable_spaces(state.db(), &viewer).await?,
+            // Feeds without threads are left out (DESIGN.md §3.2).
+            spaces: content::readable_spaces(state.db(), &viewer)
+                .await?
+                .into_iter()
+                .filter(|c| c.listed())
+                .collect(),
         },
     )
 }

@@ -113,6 +113,7 @@ async fn setup_makes_the_first_spaces_and_the_default_front_page(db: PgPool) {
          FROM spaces c
          JOIN space_grants st ON st.space_id = c.id AND st.verb = 'start'
          JOIN space_grants a ON a.space_id = c.id AND a.verb = 'administer'
+         WHERE c.kind = 'topic'
          ORDER BY c.id",
     )
     .fetch_all(&forum.db)
@@ -137,10 +138,11 @@ async fn setup_makes_the_first_spaces_and_the_default_front_page(db: PgPool) {
             ),
         ]
     );
-    let created_by: Vec<Option<i64>> = sqlx::query_scalar("SELECT created_by FROM spaces")
-        .fetch_all(&forum.db)
-        .await
-        .unwrap();
+    let created_by: Vec<Option<i64>> =
+        sqlx::query_scalar("SELECT created_by FROM spaces WHERE kind = 'topic'")
+            .fetch_all(&forum.db)
+            .await
+            .unwrap();
     assert_eq!(created_by, vec![Some(sam), Some(sam)]);
 
     let shape = |layout_id: i64| {
@@ -170,6 +172,9 @@ async fn setup_makes_the_first_spaces_and_the_default_front_page(db: PgPool) {
     ];
     let default = layouts::default_id(&forum.db).await.unwrap();
     assert_eq!(shape(default).await, expected);
+    // The admin's own copy has their feed in its Feeds section.
+    let mut expected = expected;
+    expected[1].1.push("sam".to_owned());
     let mine = layouts::member_id(&forum.db, sam).await.unwrap().unwrap();
     assert_eq!(shape(mine).await, expected);
 

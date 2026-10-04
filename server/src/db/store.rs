@@ -214,10 +214,10 @@ impl SpaceSettings {
             administer: self.administer.clone(),
         };
         let mut problems = Vec::new();
-        if !crate::groups::valid_slug(&clean.slug) || clean.slug.len() > MAX_SPACE_SLUG_CHARS {
-            problems.push(format!(
-                "The address should be up to {MAX_SPACE_SLUG_CHARS} lower-case letters and digits, with single hyphens between words."
-            ));
+        // A feed's address is its owner's username, which may hold
+        // underscores; the store refuses one of those for a topic space.
+        if !(topic_slug(&clean.slug) || feed_slug(&clean.slug)) {
+            problems.push(SPACE_ADDRESS_FORM.to_owned());
         }
         if clean.name.is_empty() || clean.name.chars().count() > MAX_SPACE_NAME_CHARS {
             problems.push(format!(
@@ -252,7 +252,26 @@ impl SpaceSettings {
     }
 }
 
+pub const SPACE_ADDRESS_FORM: &str = "The address should be up to 40 lower-case letters and digits, with single hyphens between words.";
+
+/// Whether a topic space may have this address.
+fn topic_slug(slug: &str) -> bool {
+    crate::groups::valid_slug(slug) && slug.len() <= MAX_SPACE_SLUG_CHARS
+}
+
+/// Whether a feed may have this address: a username, in lower case.
+fn feed_slug(slug: &str) -> bool {
+    !slug.is_empty()
+        && slug.len() <= MAX_SPACE_SLUG_CHARS
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
 pub const SPACE_SLUG_TAKEN: &str = "Another space has that address.";
+pub const FEED_ADDRESS: &str = "A feed’s address is its owner’s username.";
+pub const FEED_RUN_BY_OWNER: &str = "The owner of a feed always runs it.";
+pub const FEED_NOT_DELETED: &str = "A feed can’t be deleted. Archive it instead.";
 pub const SPACE_SLUG_IS_USERNAME: &str =
     "That address is a member’s name. Space addresses and usernames can’t be the same.";
 
@@ -313,6 +332,9 @@ pub async fn add_space<'c>(
     settings: &SpaceSettings,
     created_by: Option<i64>,
 ) -> sqlx::Result<Result<i64, String>> {
+    if !topic_slug(&settings.slug) {
+        return Ok(Err(SPACE_ADDRESS_FORM.to_owned()));
+    }
     let mut tx = db.open(KEY).begin().await?;
     if slug_is_username(&mut tx, &settings.slug).await? {
         return Ok(Err(SPACE_SLUG_IS_USERNAME.to_owned()));
@@ -356,13 +378,32 @@ pub async fn update_space<'c>(
     settings: &SpaceSettings,
 ) -> sqlx::Result<Result<bool, String>> {
     let mut tx = db.open(KEY).begin().await?;
-    let current_slug = sqlx::query_scalar!("SELECT slug FROM spaces WHERE id = $1", id)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let Some(current_slug) = current_slug else {
+    let current = sqlx::query!(
+        "SELECT slug, owner_user_id FROM spaces WHERE id = $1 FOR UPDATE",
+        id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(current) = current else {
         return Ok(Ok(false));
     };
-    if current_slug != settings.slug && slug_is_username(&mut tx, &settings.slug).await? {
+    let mut settings = settings.clone();
+    // A feed is at its owner's username, and they always run it
+    // (DESIGN.md §3.2): a grant that lists who runs it lists them too.
+    if let Some(owner) = current.owner_user_id {
+        if settings.slug != current.slug {
+            return Ok(Err(FEED_ADDRESS.to_owned()));
+        }
+        match settings.administer.level {
+            Level::Members => {}
+            Level::Listed => {
+                settings.administer.user_ids.insert(owner);
+            }
+            Level::Public | Level::Staff => return Ok(Err(FEED_RUN_BY_OWNER.to_owned())),
+        }
+    } else if !topic_slug(&settings.slug) {
+        return Ok(Err(SPACE_ADDRESS_FORM.to_owned()));
+    } else if current.slug != settings.slug && slug_is_username(&mut tx, &settings.slug).await? {
         return Ok(Err(SPACE_SLUG_IS_USERNAME.to_owned()));
     }
     let updated = sqlx::query!(
@@ -389,11 +430,14 @@ pub async fn update_space<'c>(
 }
 
 /// Archives a space (read-only, out of the index) or opens it again.
-/// Returns whether anything changed.
+/// Returns whether anything changed. The feed of a member who deleted
+/// their account stays archived: nobody owns it now (DESIGN.md §3.2).
 pub async fn set_archived(db: &crate::db::Db, id: i64, archived: bool) -> sqlx::Result<bool> {
     let done = sqlx::query!(
-        "UPDATE spaces SET archived_at = CASE WHEN $2 THEN now() END, version = version + 1
-         WHERE id = $1 AND (archived_at IS NULL) = $2",
+        "UPDATE spaces c SET archived_at = CASE WHEN $2 THEN now() END, version = version + 1
+         WHERE c.id = $1 AND (c.archived_at IS NULL) = $2
+           AND ($2 OR NOT EXISTS (SELECT 1 FROM users u
+                                  WHERE u.id = c.owner_user_id AND u.deleted_at IS NOT NULL))",
         id,
         archived
     )
@@ -403,9 +447,19 @@ pub async fn set_archived(db: &crate::db::Db, id: i64, archived: bool) -> sqlx::
 }
 
 /// Deletes a space that has never had threads. Returns the problem if
-/// it has some, and `Ok(Ok(false))` if there is no such space.
+/// it has some or is a feed, which every member keeps (DESIGN.md §3.2),
+/// and `Ok(Ok(false))` if there is no such space.
 pub async fn delete_space(db: &crate::db::Db, id: i64) -> sqlx::Result<Result<bool, String>> {
     let mut tx = db.pool().begin().await?;
+    let feed = sqlx::query_scalar!(
+        r#"SELECT kind = 'feed' AS "feed!" FROM spaces WHERE id = $1"#,
+        id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    if feed == Some(true) {
+        return Ok(Err(FEED_NOT_DELETED.to_owned()));
+    }
     let threads = sqlx::query_scalar!(
         r#"SELECT count(*) AS "n!" FROM threads WHERE space_id = $1"#,
         id

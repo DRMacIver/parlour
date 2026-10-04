@@ -51,6 +51,13 @@ pub async fn tags_for(db: &Db, change: Change) -> sqlx::Result<Vec<Tag>> {
             if let Some(post) = post_context(db, post_id).await? {
                 tags.push(Tag::Thread(post.thread_id));
                 tags.extend(post.space_id.map(Tag::Space));
+                // A feed's first thread brings it into view.
+                if matches!(change, Change::PostCreated { .. })
+                    && post.seq == 1
+                    && feed_came_or_went(db, post.space_id).await?
+                {
+                    tags.push(Tag::Site);
+                }
                 tags.push(Tag::User(post.author_id));
                 // A new thread that quote-forks a post adds a backlink to the
                 // post's thread.
@@ -83,9 +90,16 @@ pub async fn tags_for(db: &Db, change: Change) -> sqlx::Result<Vec<Tag>> {
             )
             .fetch_optional(db.pool())
             .await?;
-            if let Some(thread) = thread {
+            if let Some(thread) = &thread {
                 tags.extend(thread.space_id.map(Tag::Space));
                 tags.extend(thread.forked_from_thread_id.map(Tag::Thread));
+            }
+            // Deleting, restoring or moving a thread can take a feed out
+            // of view or bring it in.
+            if feed_came_or_went(db, previous_space_id).await?
+                || feed_came_or_went(db, thread.and_then(|t| t.space_id)).await?
+            {
+                tags.push(Tag::Site);
             }
             // Post counts next to posts only count visible threads.
             let authors = sqlx::query_scalar!(
@@ -136,8 +150,31 @@ pub async fn post_seq(db: &Db, post_id: i64) -> sqlx::Result<Option<(i64, i64)>>
     Ok(row.map(|row| (row.thread_id, i64::from(row.seq))))
 }
 
+/// Whether a change in this space's threads may have brought a feed into
+/// view or taken it out (DESIGN.md §3.2): it is a feed with at most one
+/// thread that isn't deleted. A feed without threads is left out of the
+/// space index, front pages and the like, which are tagged `site`; clearing
+/// that only when a feed has one thread or none keeps busy feeds from
+/// clearing it on every post.
+async fn feed_came_or_went(db: &Db, space_id: Option<i64>) -> sqlx::Result<bool> {
+    let Some(space_id) = space_id else {
+        return Ok(false);
+    };
+    sqlx::query_scalar!(
+        r#"SELECT c.kind = 'feed'
+                  AND (SELECT count(*) FROM threads t
+                       WHERE t.space_id = c.id AND t.deleted_at IS NULL) <= 1 AS "turned!"
+           FROM spaces c WHERE c.id = $1"#,
+        space_id
+    )
+    .fetch_optional(db.pool())
+    .await
+    .map(|turned| turned.unwrap_or(false))
+}
+
 struct PostContext {
     thread_id: i64,
+    seq: i32,
     space_id: Option<i64>,
     author_id: i64,
     forked_from_thread_id: Option<i64>,
@@ -145,7 +182,7 @@ struct PostContext {
 
 async fn post_context(db: &Db, post_id: i64) -> sqlx::Result<Option<PostContext>> {
     let row = sqlx::query!(
-        r#"SELECT p.thread_id, p.author_id, t.space_id,
+        r#"SELECT p.thread_id, p.seq, p.author_id, t.space_id,
                   (SELECT sp.thread_id FROM posts sp WHERE sp.id = t.forked_from_post_id) AS forked_from_thread_id
            FROM posts p JOIN threads t ON t.id = p.thread_id
            WHERE p.id = $1"#,
@@ -155,6 +192,7 @@ async fn post_context(db: &Db, post_id: i64) -> sqlx::Result<Option<PostContext>
     .await?;
     Ok(row.map(|row| PostContext {
         thread_id: row.thread_id,
+        seq: row.seq,
         space_id: row.space_id,
         author_id: row.author_id,
         forked_from_thread_id: row.forked_from_thread_id,

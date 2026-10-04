@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH chosen AS (\n            SELECT id FROM layouts\n            WHERE user_id IS NOT DISTINCT FROM $3::bigint\n               OR (user_id IS NULL AND NOT EXISTS (SELECT 1 FROM layouts WHERE user_id = $3))\n            ORDER BY user_id NULLS LAST\n            LIMIT 1\n        )\n        SELECT s.id AS \"id?\", s.name AS \"name?\",\n               (SELECT count(*) FROM layout_section_spaces x JOIN spaces c ON c.id = x.space_id\n                WHERE x.section_id = s.id AND c.archived_at IS NULL\n                  AND space_readable(c.visibility, c.id, $1, $2)\n                  AND space_in_view(c.kind, c.owner_user_id, c.id, $3)\n                  AND ($3::bigint IS NULL\n                       OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $3 AND m.space_id = c.id))\n               ) AS \"spaces!\",\n               EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $3) AS \"has_mutes!\"\n        FROM chosen l\n        LEFT JOIN layout_sections s ON s.layout_id = l.id\n        ORDER BY s.position, s.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "layout_sections",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "layout_sections",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "spaces!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "has_mutes!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int8Array",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "fd04d2a9430ace8dd43aa08a3999106ffe82a979444ebdd6783872c34b57307a"
+}

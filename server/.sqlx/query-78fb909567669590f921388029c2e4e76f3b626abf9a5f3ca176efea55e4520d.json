@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT layout_add_own_feed($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "layout_add_own_feed",
+        "type_info": "Void",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "78fb909567669590f921388029c2e4e76f3b626abf9a5f3ca176efea55e4520d"
+}

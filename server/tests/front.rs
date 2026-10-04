@@ -137,10 +137,12 @@ async fn latest_has_a_tab_for_every_section_and_one_for_the_front_page(pool: PgP
     assert_eq!(response.location(), "/latest");
 
     // Members: All, Front page and the sections of their own layout, as
-    // long as there is something in them to see (Ruth's Feeds is empty).
+    // long as there is something in them to see (Ruth's Feeds holds her
+    // own feed).
     let ruth_layout = member_layout(&f, ruth).await;
     let my_forum = section_named(&f, ruth_layout, "Forum").await;
     let my_hobbies = section_named(&f, ruth_layout, "Hobbies").await;
+    let my_feeds = section_named(&f, ruth_layout, "Feeds").await;
     assert_ne!(my_hobbies, hobbies);
     let page = f.page_as("/latest", &cookie).await;
     assert_eq!(
@@ -150,6 +152,7 @@ async fn latest_has_a_tab_for_every_section_and_one_for_the_front_page(pool: PgP
             ("/latest/front".to_owned(), false),
             (format!("/latest/s/{my_forum}"), false),
             (format!("/latest/s/{my_hobbies}"), false),
+            (format!("/latest/s/{my_feeds}"), false),
         ]
     );
     assert_eq!(
@@ -676,7 +679,11 @@ async fn the_front_page_counts_unread_threads_and_sections_can_be_marked_read(po
     );
     assert_eq!(
         unread(&f, &viewer(&f, ruth).await).await,
-        [("games".to_owned(), Some(2)), ("books".to_owned(), Some(1))]
+        [
+            ("games".to_owned(), Some(2)),
+            ("books".to_owned(), Some(1)),
+            ("ruth".to_owned(), Some(0))
+        ]
     );
     let page = f.page_as("/", &cookie).await;
     assert!(page.contains("2 unread"), "{page}");
@@ -698,7 +705,11 @@ async fn the_front_page_counts_unread_threads_and_sections_can_be_marked_read(po
     assert_eq!(response.location(), format!("/latest/s/{my_forum}"));
     assert_eq!(
         unread(&f, &viewer(&f, ruth).await).await,
-        [("games".to_owned(), Some(0)), ("books".to_owned(), Some(0))]
+        [
+            ("games".to_owned(), Some(0)),
+            ("books".to_owned(), Some(0)),
+            ("ruth".to_owned(), Some(0))
+        ]
     );
     assert!(!f.page_as("/", &cookie).await.contains("unread"));
 
@@ -707,7 +718,11 @@ async fn the_front_page_counts_unread_threads_and_sections_can_be_marked_read(po
     f.post(mine.thread_id, jonah, "reply").await;
     assert_eq!(
         unread(&f, &viewer(&f, ruth).await).await,
-        [("games".to_owned(), Some(1)), ("books".to_owned(), Some(0))]
+        [
+            ("games".to_owned(), Some(1)),
+            ("books".to_owned(), Some(0)),
+            ("ruth".to_owned(), Some(0))
+        ]
     );
     let response = f
         .submit(
@@ -720,7 +735,11 @@ async fn the_front_page_counts_unread_threads_and_sections_can_be_marked_read(po
     assert_eq!(response.location(), "/");
     assert_eq!(
         unread(&f, &viewer(&f, ruth).await).await,
-        [("games".to_owned(), Some(0)), ("books".to_owned(), Some(0))]
+        [
+            ("games".to_owned(), Some(0)),
+            ("books".to_owned(), Some(0)),
+            ("ruth".to_owned(), Some(0))
+        ]
     );
 
     // Only the member's own sections, and only members.

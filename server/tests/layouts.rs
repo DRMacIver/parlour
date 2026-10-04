@@ -114,7 +114,7 @@ async fn every_new_member_gets_a_copy_of_the_default_with_a_feeds_section(pool: 
         shape(&f, ruth_layout).await,
         vec![
             section("Forum", &["announcements", "general"]),
-            section("Feeds", &[]),
+            section("Feeds", &["ruth"]),
         ]
     );
     let layout = layouts::read(&f.db, ruth_layout).await.unwrap().unwrap();
@@ -165,7 +165,7 @@ async fn every_new_member_gets_a_copy_of_the_default_with_a_feeds_section(pool: 
         shape(&f, member_layout(&f, jonah).await).await,
         vec![
             section("Forum", &["announcements", "general"]),
-            section("Feeds", &[]),
+            section("Feeds", &["jonah"]),
         ]
     );
 }
@@ -230,14 +230,14 @@ async fn changing_the_default_reaches_members_who_havent_edited_theirs(pool: PgP
     ];
     assert_eq!(shape(&f, default).await, expected_default);
     let mut expected_ruth = expected_default.clone();
-    expected_ruth.push(section("Feeds", &[]));
+    expected_ruth.push(section("Feeds", &["ruth"]));
     assert_eq!(shape(&f, ruth_layout).await, expected_ruth);
     assert_eq!(
         shape(&f, jonah_layout).await,
         vec![
             section("Spaces", &[]),
             section("Forum", &["general"]),
-            section("Feeds", &[]),
+            section("Feeds", &["jonah"]),
             section("Mine", &["hobbies"]),
         ]
     );
@@ -275,7 +275,7 @@ async fn changing_the_default_reaches_members_who_havent_edited_theirs(pool: PgP
         vec![
             section("Spaces", &[]),
             section("The forum", &["general", "games"]),
-            section("Feeds", &["hobbies"]),
+            section("Feeds", &["ruth", "hobbies"]),
         ]
     );
 }
@@ -300,7 +300,7 @@ async fn sections_and_spaces_are_arranged_in_order(pool: PgPool) {
     assert_eq!(
         shape(&f, layout).await,
         vec![
-            section("Feeds", &[]),
+            section("Feeds", &["ruth"]),
             section("A", &["games", "books", "films"]),
             section("B", &[]),
         ]
@@ -322,7 +322,7 @@ async fn sections_and_spaces_are_arranged_in_order(pool: PgPool) {
         shape(&f, layout).await,
         vec![
             section("B", &["books"]),
-            section("Feeds", &[]),
+            section("Feeds", &["ruth"]),
             section("A", &["films", "games"]),
         ]
     );
@@ -332,7 +332,7 @@ async fn sections_and_spaces_are_arranged_in_order(pool: PgPool) {
     assert!(!layouts::delete_section(&f.db, layout, b).await.unwrap());
     assert_eq!(
         shape(&f, layout).await,
-        vec![section("Feeds", &[]), section("A", &["films"])]
+        vec![section("Feeds", &["ruth"]), section("A", &["films"])]
     );
     assert_eq!(
         layouts::section_of(&f.db, layout, books).await.unwrap(),
@@ -361,7 +361,7 @@ async fn sections_and_spaces_are_arranged_in_order(pool: PgPool) {
     );
     assert_eq!(
         shape(&f, jonah_layout).await,
-        vec![section("Feeds", &[]), section("His", &[])]
+        vec![section("Feeds", &["jonah"]), section("His", &[])]
     );
 
     // A space can't be in two sections of one layout, however it gets there.
@@ -404,10 +404,14 @@ async fn visitors_see_the_default_and_members_their_own(pool: PgPool) {
         front_page(&f, &viewer(&f, ruth).await).await,
         (
             vec![],
-            vec![section("Forum", &["general"]), section("Mine", &["games"])]
+            vec![
+                section("Forum", &["general"]),
+                section("Feeds", &["ruth"]),
+                section("Mine", &["games"]),
+            ]
         )
     );
-    // Empty sections aren't shown: Ruth's Feeds section has nothing yet.
+    // Empty sections aren't shown.
     let page = f.page("/").await;
     assert_in_order(
         &page,
@@ -420,11 +424,12 @@ async fn visitors_see_the_default_and_members_their_own(pool: PgPool) {
         &[
             ">Forum<",
             "href=\"/c/general\"",
+            ">Feeds<",
+            "href=\"/c/ruth\"",
             ">Mine<",
             "href=\"/c/games\"",
         ],
     );
-    assert!(!page.contains("Feeds"));
 }
 
 #[sqlx::test]
@@ -442,7 +447,10 @@ async fn essential_spaces_come_first_whatever_the_layout(pool: PgPool) {
     );
     assert_eq!(
         front_page(&f, &viewer(&f, ruth).await).await,
-        (vec![], vec![section("Forum", &["general"])])
+        (
+            vec![],
+            vec![section("Forum", &["general"]), section("Feeds", &["ruth"])]
+        )
     );
 
     assert!(
@@ -455,12 +463,13 @@ async fn essential_spaces_come_first_whatever_the_layout(pool: PgPool) {
     })
     .await;
     for v in [Viewer::Anonymous, viewer(&f, ruth).await] {
+        let mut sections = vec![section("Forum", &["general"])];
+        if v.user_id().is_some() {
+            sections.push(section("Feeds", &["ruth"]));
+        }
         assert_eq!(
             front_page(&f, &v).await,
-            (
-                vec!["announcements".to_owned()],
-                vec![section("Forum", &["general"])]
-            ),
+            (vec!["announcements".to_owned()], sections),
             "{v:?}"
         );
     }
@@ -502,7 +511,10 @@ async fn essential_spaces_come_first_whatever_the_layout(pool: PgPool) {
     );
     assert_eq!(
         front_page(&f, &viewer(&f, ruth).await).await,
-        (vec![], vec![section("Forum", &["general"])])
+        (
+            vec![],
+            vec![section("Forum", &["general"]), section("Feeds", &["ruth"])]
+        )
     );
 }
 
@@ -536,7 +548,7 @@ async fn muted_spaces_leave_the_front_page_and_essential_ones_cant_be_muted(pool
         front_page(&f, &viewer(&f, ruth).await).await,
         (
             vec!["announcements".to_owned()],
-            vec![section("Forum", &["general"])]
+            vec![section("Forum", &["general"]), section("Feeds", &["ruth"])]
         )
     );
     // Muting left the member's sections, and isn't an edit of the layout:
@@ -581,7 +593,10 @@ async fn muted_spaces_leave_the_front_page_and_essential_ones_cant_be_muted(pool
         MuteOutcome::Muted
     );
     assert!(layouts::unmute(&f.db, ruth, general).await.unwrap());
-    assert_eq!(front_page(&f, &viewer(&f, ruth).await).await.1, vec![]);
+    assert_eq!(
+        front_page(&f, &viewer(&f, ruth).await).await.1,
+        vec![section("Feeds", &["ruth"])]
+    );
     assert_eq!(
         layouts::mute(&f.db, ruth, general).await.unwrap(),
         MuteOutcome::Muted
@@ -599,7 +614,7 @@ async fn muted_spaces_leave_the_front_page_and_essential_ones_cant_be_muted(pool
     );
     assert_eq!(
         front_page(&f, &viewer(&f, ruth).await).await.1,
-        vec![section("Forum", &["general"])]
+        vec![section("Forum", &["general"]), section("Feeds", &["ruth"])]
     );
     let muted: i64 = sqlx::query_scalar("SELECT count(*) FROM space_mutes WHERE user_id = $1")
         .bind(ruth)
@@ -631,7 +646,7 @@ async fn archived_and_unreadable_spaces_are_left_off_the_front_page(pool: PgPool
         front_page(&f, &viewer(&f, ruth).await).await,
         (
             vec!["lounge".to_owned()],
-            vec![section("Forum", &["general"])]
+            vec![section("Forum", &["general"]), section("Feeds", &["ruth"])]
         )
     );
     // The layout itself still lists them all.
@@ -712,12 +727,18 @@ async fn a_default_change_doesnt_put_a_muted_space_back_in_the_sections(pool: Pg
     // space she muted isn't in her copy of it.
     assert_eq!(
         shape(&f, ruth_layout).await,
-        vec![section("The forum", &["games"]), section("Feeds", &[])]
+        vec![
+            section("The forum", &["games"]),
+            section("Feeds", &["ruth"])
+        ]
     );
     assert!(layouts::unmute(&f.db, ruth, general).await.unwrap());
     assert_eq!(
         front_page(&f, &viewer(&f, ruth).await).await.1,
-        vec![section("The forum", &["games"])]
+        vec![
+            section("The forum", &["games"]),
+            section("Feeds", &["ruth"])
+        ]
     );
     assert!(
         layouts::read(&f.db, ruth_layout)
@@ -744,7 +765,7 @@ async fn a_default_change_doesnt_put_a_muted_space_back_in_the_sections(pool: Pg
         shape(&f, member_layout(&f, jonah).await).await,
         vec![
             section("The forum", &["general", "games"]),
-            section("Feeds", &[])
+            section("Feeds", &["jonah"])
         ]
     );
     // Ruth unmuted General above and still follows the default, so this
@@ -754,7 +775,7 @@ async fn a_default_change_doesnt_put_a_muted_space_back_in_the_sections(pool: Pg
         shape(&f, ruth_layout).await,
         vec![
             section("The forum", &["general", "games"]),
-            section("Feeds", &["books"])
+            section("Feeds", &["ruth", "books"])
         ]
     );
 }
@@ -809,7 +830,7 @@ async fn a_members_first_edit_survives_a_default_change_in_progress(pool: PgPool
         shape(&f, jonah_layout).await,
         vec![
             section("Forum", &["general"]),
-            section("Feeds", &[]),
+            section("Feeds", &["jonah"]),
             section("Mine", &[]),
         ]
     );
@@ -821,7 +842,7 @@ async fn a_members_first_edit_survives_a_default_change_in_progress(pool: PgPool
         vec![
             section("Forum", &["general"]),
             section("Reading", &[]),
-            section("Feeds", &[]),
+            section("Feeds", &["ruth"]),
         ]
     );
 }
@@ -863,7 +884,7 @@ async fn changes_to_the_default_are_serialised(pool: PgPool) {
     for name in ["ruth", "jonah", "maya", "kit", "sam"] {
         let user = f.user_id(name).await;
         let mut copy = shape(&f, member_layout(&f, user).await).await;
-        assert_eq!(copy.pop(), Some(section("Feeds", &[])), "{name}");
+        assert_eq!(copy.pop(), Some(section("Feeds", &[name])), "{name}");
         assert_eq!(copy, expected, "{name}");
     }
 }

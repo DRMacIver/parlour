@@ -3,13 +3,13 @@
 {% block title %}Settings · {{ space.space.name }} · {{ layout.site_name }}{% endblock %}
 
 {#- One verb's grant: a level, and for "listed" the groups and people. -#}
-{% macro grant_fields(verb, legend, grant, groups, allow_public, hint) %}
+{% macro grant_fields(verb, legend, grant, groups, allow_public, allow_staff, hint) %}
 <fieldset class="field">
   <legend>{{ legend }}</legend>
   {% if allow_public %}<label class="choice"><input type="radio" name="{{ verb }}_level" value="public"{% if grant.level == "public" %} checked{% endif %}> Everyone, including visitors who aren’t logged in</label>{% endif %}
   <label class="choice"><input type="radio" name="{{ verb }}_level" value="members"{% if grant.level == "members" %} checked{% endif %}> Any member</label>
-  <label class="choice"><input type="radio" name="{{ verb }}_level" value="staff"{% if grant.level == "staff" %} checked{% endif %}> Only moderators and admins</label>
-  <label class="choice"><input type="radio" name="{{ verb }}_level" value="listed"{% if grant.level == "listed" %} checked{% endif %}> Only the groups, lists and people named here:</label>
+  {% if allow_staff %}<label class="choice"><input type="radio" name="{{ verb }}_level" value="staff"{% if grant.level == "staff" %} checked{% endif %}> Only moderators and admins</label>{% endif %}
+  <label class="choice"><input type="radio" name="{{ verb }}_level" value="listed"{% if grant.level == "listed" %} checked{% endif %}> {% if allow_staff %}Only the groups, lists and people named here:{% else %}Only the owner and the groups, lists and people named here:{% endif %}</label>
   <div class="choice-group" role="group" aria-label="Groups, lists and people">
   {% for group in groups %}
     <label class="choice"><input type="checkbox" name="{{ verb }}_group" value="{{ group.value }}"{% if grant.ticked(group) %} checked{% endif %}> {{ group.label }}</label>
@@ -34,10 +34,16 @@
         <label for="name">Name</label>
         <input id="name" name="name" type="text" maxlength="80" value="{{ form.name }}" required>
       </div>
+      {% if space.is_feed() %}
+      <div class="field">
+        <p class="form-note">Address: /c/{{ space.space.slug }}. A feed is always at its owner’s username.</p>
+      </div>
+      {% else %}
       <div class="field">
         <label for="slug">Address <span class="field-hint">(/c/…)</span></label>
         <input id="slug" name="slug" type="text" maxlength="40" value="{{ form.slug }}" required pattern="[a-z0-9]+(-[a-z0-9]+)*">
       </div>
+      {% endif %}
     </div>
     <div class="field">
       <label for="description">Description <span class="field-hint">(optional; shown on the index)</span></label>
@@ -64,10 +70,14 @@
   </div>
   <h2 class="panel-bar">Who can do what</h2>
   <div class="form">
-    {% call grant_fields("read", "Who can read it", form.read, groups.read, true, "Nobody can post where they can’t read. Moderators and admins read every space for now.") %}{% endcall %}
-    {% call grant_fields("reply", "Who can reply in its threads", form.reply, groups.reply, false, "Of those who can read it.") %}{% endcall %}
-    {% call grant_fields("start", "Who can start threads", form.start, groups.start, false, "Of those who can read it.") %}{% endcall %}
-    {% call grant_fields("administer", "Who runs it", form.administer, groups.administer, false, "They change these settings, pin and lock threads, and can archive the space. Moderators and admins always can.") %}{% endcall %}
+    {% call grant_fields("read", "Who can read it", form.read, groups.read, true, true, "Nobody can post where they can’t read. Moderators and admins read every space for now.") %}{% endcall %}
+    {% call grant_fields("reply", "Who can reply in its threads", form.reply, groups.reply, false, true, "Of those who can read it.") %}{% endcall %}
+    {% call grant_fields("start", "Who can start threads", form.start, groups.start, false, true, "Of those who can read it.") %}{% endcall %}
+    {% if let Some(owner) = space.owner %}
+    {% call grant_fields("administer", "Who runs it", form.administer, groups.administer, false, false, self.feed_runner_hint(owner)) %}{% endcall %}
+    {% else %}
+    {% call grant_fields("administer", "Who runs it", form.administer, groups.administer, false, true, "They change these settings, pin and lock threads, and can archive the space. Moderators and admins always can.") %}{% endcall %}
+    {% endif %}
     <div class="form-actions">
       <button class="button" type="submit">Save</button>
       <a href="/c/{{ space.space.slug }}">Back to the space</a>
@@ -77,7 +87,9 @@
 <section class="panel" aria-labelledby="archive-heading">
   <h2 class="panel-bar" id="archive-heading">{% if space.archived() %}Archived{% else %}Archive{% endif %}</h2>
   <div class="form">
-    {% if space.archived() %}
+    {% if space.archived() && self.owner_gone() %}
+    <p class="form-note">The space is archived for good: it was the feed of a member who has deleted their account. Everyone who could read it still can, and nobody can post in it.</p>
+    {% else if space.archived() %}
     <p class="form-note">The space is archived: everyone who could read it still can, nobody can post in it, and it is left out of the index and the list of spaces unless asked for.</p>
     <form class="form-inline" method="post" action="/c/{{ space.space.slug }}/unarchive">
       <button class="button button-quiet" type="submit">Open it again</button>
@@ -93,7 +105,9 @@
 <section class="panel" aria-labelledby="delete-heading">
   <h2 class="panel-bar" id="delete-heading">Delete</h2>
   <div class="form">
-    {% if thread_count > 0 %}
+    {% if space.is_feed() %}
+    <p class="form-note">A feed can’t be deleted: every member has one. Archive it instead to close it to new posts.</p>
+    {% else if thread_count > 0 %}
     <p class="form-note">This space has {{ crate::format::plural(thread_count, "thread", "threads") }}, so it can’t be deleted. Archive it instead, or have its threads moved elsewhere first.</p>
     {% else %}
     <form class="form-inline" method="post" action="/c/{{ space.space.slug }}/delete">

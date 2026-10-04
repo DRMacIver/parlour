@@ -108,21 +108,29 @@ pub struct SpaceRef {
 /// The front page as one viewer sees it (DESIGN.md §3.5): the essential
 /// spaces, then the sections of their layout (the default layout for
 /// visitors), each with the spaces in it they can read. Archived spaces,
-/// spaces they can't read, spaces they have muted and empty sections are
-/// left out.
+/// spaces they can't read, spaces they have muted, other members' feeds
+/// that have no threads yet (DESIGN.md §3.2) and empty sections are left
+/// out.
 #[derive(Debug)]
 pub struct FrontPage {
     /// Essential spaces, in their order on the layout, then by name.
     pub essential: Vec<SpaceSummary>,
     pub sections: Vec<IndexSection>,
     /// Whether the viewer can read any live space at all, on the front
-    /// page or not.
+    /// page or not, other than their own feed while it has no threads.
     pub any_spaces: bool,
 }
 
 impl FrontPage {
+    /// Whether there is nothing on it but, perhaps, the viewer's own
+    /// feed, waiting for its first thread.
     pub fn is_empty(&self) -> bool {
-        self.essential.is_empty() && self.sections.is_empty()
+        self.essential.is_empty()
+            && self
+                .sections
+                .iter()
+                .flat_map(|s| &s.spaces)
+                .all(|s| s.own_feed && s.thread_count == 0)
     }
 }
 
@@ -144,6 +152,8 @@ pub struct SpaceSummary {
     /// And the lists, as the viewer may know them (DESIGN.md §3.3).
     pub list_names: Vec<String>,
     pub essential: bool,
+    /// Whether it is the viewer's own feed (DESIGN.md §3.2).
+    pub own_feed: bool,
     pub thread_count: i64,
     pub post_count: i64,
     /// For a logged-in viewer, how many of its threads have posts they
@@ -183,6 +193,7 @@ pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Resu
             JOIN layout_section_spaces x ON x.section_id = s.id
         )
         SELECT c.id, c.slug, c.name, c.description, c.essential, r.level AS read_level,
+               coalesce(c.owner_user_id = $3, false) AS "own_feed!",
                p.section_id AS "section_id?", p.section_name AS "section_name?",
                site_group_names(r.group_ids) AS "group_names!",
                list_labels(r.group_ids, $3) AS "list_names!",
@@ -219,6 +230,7 @@ pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Resu
         WHERE (c.essential OR p.space_id IS NOT NULL)
           AND c.archived_at IS NULL
           AND space_readable(c.visibility, c.id, $1, $2)
+          AND space_in_view(c.kind, c.owner_user_id, c.id, $3)
           AND ($3::bigint IS NULL
                OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $3 AND m.space_id = c.id))
         ORDER BY c.essential DESC, p.section_position NULLS LAST, p.section_id NULLS LAST,
@@ -232,10 +244,11 @@ pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Resu
     .await?;
     // Only an empty front page needs to know whether that is because
     // there are no spaces at all.
-    let any_spaces = !rows.is_empty()
+    let any_spaces = rows.iter().any(|row| !row.own_feed || row.thread_count > 0)
         || sqlx::query_scalar!(
             r#"SELECT EXISTS (SELECT 1 FROM spaces c
-                              WHERE c.archived_at IS NULL AND space_readable(c.visibility, c.id, $1, $2)) AS "e!""#,
+                              WHERE c.archived_at IS NULL AND space_readable(c.visibility, c.id, $1, $2)
+                                AND space_in_view(c.kind, c.owner_user_id, c.id, NULL)) AS "e!""#,
             &filter.visibilities,
             &filter.restricted_space_ids,
         )
@@ -260,6 +273,7 @@ pub async fn front_page(db: &Db, viewer: &Viewer, deps: &mut Deps) -> sqlx::Resu
             group_names: row.group_names,
             list_names: row.list_names,
             essential: row.essential,
+            own_feed: row.own_feed,
             thread_count: row.thread_count,
             post_count: row.post_count,
             unread: user_id.map(|_| row.unread),
@@ -344,6 +358,8 @@ pub struct SpacePage {
     /// And the lists, as the viewer may know them (DESIGN.md §3.3).
     pub list_names: Vec<String>,
     pub archived: bool,
+    /// For a feed, whose it is (DESIGN.md §3.2).
+    pub owner: Option<UserRef>,
     pub thread_count: i64,
     pub threads: Vec<ThreadRow>,
 }
@@ -366,9 +382,12 @@ pub async fn space_page(
                list_labels(r.group_ids, $4) AS "list_names!",
                (SELECT count(*) FROM threads t
                 WHERE t.space_id = c.id AND t.deleted_at IS NULL
-                  AND thread_readable(t.visibility, t.space_id, $2, $3)) AS "thread_count!"
+                  AND thread_readable(t.visibility, t.space_id, $2, $3)) AS "thread_count!",
+               o.id AS "owner_id?", o.username::text AS "owner_username?",
+               o.display_name AS "owner_display_name?"
         FROM spaces c
         JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'
+        LEFT JOIN users o ON o.id = c.owner_user_id AND o.deleted_at IS NULL
         WHERE c.slug = $1 AND space_readable(c.visibility, c.id, $2, $3)
         "#,
         slug,
@@ -394,6 +413,11 @@ pub async fn space_page(
         group_names: space.group_names,
         list_names: space.list_names,
         archived: space.archived,
+        owner: user_ref(
+            space.owner_id,
+            space.owner_username,
+            space.owner_display_name,
+        ),
         thread_count: space.thread_count,
         threads,
     }))
@@ -479,6 +503,7 @@ pub async fn layout_sections(
                (SELECT count(*) FROM layout_section_spaces x JOIN spaces c ON c.id = x.space_id
                 WHERE x.section_id = s.id AND c.archived_at IS NULL
                   AND space_readable(c.visibility, c.id, $1, $2)
+                  AND space_in_view(c.kind, c.owner_user_id, c.id, $3)
                   AND ($3::bigint IS NULL
                        OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $3 AND m.space_id = c.id))
                ) AS "spaces!",
@@ -873,10 +898,13 @@ pub async fn thread_page(
                 WHERE tr.thread_id = t.id AND tr.user_id = $4) AS read_marker,
                EXISTS (SELECT 1 FROM thread_subscriptions s
                        WHERE s.user_id = $5 AND s.thread_id = t.id) AS "subscribed!",
-               a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name
+               a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name,
+               o.id AS "owner_id?", o.username::text AS "owner_username?",
+               o.display_name AS "owner_display_name?", o.deleted_at IS NOT NULL AS "owner_deleted?"
         FROM threads t
         JOIN space_targets c ON c.id = t.space_id
         JOIN users a ON a.id = t.author_id
+        LEFT JOIN users o ON o.id = c.owner_user_id
         WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.space_id, $2, $3)
         "#,
         thread_id,
@@ -943,6 +971,17 @@ pub async fn thread_page(
                 ),
                 archived: thread.archived_at.is_some(),
             },
+            owner: user_ref(
+                thread.owner_id,
+                thread.owner_username,
+                thread.owner_display_name,
+            )
+            .map(|user| FeedOwner {
+                user,
+                deleted: thread.owner_deleted.unwrap_or(false),
+            }),
+            // This one, at least.
+            has_threads: true,
         },
         author: UserRef {
             id: thread.author_id,
@@ -1347,6 +1386,23 @@ pub async fn visible_post_count(db: &Db, viewer: &Viewer, user_id: i64) -> sqlx:
     .await
 }
 
+/// A member's feed (DESIGN.md §3.2), if the viewer can read it. A change
+/// to who may read it clears `site`.
+pub async fn feed_of(db: &Db, viewer: &Viewer, user_id: i64) -> sqlx::Result<Option<SpaceRef>> {
+    let filter = viewer.filter();
+    sqlx::query_as!(
+        SpaceRef,
+        "SELECT c.id, c.slug, c.name FROM spaces c
+         WHERE c.kind = 'feed' AND c.owner_user_id = $1
+           AND space_readable(c.visibility, c.id, $2, $3)",
+        user_id,
+        &filter.visibilities,
+        &filter.restricted_space_ids,
+    )
+    .fetch_optional(db.pool())
+    .await
+}
+
 // ---------------------------------------------------------------------------
 // Permalinks
 
@@ -1444,9 +1500,47 @@ pub struct SpaceTarget {
     pub created_at: DateTime<Utc>,
     /// Who may do what here.
     pub rules: SpaceRules,
+    /// For a feed (DESIGN.md §3.2), whose it is; `None` for a topic space.
+    pub owner: Option<FeedOwner>,
+    /// Whether it has a thread that isn't deleted. A feed without one is
+    /// left out of lists of spaces, except for its owner.
+    pub has_threads: bool,
+}
+
+/// The member whose feed a space is.
+#[derive(Clone, Debug)]
+pub struct FeedOwner {
+    pub user: UserRef,
+    /// Whether they have deleted their account, which archived the feed
+    /// for good.
+    pub deleted: bool,
 }
 
 impl SpaceTarget {
+    pub fn is_feed(&self) -> bool {
+        self.owner.is_some()
+    }
+
+    /// Whether this viewer is the space's owner: it is their feed.
+    pub fn owned_by(&self, viewer: &Viewer) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|owner| viewer.user_id() == Some(owner.user.id))
+    }
+
+    /// Whether lists of spaces for everyone show it, as the space index
+    /// does (DESIGN.md §3.2): a topic space always, a feed once it has a
+    /// thread.
+    pub fn listed(&self) -> bool {
+        self.owner.is_none() || self.has_threads
+    }
+
+    /// Whether a viewer's own lists of spaces show it: as [`Self::listed`],
+    /// and their own feed always, so that they see where to post.
+    pub fn in_view_of(&self, viewer: &Viewer) -> bool {
+        self.listed() || self.owned_by(viewer)
+    }
+
     pub fn audience(&self) -> Audience {
         self.rules.read.audience()
     }
@@ -1693,8 +1787,13 @@ async fn space_targets(
                c.administer_level AS "administer_level!", c.administer_group_ids AS "administer_group_ids!",
                c.administer_user_ids AS "administer_user_ids!",
                site_group_names(c.read_group_ids) AS "group_names!",
-               list_labels(c.read_group_ids, $5) AS "list_names!"
+               list_labels(c.read_group_ids, $5) AS "list_names!",
+               o.id AS "owner_id?", o.username::text AS "owner_username?",
+               o.display_name AS "owner_display_name?", o.deleted_at IS NOT NULL AS "owner_deleted?",
+               EXISTS (SELECT 1 FROM threads t WHERE t.space_id = c.id AND t.deleted_at IS NULL)
+                   AS "has_threads!"
         FROM space_targets c
+        LEFT JOIN users o ON o.id = c.owner_user_id
         WHERE space_readable(c.visibility, c.id, $1, $2)
           AND ($3::bigint IS NULL OR c.id = $3)
           AND ($4::text IS NULL OR c.slug = $4)
@@ -1742,6 +1841,13 @@ async fn space_targets(
                 ),
                 archived: row.archived_at.is_some(),
             },
+            owner: user_ref(row.owner_id, row.owner_username, row.owner_display_name).map(|user| {
+                FeedOwner {
+                    user,
+                    deleted: row.owner_deleted.unwrap_or(false),
+                }
+            }),
+            has_threads: row.has_threads,
         })
         .collect())
 }
@@ -1787,9 +1893,39 @@ impl SpaceSort {
     }
 }
 
+/// Which kinds of space `/spaces` lists (DESIGN.md §3.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KindFilter {
+    /// Topic spaces and feeds: the default.
+    Both,
+    Topic,
+    Feed,
+}
+
+impl KindFilter {
+    pub fn parse(s: &str) -> Option<KindFilter> {
+        match s {
+            "both" => Some(KindFilter::Both),
+            "topic" => Some(KindFilter::Topic),
+            "feed" => Some(KindFilter::Feed),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            KindFilter::Both => "both",
+            KindFilter::Topic => "topic",
+            KindFilter::Feed => "feed",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SpaceListing {
     pub space: SpaceRef,
+    /// Whether it is a member's feed (DESIGN.md §3.2).
+    pub feed: bool,
     pub description: String,
     pub read_level: String,
     pub group_names: Vec<String>,
@@ -1802,12 +1938,16 @@ pub struct SpaceListing {
     pub last_post_at: Option<DateTime<Utc>>,
 }
 
-/// Every space the viewer can read, for the space index: archived ones,
-/// and ones the viewer has muted, only when asked for.
+/// Every space of the kinds asked for that the viewer can read, for the
+/// space index: archived ones, and ones the viewer has muted, only when
+/// asked for. Feeds without threads are left out, their owners' included
+/// (DESIGN.md §3.2); a feed's first thread clears `site`
+/// ([`crate::changes`]).
 pub async fn space_index(
     db: &Db,
     viewer: &Viewer,
     sort: SpaceSort,
+    kinds: KindFilter,
     include_archived: bool,
     include_muted: bool,
     deps: &mut Deps,
@@ -1815,7 +1955,7 @@ pub async fn space_index(
     let filter = viewer.filter();
     let rows = sqlx::query!(
         r#"
-        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level,
+        SELECT c.id, c.slug, c.name, c.description, r.level AS read_level, c.kind = 'feed' AS "feed!",
                c.archived_at IS NOT NULL AS "archived!", c.created_at,
                EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $5 AND m.space_id = c.id) AS "muted!",
                site_group_names(r.group_ids) AS "group_names!",
@@ -1833,6 +1973,8 @@ pub async fn space_index(
           AND ($3 OR c.archived_at IS NULL)
           AND ($6 OR $5::bigint IS NULL
                OR NOT EXISTS (SELECT 1 FROM space_mutes m WHERE m.user_id = $5 AND m.space_id = c.id))
+          AND ($7 = 'both' OR c.kind = $7)
+          AND space_in_view(c.kind, c.owner_user_id, c.id, NULL)
         ORDER BY CASE WHEN $4 = 'name' THEN lower(c.name) END,
                  CASE WHEN $4 = 'activity' THEN counts.last_post_at END DESC NULLS LAST,
                  c.created_at DESC, c.id DESC
@@ -1843,6 +1985,7 @@ pub async fn space_index(
         sort.as_str(),
         viewer.user_id(),
         include_muted,
+        kinds.as_str(),
     )
     .fetch_all(db.pool())
     .await?;
@@ -1856,6 +1999,7 @@ pub async fn space_index(
                     slug: row.slug,
                     name: row.name,
                 },
+                feed: row.feed,
                 description: row.description,
                 read_level: row.read_level,
                 group_names: row.group_names,

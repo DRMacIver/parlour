@@ -131,8 +131,9 @@ async fn the_index_says_who_can_read_each_space(pool: PgPool) {
     let index = club.f.page_as("/", &club.ruth_cookie).await;
     // As in the mockup, a padlock marks members-only spaces and a
     // pair of people group ones (Main.dc.html).
+    // (The third is Ruth's own feed, which members read.)
     let flags = access_flags(&index);
-    assert_eq!(flags.len(), 2, "{index}");
+    assert_eq!(flags.len(), 3, "{index}");
     assert!(
         flags[0].ends_with(">Members only") && flags[0].contains(LOCK),
         "{}",

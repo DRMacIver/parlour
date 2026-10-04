@@ -1,0 +1,475 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq, t.pinned, t.locked, t.forked_from_post_id,\n               c.id AS \"space_id!\", c.slug AS \"space_slug!\", c.name AS \"space_name!\",\n               c.description AS \"space_description!\", c.essential AS \"essential!\",\n               c.visibility AS \"visibility!\", c.created_by AS \"created_by?\",\n               c.created_at AS \"space_created_at!\", c.archived_at AS \"archived_at?\",\n               c.read_level AS \"read_level!\", c.read_group_ids AS \"read_group_ids!\", c.read_user_ids AS \"read_user_ids!\",\n               c.reply_level AS \"reply_level!\", c.reply_group_ids AS \"reply_group_ids!\", c.reply_user_ids AS \"reply_user_ids!\",\n               c.start_level AS \"start_level!\", c.start_group_ids AS \"start_group_ids!\", c.start_user_ids AS \"start_user_ids!\",\n               c.administer_level AS \"administer_level!\", c.administer_group_ids AS \"administer_group_ids!\",\n               c.administer_user_ids AS \"administer_user_ids!\",\n               site_group_names(c.read_group_ids) AS \"group_names!\",\n               list_labels(c.read_group_ids, $5) AS \"list_names!\",\n               (SELECT tr.last_read_seq FROM thread_reads tr\n                WHERE tr.thread_id = t.id AND tr.user_id = $4) AS read_marker,\n               EXISTS (SELECT 1 FROM thread_subscriptions s\n                       WHERE s.user_id = $5 AND s.thread_id = t.id) AS \"subscribed!\",\n               a.id AS author_id, a.username AS author_username, a.display_name AS author_display_name,\n               o.id AS \"owner_id?\", o.username::text AS \"owner_username?\",\n               o.display_name AS \"owner_display_name?\", o.deleted_at IS NOT NULL AS \"owner_deleted?\"\n        FROM threads t\n        JOIN space_targets c ON c.id = t.space_id\n        JOIN users a ON a.id = t.author_id\n        LEFT JOIN users o ON o.id = c.owner_user_id\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND thread_readable(t.visibility, t.space_id, $2, $3)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "last_seq",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "last_seq"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "pinned",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "pinned"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "locked",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "locked"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "forked_from_post_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "forked_from_post_id"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "space_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "space_slug!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "space_name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "space_description!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "essential!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "essential"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "visibility!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "visibility"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "created_by?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "space_created_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "archived_at?",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "archived_at"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "read_level!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "read_level"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "read_group_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "read_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "read_user_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "read_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "reply_level!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "reply_level"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "reply_group_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "reply_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "reply_user_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "reply_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "start_level!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "start_level"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "start_group_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "start_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 25,
+        "name": "start_user_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "start_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 26,
+        "name": "administer_level!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "administer_level"
+          }
+        }
+      },
+      {
+        "ordinal": 27,
+        "name": "administer_group_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "administer_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 28,
+        "name": "administer_user_ids!",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "space_targets",
+            "name": "administer_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 29,
+        "name": "group_names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 30,
+        "name": "list_names!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 31,
+        "name": "read_marker",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 32,
+        "name": "subscribed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 33,
+        "name": "author_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 34,
+        "name": "author_username",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 35,
+        "name": "author_display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 36,
+        "name": "owner_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 37,
+        "name": "owner_username?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 38,
+        "name": "owner_display_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 39,
+        "name": "owner_deleted?",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null,
+      null,
+      null,
+      null,
+      false,
+      false,
+      false,
+      true,
+      null,
+      true,
+      null
+    ]
+  },
+  "hash": "b9bdb2977f9b2f06c8dbfe3aea41e0c67fb836105aa738766d73528baaa6b63a"
+}

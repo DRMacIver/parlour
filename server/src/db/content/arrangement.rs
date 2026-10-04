@@ -43,7 +43,8 @@ pub struct Arrangement {
     pub edited: bool,
     pub sections: Vec<ArrangedSection>,
     /// Spaces in no section that could be put in one: readable, not
-    /// archived, and not muted by the layout's owner. By name.
+    /// archived, not muted by the layout's owner, and not a feed without
+    /// threads unless it is the layout owner's own. By name.
     pub available: Vec<ArrangedSpace>,
     /// The readable spaces the layout's owner has muted, by name.
     #[serde(skip)]
@@ -111,11 +112,19 @@ pub async fn arrangement(
             spaces: s.spaces.iter().filter_map(|c| arranged(c.id)).collect(),
         })
         .collect();
-    // `readable` is in order of name already.
+    // `readable` is in order of name already. Feeds without threads aren't
+    // offered, except to their owners for their own layout (DESIGN.md
+    // §3.2).
     let available = readable
         .iter()
         .filter(|c| {
-            !placed.contains(&c.space.id) && !c.archived() && !muted_ids.contains(&c.space.id)
+            !placed.contains(&c.space.id)
+                && !c.archived()
+                && !muted_ids.contains(&c.space.id)
+                && (c.listed()
+                    || c.owner
+                        .as_ref()
+                        .is_some_and(|owner| layout.user_id == Some(owner.user.id)))
         })
         .filter_map(|c| arranged(c.space.id))
         .collect();

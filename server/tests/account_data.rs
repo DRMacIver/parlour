@@ -176,7 +176,7 @@ async fn members_download_their_data(pool: PgPool) {
         sections,
         [
             ("Spaces", vec![]),
-            ("Feeds", vec![]),
+            ("Feeds", vec!["ruth"]),
             ("Mine", vec!["games"])
         ]
     );

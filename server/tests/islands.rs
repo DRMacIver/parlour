@@ -452,7 +452,8 @@ async fn the_fork_dialog_offers_only_allowed_spaces(pool: PgPool) {
         .iter()
         .map(|c| c["slug"].as_str().unwrap())
         .collect();
-    assert_eq!(slugs, vec!["games", "lounge"]);
+    // Jonah may start threads in his own feed too.
+    assert_eq!(slugs, vec!["games", "jonah", "lounge"]);
     assert_eq!(fork["spaces"][0]["selected"], true);
     // A members-only post can't be quoted into a public space.
     let response = api(
@@ -469,7 +470,7 @@ async fn the_fork_dialog_offers_only_allowed_spaces(pool: PgPool) {
         .iter()
         .map(|c| c["slug"].clone())
         .collect();
-    assert_eq!(slugs, vec![json!("lounge")]);
+    assert_eq!(slugs, vec![json!("jonah"), json!("lounge")]);
 }
 
 #[sqlx::test]

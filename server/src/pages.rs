@@ -39,16 +39,23 @@ pub(crate) fn parse_id(id: &str) -> Option<i64> {
     id.parse().ok().filter(|&n: &i64| n >= 1)
 }
 
-/// Whether `slug` has the form the database requires of space and
-/// thread slugs, so that it can appear in a URL unescaped.
+/// Whether `slug` has the form the database requires of space slugs, so
+/// that it can appear in a URL unescaped: lower-case words with single
+/// hyphens between them, or a feed's, which is its owner's username in
+/// lower case and may hold underscores (DESIGN.md §3.2).
 pub(crate) fn well_formed_slug(slug: &str) -> bool {
-    !slug.is_empty()
+    let topic = !slug.is_empty()
         && slug.split('-').all(|part| {
             !part.is_empty()
                 && part
                     .bytes()
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
-        })
+        });
+    let feed = !slug.is_empty()
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    topic || feed
 }
 
 impl ThreadRow {
@@ -303,6 +310,8 @@ struct SpaceTemplate {
     muted: bool,
     /// Essential spaces can't be muted (DESIGN.md §3.5).
     essential: bool,
+    /// Whether this is the viewer's own feed (DESIGN.md §3.2).
+    own_feed: bool,
 }
 
 impl SpaceTemplate {
@@ -358,6 +367,9 @@ pub async fn space(
         None => (None, false),
     };
     let essential = target.as_ref().is_some_and(|target| target.essential);
+    let own_feed = target
+        .as_ref()
+        .is_some_and(|target| target.owned_by(&viewer));
     cacheable(
         &SpaceTemplate {
             layout: Layout::load(&state, &viewer, Nav::None).await?,
@@ -371,6 +383,7 @@ pub async fn space(
             following,
             muted,
             essential,
+            own_feed,
         },
         &deps,
     )

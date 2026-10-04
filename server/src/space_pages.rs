@@ -32,7 +32,8 @@ use crate::AppState;
 use crate::admin_pages::DoneQuery;
 use crate::changes::Change;
 use crate::content::{
-    self, Deps, GrantAudience, NamedGroup, SpaceAudience, SpaceListing, SpaceSort, SpaceTarget,
+    self, Deps, FeedOwner, GrantAudience, KindFilter, NamedGroup, SpaceAudience, SpaceListing,
+    SpaceSort, SpaceTarget,
 };
 use crate::error::AppError;
 use crate::format;
@@ -65,13 +66,19 @@ async fn may_create(state: &AppState, viewer: &Viewer) -> Result<bool, AppError>
 
 /// The one address for each view of the index, so that other spellings
 /// redirect there (DESIGN.md §5).
-fn index_href(sort: SpaceSort, archived: bool, muted: bool) -> String {
+fn index_href(sort: SpaceSort, kinds: KindFilter, archived: bool, muted: bool) -> String {
     let mut href = String::from("/spaces");
     let mut sep = '?';
     if sort != SpaceSort::Created {
         href.push(sep);
         href.push_str("sort=");
         href.push_str(sort.as_str());
+        sep = '&';
+    }
+    if kinds != KindFilter::Both {
+        href.push(sep);
+        href.push_str("kind=");
+        href.push_str(kinds.as_str());
         sep = '&';
     }
     if archived {
@@ -92,6 +99,7 @@ struct SpacesTemplate {
     layout: Layout,
     spaces: Vec<SpaceListing>,
     sort: SpaceSort,
+    kinds: KindFilter,
     archived: bool,
     /// Whether the spaces the member has muted are shown too.
     muted: bool,
@@ -109,17 +117,31 @@ impl SpacesTemplate {
     fn sort_href(&self, sort: &str) -> String {
         index_href(
             SpaceSort::parse(sort).unwrap_or(SpaceSort::Created),
+            self.kinds,
+            self.archived,
+            self.muted,
+        )
+    }
+
+    fn kind_is(&self, kinds: &str) -> bool {
+        self.kinds.as_str() == kinds
+    }
+
+    fn kind_href(&self, kinds: &str) -> String {
+        index_href(
+            self.sort,
+            KindFilter::parse(kinds).unwrap_or(KindFilter::Both),
             self.archived,
             self.muted,
         )
     }
 
     fn archived_href(&self) -> String {
-        index_href(self.sort, !self.archived, self.muted)
+        index_href(self.sort, self.kinds, !self.archived, self.muted)
     }
 
     fn muted_href(&self) -> String {
-        index_href(self.sort, self.archived, !self.muted)
+        index_href(self.sort, self.kinds, self.archived, !self.muted)
     }
 }
 
@@ -129,13 +151,26 @@ pub async fn index(
     uri: Uri,
 ) -> Result<Response, AppError> {
     let Query(params) = Query::<Vec<(String, String)>>::try_from_uri(&uri).unwrap_or_default();
-    let mut sorts = params.iter().filter(|(key, _)| key == "sort");
-    let sort = match (sorts.next(), sorts.next()) {
-        (None, _) => Some(SpaceSort::Created),
-        (Some((_, value)), None) => SpaceSort::parse(value),
-        (Some(_), Some(_)) => None,
+    // Each of these may be given once, or left out for its default.
+    let one = |name: &str| {
+        let mut values = params.iter().filter(|(key, _)| key == name);
+        match (values.next(), values.next()) {
+            (None, _) => Ok(None),
+            (Some((_, value)), None) => Ok(Some(value.as_str())),
+            (Some(_), Some(_)) => Err(()),
+        }
     };
-    let Some(sort) = sort else {
+    let sort = match one("sort") {
+        Ok(None) => Some(SpaceSort::Created),
+        Ok(Some(value)) => SpaceSort::parse(value),
+        Err(()) => None,
+    };
+    let kinds = match one("kind") {
+        Ok(None) => Some(KindFilter::Both),
+        Ok(Some(value)) => KindFilter::parse(value),
+        Err(()) => None,
+    };
+    let (Some(sort), Some(kinds)) = (sort, kinds) else {
         return web::not_found(&state, &viewer).await;
     };
     let flag = |name: &str| {
@@ -146,12 +181,14 @@ pub async fn index(
     let archived = flag("archived");
     // Visitors have nothing muted, so for them this is no view at all.
     let muted = flag("muted") && viewer.user().is_some();
-    if let Some(redirect) = redirect_unless_canonical(&uri, &index_href(sort, archived, muted)) {
+    if let Some(redirect) =
+        redirect_unless_canonical(&uri, &index_href(sort, kinds, archived, muted))
+    {
         return Ok(redirect);
     }
     let mut deps = Deps::new();
     let spaces =
-        content::space_index(state.db(), &viewer, sort, archived, muted, &mut deps).await?;
+        content::space_index(state.db(), &viewer, sort, kinds, archived, muted, &mut deps).await?;
     let has_mutes = match viewer.user() {
         Some(user) => layouts::has_mutes(state.db(), user.id).await?,
         None => false,
@@ -161,6 +198,7 @@ pub async fn index(
             layout: Layout::load(&state, &viewer, Nav::Spaces).await?,
             spaces,
             sort,
+            kinds,
             archived,
             muted,
             has_mutes,
@@ -490,6 +528,11 @@ impl SettingsForm {
             .into_iter()
             .map(|user| (user.id, user.username))
             .collect();
+        // A feed's owner always runs it, without being named in the form.
+        let mut administer = settings.administer.clone();
+        if let Some(owner) = &space.owner {
+            administer.user_ids.remove(&owner.user.id);
+        }
         Ok(SettingsForm {
             name: settings.name.clone(),
             slug: settings.slug.clone(),
@@ -499,7 +542,7 @@ impl SettingsForm {
             read: GrantForm::from_grant(&settings.read, &usernames),
             reply: GrantForm::from_grant(&settings.reply, &usernames),
             start: GrantForm::from_grant(&settings.start, &usernames),
-            administer: GrantForm::from_grant(&settings.administer, &usernames),
+            administer: GrantForm::from_grant(&administer, &usernames),
         })
     }
 
@@ -599,11 +642,29 @@ struct SettingsTemplate {
     admin: bool,
     /// How many threads it has ever had: only one with none can be deleted.
     thread_count: i64,
+    /// Whether it is the viewer's own feed.
+    own_feed: bool,
 }
 
 impl SettingsTemplate {
     fn section_chosen(&self, id: &i64) -> bool {
         self.form.section.trim() == id.to_string()
+    }
+
+    /// Whether the space is a feed whose owner has deleted their account,
+    /// which stays archived (DESIGN.md §3.2).
+    fn owner_gone(&self) -> bool {
+        self.space.owner.as_ref().is_some_and(|owner| owner.deleted)
+    }
+
+    /// What a feed's form says about who runs it.
+    fn feed_runner_hint(&self, owner: &FeedOwner) -> String {
+        let also = "Others named here change these settings, pin and lock threads, and can archive it, as moderators and admins always can.";
+        if self.own_feed {
+            format!("You always run your feed. {also}")
+        } else {
+            format!("{} always runs their feed. {also}", owner.user.display_name)
+        }
     }
 }
 
@@ -696,6 +757,7 @@ async fn render_settings(
             groups: choosable(state, viewer, &space).await?,
             staff: viewer.is_staff(),
             admin: viewer.is_admin(),
+            own_feed: space.owned_by(viewer),
             space,
             notice,
             errors,
@@ -790,7 +852,12 @@ pub async fn save_settings(
         Err(response) => return Ok(response),
     };
     let db = state.db();
-    let form = SettingsForm::from_fields(&fields);
+    let mut form = SettingsForm::from_fields(&fields);
+    // A feed's address is its owner's username, which its form doesn't
+    // offer to change (DESIGN.md §3.2).
+    if space.is_feed() && !fields.iter().any(|(key, _)| key == "slug") {
+        form.slug = space.space.slug.clone();
+    }
     let mut settings = form
         .settings(&state, &choosable(&state, &viewer, &space).await?)
         .await?;

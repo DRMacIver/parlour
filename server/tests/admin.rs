@@ -947,7 +947,11 @@ async fn deleting_a_section_asks_first_and_names_its_spaces(db: PgPool) {
     let response = a.submit(&delete_path, &[]).await;
     assert_eq!(response.status, StatusCode::SEE_OTHER);
     assert_eq!(sections(&a).await, 0);
-    assert_eq!(a.id("SELECT count(*) FROM spaces").await, 1);
+    assert_eq!(
+        a.id("SELECT count(*) FROM spaces WHERE kind = 'topic'")
+            .await,
+        1
+    );
 
     // A section of a member's own layout isn't an admin's to delete.
     let ruth = a.forum.member("ruth", "user", None).await;

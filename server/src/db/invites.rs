@@ -466,11 +466,16 @@ fn check_registration(
     (username, display_name, password)
 }
 
+/// Whether a username is someone's, now or before they deleted their
+/// account, or a space's address: usernames and space addresses share one
+/// namespace, and the new member's feed goes at theirs (DESIGN.md §3.1,
+/// §3.2).
 async fn username_taken(db: &mut PgConnection, username: &str) -> sqlx::Result<bool> {
     sqlx::query_scalar!(
         r#"SELECT EXISTS (SELECT 1 FROM users WHERE username = $1::citext)
                   OR EXISTS (SELECT 1 FROM retired_usernames
-                             WHERE username_hash = username_hash($1)) AS "e!""#,
+                             WHERE username_hash = username_hash($1))
+                  OR EXISTS (SELECT 1 FROM spaces WHERE slug = lower($1)) AS "e!""#,
         username as _,
     )
     .fetch_one(db)

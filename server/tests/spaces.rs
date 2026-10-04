@@ -151,7 +151,10 @@ async fn any_member_can_make_a_space(pool: PgPool) {
         assert!(response.body.contains(why), "{slug}: {}", response.body);
         assert!(response.body.contains("value=\"Again\""));
     }
-    assert_eq!(count(&s.f, "SELECT count(*) FROM spaces").await, 1);
+    assert_eq!(
+        count(&s.f, "SELECT count(*) FROM spaces WHERE kind = 'topic'").await,
+        1
+    );
 }
 
 #[sqlx::test]

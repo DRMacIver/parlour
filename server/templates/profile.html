@@ -33,6 +33,7 @@
   <dl class="details">
     <dt>Joined</dt><dd>{% call m::time(profile.joined_at) %}{% endcall %}</dd>
     <dt>Posts</dt><dd>{{ crate::format::count(profile.post_count) }}</dd>
+    {% if let Some(feed) = profile.feed %}<dt>Feed</dt><dd><a href="/c/{{ feed.slug }}">{{ feed.name }}</a></dd>{% endif %}
     {% if let Some(location) = profile.location %}<dt>Location</dt><dd>{{ location }}</dd>{% endif %}
     <dt>Invited by</dt>
     <dd>{% if let Some(inviter) = profile.invited_by %}<a href="/u/{{ inviter.username }}">{{ inviter.display_name }}</a>{% else %}<em>A founding member</em>{% endif %}</dd>

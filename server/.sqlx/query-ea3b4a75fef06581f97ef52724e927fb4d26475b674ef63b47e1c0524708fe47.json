@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT EXISTS (SELECT 1 FROM users WHERE username = $1::citext)\n                  OR EXISTS (SELECT 1 FROM retired_usernames\n                             WHERE username_hash = username_hash($1)) AS \"e!\"",
+  "query": "SELECT EXISTS (SELECT 1 FROM users WHERE username = $1::citext)\n                  OR EXISTS (SELECT 1 FROM retired_usernames\n                             WHERE username_hash = username_hash($1))\n                  OR EXISTS (SELECT 1 FROM spaces WHERE slug = lower($1)) AS \"e!\"",
   "describe": {
     "columns": [
       {
@@ -24,5 +24,5 @@
       null
     ]
   },
-  "hash": "a2388df84ab10837b66ce06b81e8fdbde73798bc6931a840537c1f65334b8306"
+  "hash": "ea3b4a75fef06581f97ef52724e927fb4d26475b674ef63b47e1c0524708fe47"
 }

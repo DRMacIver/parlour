@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.thread_id, p.author_id, t.space_id,\n                  (SELECT sp.thread_id FROM posts sp WHERE sp.id = t.forked_from_post_id) AS forked_from_thread_id\n           FROM posts p JOIN threads t ON t.id = p.thread_id\n           WHERE p.id = $1",
+  "query": "SELECT p.thread_id, p.seq, p.author_id, t.space_id,\n                  (SELECT sp.thread_id FROM posts sp WHERE sp.id = t.forked_from_post_id) AS forked_from_thread_id\n           FROM posts p JOIN threads t ON t.id = p.thread_id\n           WHERE p.id = $1",
   "describe": {
     "columns": [
       {
@@ -16,6 +16,17 @@
       },
       {
         "ordinal": 1,
+        "name": "seq",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
         "name": "author_id",
         "type_info": "Int8",
         "origin": {
@@ -26,7 +37,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "space_id",
         "type_info": "Int8",
         "origin": {
@@ -37,7 +48,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "forked_from_thread_id",
         "type_info": "Int8",
         "origin": "Expression"
@@ -51,9 +62,10 @@
     "nullable": [
       false,
       false,
+      false,
       true,
       null
     ]
   },
-  "hash": "f6b9d1a284ac318b99b46838adc555f7ffc4688735b8a12a7fba83baf8096265"
+  "hash": "4256d835b79d84fd9edd8de39d3a1058c3e7e6ec5102439769c35d66536e4226"
 }

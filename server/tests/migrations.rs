@@ -209,3 +209,143 @@ async fn every_member_gets_a_friends_list(db: PgPool) {
         [("4".to_owned(), "Friends".to_owned())]
     );
 }
+
+/// Migration 0027 (DESIGN.md §3.2, milestone 13): every member whose
+/// account exists gets a feed at their username, in their Feeds section
+/// (made at the end of their front page if they had taken it away), and a
+/// topic space already at a member's name moves aside, with a word to the
+/// people who run it and to the admins. From then on every new account
+/// gets a feed too.
+#[sqlx::test(migrations = false)]
+async fn every_member_gets_a_feed(db: PgPool) {
+    run_to(&db, 26).await;
+    exec(
+        &db,
+        "INSERT INTO users (id, username, display_name, email, role, deleted_at) OVERRIDING SYSTEM VALUE VALUES
+             (1, 'ruth', 'Ruth', 'ruth@example.com', 'admin', NULL),
+             (2, 'Jonah', 'Jonah', 'jonah@example.com', 'user', NULL),
+             (3, 'maya', 'Maya', 'maya@example.com', 'user', NULL),
+             (4, 'deleted_4', 'Deleted member', 'deleted-4@deleted.invalid', 'user', now());
+         INSERT INTO spaces (id, slug, name, visibility, created_by) OVERRIDING SYSTEM VALUE VALUES
+             (1, 'jonah', 'Jonah’s fans', 'members', 3),
+             (2, 'maya', 'Maya', 'members', NULL),
+             (3, 'maya-space', 'Maya space', 'members', NULL),
+             (4, 'games', 'Games', 'public', NULL);
+         INSERT INTO space_grants (space_id, verb, level, user_ids) VALUES
+             (1, 'read', 'members', '{}'), (1, 'reply', 'members', '{}'),
+             (1, 'start', 'members', '{}'), (1, 'administer', 'listed', '{3}'),
+             (2, 'read', 'members', '{}'), (2, 'reply', 'members', '{}'),
+             (2, 'start', 'members', '{}'), (2, 'administer', 'listed', '{2}'),
+             (3, 'read', 'members', '{}'), (3, 'reply', 'members', '{}'),
+             (3, 'start', 'members', '{}'), (3, 'administer', 'staff', '{}'),
+             (4, 'read', 'public', '{}'), (4, 'reply', 'members', '{}'),
+             (4, 'start', 'members', '{}'), (4, 'administer', 'staff', '{}');
+         INSERT INTO layouts (id, user_id, edited_at) OVERRIDING SYSTEM VALUE VALUES
+             (2, 1, NULL), (3, 2, now()), (4, 3, now());
+         INSERT INTO layout_sections (id, layout_id, name, position) OVERRIDING SYSTEM VALUE VALUES
+             (1, 1, 'Forum', 0), (2, 2, 'Forum', 0), (3, 2, 'Feeds', 1),
+             (4, 3, 'Mine', 0), (5, 4, 'Feeds', 0), (6, 4, 'Forum', 1);
+         INSERT INTO layout_section_spaces (section_id, space_id, position) VALUES
+             (1, 4, 0), (2, 4, 0), (4, 4, 0), (5, 2, 0);
+         SELECT setval(pg_get_serial_sequence('spaces', 'id'), 4);
+         SELECT setval(pg_get_serial_sequence('layout_sections', 'id'), 6);",
+    )
+    .await;
+
+    run_to(&db, 27).await;
+
+    // A feed for each member whose account exists, at their username, in
+    // lower case, named as they are, which they run and start threads in.
+    assert_eq!(
+        pairs(
+            &db,
+            "SELECT owner_user_id::text, slug || ' ' || name FROM spaces WHERE kind = 'feed' ORDER BY 1"
+        )
+        .await,
+        [("1", "ruth Ruth"), ("2", "jonah Jonah"), ("3", "maya Maya")]
+            .map(|(u, s)| (u.to_owned(), s.to_owned()))
+    );
+    assert_eq!(
+        pairs(
+            &db,
+            "SELECT c.owner_user_id::text, string_agg(g.verb || ' ' || g.level || ' ' || g.user_ids::text, ', '
+                                                      ORDER BY g.verb)
+             FROM spaces c JOIN space_grants g ON g.space_id = c.id
+             WHERE c.kind = 'feed' GROUP BY 1 ORDER BY 1"
+        )
+        .await,
+        [1, 2, 3].map(|u| (
+            u.to_string(),
+            format!(
+                "administer listed {{{u}}}, read members {{}}, reply members {{}}, start listed {{{u}}}"
+            )
+        ))
+    );
+    // Topic spaces at a member's name moved aside, to the first free
+    // address.
+    assert_eq!(
+        pairs(
+            &db,
+            "SELECT id::text, slug FROM spaces WHERE kind = 'topic' ORDER BY id"
+        )
+        .await,
+        [
+            ("1", "jonah-space"),
+            ("2", "maya-space-2"),
+            ("3", "maya-space"),
+            ("4", "games")
+        ]
+        .map(|(i, s)| (i.to_owned(), s.to_owned()))
+    );
+    // Those who run them, and the admins, are told where they went.
+    let notices = pairs(
+        &db,
+        "SELECT user_id::text, message FROM notifications WHERE kind = 'moderation' ORDER BY user_id, id",
+    )
+    .await;
+    assert_eq!(
+        notices.iter().map(|(u, _)| u.as_str()).collect::<Vec<_>>(),
+        ["1", "1", "2", "3"]
+    );
+    for (user, message) in &notices {
+        assert!(message.contains("own feed"), "{message}");
+        match user.as_str() {
+            "2" => assert!(message.contains("/c/maya-space-2"), "{message}"),
+            "3" => assert!(message.contains("/c/jonah-space"), "{message}"),
+            _ => {}
+        }
+    }
+    // Each feed is in its owner's Feeds section, which a member who had
+    // taken it away gets back at the end of their front page.
+    assert_eq!(
+        pairs(
+            &db,
+            "SELECT l.user_id::text, string_agg(s.name || ':' || coalesce(x.space_id::text, '-'), ' '
+                                                ORDER BY s.position, s.id, x.position)
+             FROM layouts l JOIN layout_sections s ON s.layout_id = l.id
+             LEFT JOIN layout_section_spaces x ON x.section_id = s.id
+             WHERE l.user_id IS NOT NULL GROUP BY 1 ORDER BY 1"
+        )
+        .await,
+        [
+            ("1", "Forum:4 Feeds:5"),
+            ("2", "Mine:4 Feeds:6"),
+            ("3", "Feeds:2 Feeds:7 Forum:-"),
+        ]
+        .map(|(u, s)| (u.to_owned(), s.to_owned()))
+    );
+    exec(
+        &db,
+        "INSERT INTO users (id, username, display_name, email) OVERRIDING SYSTEM VALUE VALUES
+             (5, 'kit', 'Kit', 'kit@example.com')",
+    )
+    .await;
+    assert_eq!(
+        pairs(
+            &db,
+            "SELECT owner_user_id::text, slug FROM spaces WHERE owner_user_id = 5"
+        )
+        .await,
+        [("5".to_owned(), "kit".to_owned())]
+    );
+}
