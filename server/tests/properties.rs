@@ -399,13 +399,29 @@ impl World {
         world.groups.push(own);
         world.list_owners.push(Some(world.member_id));
         world.list_tokens.push(None);
+        // A second list of Ruth's, so that a grant can name two lists of
+        // one owner's, which nobody who isn't on them should be able to
+        // count.
+        let token = world.token();
+        let second = world
+            .block(lists::create(
+                world.cached.state.db(),
+                ruth,
+                &format!("List {token}"),
+            ))
+            .unwrap()
+            .unwrap();
+        world.groups.push(second);
+        world.list_owners.push(Some(ruth));
+        world.list_tokens.push(Some(token));
         for level in ["public", "public", "members", "listed", "listed"] {
             world.add_space(level);
         }
-        // From the start, one listed space names a group and Ruth's list,
-        // and the other the member viewer's own list, so that what a list
-        // lets through and how it is named are checked from the first step.
-        world.name_read_groups(3, BTreeSet::from([0, 2]));
+        // From the start, one listed space names a group and both of
+        // Ruth's lists, and the other the member viewer's own list, so that
+        // what a list lets through and how it is named are checked from the
+        // first step.
+        world.name_read_groups(3, BTreeSet::from([0, 2, 4]));
         world.name_read_groups(4, BTreeSet::from([3]));
         // Everyone can be emailed, as soon as a notification is made.
         world.exec("UPDATE users SET email_verified_at = now()".to_owned());
@@ -710,6 +726,18 @@ impl World {
             self.list_owners[g] == Some(user)
                 || (user == self.member_id && self.member_groups.contains(&g))
         })
+    }
+
+    /// Whether this viewer knows that group `g` exists and what it is
+    /// called: a site group, or a list they own or are on.
+    fn knows_group(&self, who: Who, g: usize) -> bool {
+        match self.list_owners[g] {
+            None => true,
+            Some(owner) => {
+                self.viewer_id(who) == Some(owner)
+                    || (who == Who::Member && self.member_groups.contains(&g))
+            }
+        }
     }
 
     fn thread_readable(&self, thread: usize, who: Who) -> bool {
@@ -1401,6 +1429,46 @@ impl World {
                             "{who:?} audience of space {i}, list {g}"
                         );
                     }
+                }
+            }
+        }
+        // A space's settings form, for those who run it, offers the lists
+        // its read grant names that they don't know as one choice per
+        // owner, which gives neither their ids nor how many there are.
+        for c in &self.spaces {
+            let settings = pages.get(&format!("/c/{}/settings", c.slug));
+            if settings.status != StatusCode::OK {
+                continue;
+            }
+            let mut strangers = BTreeSet::new();
+            for &g in &c.read_groups {
+                if let Some(owner) = self.list_owners[g]
+                    && !self.knows_group(who, g)
+                {
+                    strangers.insert(owner);
+                }
+            }
+            for (g, owner) in self.list_owners.iter().enumerate() {
+                let Some(owner) = owner else {
+                    continue;
+                };
+                for verb in ["read", "reply", "start", "administer"] {
+                    let value = format!("name=\"{verb}_group\" value=\"{}\"", self.groups[g]);
+                    if !self.knows_group(who, g) {
+                        assert!(
+                            !settings.body.contains(&value),
+                            "{who:?} settings of {} give list {g}'s id",
+                            c.slug
+                        );
+                    }
+                    let chosen = format!("name=\"{verb}_group\" value=\"owner:{owner}\"");
+                    let expected = usize::from(verb == "read" && strangers.contains(owner));
+                    assert_eq!(
+                        settings.body.matches(&chosen).count(),
+                        expected,
+                        "{who:?} settings of {}: {verb}, lists of {owner}",
+                        c.slug
+                    );
                 }
             }
         }
@@ -3612,6 +3680,9 @@ impl Access {
         }
 
         self.check_audience(who, &viewer);
+        if let Some(u) = who {
+            self.check_grant_choices(u);
+        }
         self.check_writing(who, &viewer);
         self.check_conversations(who, &viewer);
     }
@@ -3700,6 +3771,93 @@ impl Access {
         }
     }
 
+    /// Whether member `u` knows group `g` exists and what it is called: a
+    /// site group, or a list they own or are on (DESIGN.md §3.3).
+    fn knows_group(&self, u: usize, g: usize) -> bool {
+        match self.group_owners[g] {
+            None => true,
+            Some(owner) => owner == u || self.users[u].groups.contains(&g),
+        }
+    }
+
+    /// What a grant form offers member `u` for a grant naming `named`
+    /// (DESIGN.md §3.3): every group they know, by its id, and the lists
+    /// the grant names that they don't know as one choice per owner, which
+    /// gives neither the lists' ids nor how many there are. Ticking what
+    /// the grant names gives it back unchanged.
+    fn check_grant_choices(&self, u: usize) {
+        let user_id = self.users[u].id;
+        let mut grants: Vec<&BTreeSet<usize>> = Vec::new();
+        for space in &self.spaces {
+            grants.push(&space.read_groups);
+            grants.push(&space.write_groups);
+        }
+        for named in grants {
+            let ids: Vec<i64> = named.iter().map(|&g| self.groups[g]).collect();
+            let choices = self
+                .block(groups::choosable(&self.db, Some(user_id), &ids))
+                .unwrap();
+            let mut expected: BTreeMap<String, BTreeSet<i64>> = BTreeMap::new();
+            for g in 0..self.groups.len() {
+                let id = self.groups[g];
+                if self.knows_group(u, g) {
+                    expected.insert(id.to_string(), BTreeSet::from([id]));
+                } else if named.contains(&g) {
+                    let owner = self.group_owners[g].expect("site groups are known");
+                    expected
+                        .entry(format!("owner:{}", self.users[owner].id))
+                        .or_default()
+                        .insert(id);
+                }
+            }
+            let mut found: BTreeMap<String, BTreeSet<i64>> = choices
+                .iter()
+                .map(|c| (c.value.clone(), c.ids.iter().copied().collect()))
+                .collect();
+            assert_eq!(found.len(), choices.len(), "{u}: a value offered twice");
+            // Every member has a Friends list; the model leaves out those
+            // it doesn't use, which are offered only to their owners.
+            found.retain(|_, ids| {
+                ids.iter().any(|id| self.groups.contains(id)) || {
+                    let owners: Vec<Option<i64>> = self
+                        .block(
+                            sqlx::query_scalar(
+                                "SELECT owner_user_id FROM groups WHERE id = ANY($1)",
+                            )
+                            .bind(ids.iter().copied().collect::<Vec<i64>>())
+                            .fetch_all(&self.pool),
+                        )
+                        .unwrap();
+                    assert!(
+                        owners.iter().all(|&owner| owner == Some(user_id)),
+                        "{u}: offered {ids:?}"
+                    );
+                    false
+                }
+            });
+            assert_eq!(found, expected, "{u}: choices for {named:?}");
+            for choice in &choices {
+                if choice.value.starts_with("owner:") {
+                    assert!(choice.label.starts_with("People "), "{}", choice.label);
+                }
+            }
+            let ticked: Vec<String> = choices
+                .iter()
+                .filter(|c| c.ids.iter().any(|id| ids.contains(id)))
+                .map(|c| c.value.clone())
+                .collect();
+            let mut sorted = ids.clone();
+            sorted.sort_unstable();
+            assert_eq!(groups::chosen(&choices, &ticked), Some(sorted));
+            // A list they don't know can't be ticked by its id.
+            for (g, &id) in self.groups.iter().enumerate() {
+                if !self.knows_group(u, g) {
+                    assert_eq!(groups::chosen(&choices, &[id.to_string()]), None);
+                }
+            }
+        }
+    }
+
     /// The ids of every post a search finds for the viewer, everywhere or
     /// in one space.
     fn search(&self, viewer: &Viewer, words: &str, space: Option<&str>) -> BTreeSet<i64> {
@@ -3779,6 +3937,50 @@ impl Access {
         tc.assume(self.spaces.len() < 5);
         let level = tc.draw(gs::sampled_from(LEVELS.to_vec()));
         self.add_space(level);
+    }
+
+    /// A member who runs a space names in its read grant some of what the
+    /// form offers them: groups, their own lists and the lists they are
+    /// on, and whatever lists of others the grant names already (DESIGN.md
+    /// §3.3).
+    #[rule]
+    fn name_in_read_grant(&mut self, tc: TestCase) {
+        let u = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
+        let c = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
+        let named: Vec<i64> = self.spaces[c]
+            .read_groups
+            .iter()
+            .map(|&g| self.groups[g])
+            .collect();
+        let choices = self
+            .block(groups::choosable(&self.db, Some(self.users[u].id), &named))
+            .unwrap();
+        // The Friends lists the model leaves out are never named.
+        let ticked: Vec<String> = choices
+            .iter()
+            .filter(|choice| choice.ids.iter().all(|id| self.groups.contains(id)))
+            .filter(|_| tc.draw(gs::booleans()))
+            .map(|choice| choice.value.clone())
+            .collect();
+        let ids = groups::chosen(&choices, &ticked).expect("every value was offered");
+        let read_groups: BTreeSet<usize> = ids
+            .iter()
+            .map(|id| self.groups.iter().position(|g| g == id).unwrap())
+            .collect();
+        for &g in &read_groups {
+            // Nobody names a list they don't know unless it was named.
+            assert!(self.knows_group(u, g) || self.spaces[c].read_groups.contains(&g));
+        }
+        let id = self.spaces[c].id;
+        self.block(store::set_grant(
+            &self.pool,
+            id,
+            "read",
+            &Grant::from_parts("listed", &ids, &[]),
+        ))
+        .unwrap();
+        self.spaces[c].level = "listed";
+        self.spaces[c].read_groups = read_groups;
     }
 
     /// What the admin's space form does: new read and write levels and

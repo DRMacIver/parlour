@@ -408,8 +408,12 @@ impl GrantForm {
         }
     }
 
-    fn ticked(&self, group_id: &i64) -> bool {
-        self.groups.contains(&group_id.to_string())
+    /// Whether a choice is ticked: by its value, as the form sends it
+    /// back, or for a saved grant by the groups it stands for.
+    fn ticked(&self, choice: &GroupChoice) -> bool {
+        self.groups.iter().any(|value| {
+            value.trim() == choice.value || choice.ids.iter().any(|id| *value == id.to_string())
+        })
     }
 }
 
@@ -534,15 +538,11 @@ impl SettingsForm {
                 grants.push((verb, Grant::from_parts(level.as_str(), &[], &[])));
                 continue;
             }
-            let group_ids: Vec<i64> = form
-                .groups
-                .iter()
-                .filter_map(|id| id.trim().parse::<i64>().ok())
-                .filter(|id| groups.for_verb(verb).iter().any(|g| g.id == *id))
-                .collect();
-            if group_ids.len() != form.groups.len() {
-                problems.push("Choose groups from the list.".to_owned());
-            }
+            let group_ids =
+                groups::chosen(groups.for_verb(verb), &form.groups).unwrap_or_else(|| {
+                    problems.push("Choose groups from the list.".to_owned());
+                    Vec::new()
+                });
             let names = crate::messages::parse_recipients(&form.users);
             let found = users::by_usernames(state.db(), &names).await?;
             for name in &names {
@@ -636,10 +636,10 @@ impl GrantChoices {
     }
 }
 
-/// The groups and lists the viewer may name in each of the space's
-/// grants: the site's groups and their own lists in any of them, and
-/// whatever other lists a grant names already, in that grant only, kept
-/// without being explained to them. Nobody but its owner can put a list
+/// The groups and lists each of the space's grant forms offers the
+/// viewer: the site's groups and the lists they own or are on, in any of
+/// them, and whatever other lists a grant names already, in that grant
+/// only, kept without being explained to them. Nobody else can put a list
 /// where it wasn't.
 async fn choosable(
     state: &AppState,
@@ -647,23 +647,14 @@ async fn choosable(
     space: &SpaceTarget,
 ) -> Result<GrantChoices, AppError> {
     let rules = &space.rules;
-    let named: Vec<i64> = [&rules.read, &rules.reply, &rules.start, &rules.administer]
-        .iter()
-        .flat_map(|grant| grant.group_ids())
-        .collect();
-    let all = groups::choosable(state.db(), viewer.user_id(), &named).await?;
-    let offered = |grant: &Grant| -> Vec<GroupChoice> {
-        let named = grant.group_ids();
-        all.iter()
-            .filter(|choice| choice.nameable || named.contains(&choice.id))
-            .cloned()
-            .collect()
+    let offered = async |grant: &Grant| {
+        groups::choosable(state.db(), viewer.user_id(), &grant.group_ids()).await
     };
     Ok(GrantChoices {
-        read: offered(&rules.read),
-        reply: offered(&rules.reply),
-        start: offered(&rules.start),
-        administer: offered(&rules.administer),
+        read: offered(&rules.read).await?,
+        reply: offered(&rules.reply).await?,
+        start: offered(&rules.start).await?,
+        administer: offered(&rules.administer).await?,
     })
 }
 

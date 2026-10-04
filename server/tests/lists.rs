@@ -975,29 +975,33 @@ fn group_choices(page: &str, verb: &str) -> Vec<(String, String)> {
 }
 
 /// The fields of the Reading space's settings form: read and administer
-/// listed, read by Ruth and administered by Jonah and Ruth, with these
-/// groups ticked per verb.
-fn reading_fields(groups: &[(&str, i64)]) -> Vec<(String, String)> {
+/// listed, read and administered by Jonah, Ruth and Maya, with
+/// these group choices ticked per verb (a group's id, or `owner:{id}` for
+/// the lists of someone's that the editor isn't on).
+fn reading_fields(groups: &[(&str, String)]) -> Vec<(String, String)> {
     let mut fields = vec![
         ("name".to_owned(), "Reading".to_owned()),
         ("slug".to_owned(), "reading".to_owned()),
         ("description".to_owned(), String::new()),
         ("read_level".to_owned(), "listed".to_owned()),
-        ("read_users".to_owned(), "ruth".to_owned()),
+        ("read_users".to_owned(), "jonah, ruth, maya".to_owned()),
         ("reply_level".to_owned(), "members".to_owned()),
         ("start_level".to_owned(), "members".to_owned()),
         ("administer_level".to_owned(), "listed".to_owned()),
-        ("administer_users".to_owned(), "jonah, ruth".to_owned()),
+        (
+            "administer_users".to_owned(),
+            "jonah, ruth, maya".to_owned(),
+        ),
     ];
     fields.extend(
         groups
             .iter()
-            .map(|(verb, id)| (format!("{verb}_group"), id.to_string())),
+            .map(|(verb, value)| (format!("{verb}_group"), value.clone())),
     );
     fields
 }
 
-async fn save_reading(club: &Club, cookie: &str, groups: &[(&str, i64)]) -> common::Response {
+async fn save_reading(club: &Club, cookie: &str, groups: &[(&str, String)]) -> common::Response {
     let fields = reading_fields(groups);
     let fields: Vec<(&str, &str)> = fields
         .iter()
@@ -1019,20 +1023,14 @@ async fn grant_groups(club: &Club, verb: &str) -> Vec<i64> {
     .unwrap()
 }
 
-/// DESIGN.md §3.3: a list's owner alone decides who is on it, so only they
-/// can name it in a grant. Anyone editing a grant that names someone
-/// else's list keeps it there, or takes it out, without learning more about
-/// it than they knew, and can't put it anywhere else.
-#[sqlx::test]
-async fn grant_forms_offer_the_lists_the_editor_knows(pool: PgPool) {
-    let club = club(pool).await;
-    let organisers = club.f.group("organisers", "Organisers").await;
-    let list = club.ruths_list("Book club").await;
-    let ruths_friends = friends_of(&club.f, club.ruth).await;
-    let jonahs_friends = friends_of(&club.f, club.jonah).await;
-    club.add(list, "jonah").await;
-    // Jonah makes a space, and can name the site's groups and his own
-    // lists, but nobody else's: not even Ruth's Book club, which he is on.
+/// What a settings form sends for the lists of `owner`'s that the editor
+/// isn't on.
+fn chosen_by(owner: i64) -> String {
+    format!("owner:{owner}")
+}
+
+/// Jonah makes the Reading space, which Ruth and Maya help him run.
+async fn reading(club: &Club) {
     let response = club
         .f
         .submit(
@@ -1046,6 +1044,23 @@ async fn grant_forms_offer_the_lists_the_editor_knows(pool: PgPool) {
         )
         .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+}
+
+/// DESIGN.md §3.3: a list can be named in any grant, by its owner or by
+/// anyone on it; nobody else learns of it. Anyone editing a grant that
+/// names a list they aren't on keeps it there, or takes it out, without
+/// learning more about it than they knew, and can't put it anywhere else.
+#[sqlx::test]
+async fn grant_forms_offer_the_lists_the_editor_knows(pool: PgPool) {
+    let club = club(pool).await;
+    let organisers = club.f.group("organisers", "Organisers").await;
+    let list = club.ruths_list("Book club").await;
+    let ruths_friends = friends_of(&club.f, club.ruth).await;
+    let jonahs_friends = friends_of(&club.f, club.jonah).await;
+    club.add(list, "jonah").await;
+    // Jonah makes a space, and can name the site's groups, his own lists
+    // and Ruth's Book club, which he is on, but not her Friends.
+    reading(&club).await;
     let page = club
         .f
         .page_as("/c/reading/settings", &club.jonah_cookie)
@@ -1056,37 +1071,49 @@ async fn grant_forms_offer_the_lists_the_editor_knows(pool: PgPool) {
             [
                 (organisers.to_string(), "Organisers".to_owned()),
                 (jonahs_friends.to_string(), "Your Friends".to_owned()),
+                (list.to_string(), "Ruth’s Book club".to_owned()),
             ],
             "{verb}"
         );
     }
-    for list in [ruths_friends, list] {
-        let response = save_reading(&club, &club.jonah_cookie, &[("read", list)]).await;
+    for value in [ruths_friends.to_string(), chosen_by(club.ruth)] {
+        let response = save_reading(&club, &club.jonah_cookie, &[("read", value)]).await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
         assert!(!response.body.contains("Ruth’s Friends"));
     }
-    let response = save_reading(&club, &club.jonah_cookie, &[("read", jonahs_friends)]).await;
+    let response = save_reading(
+        &club,
+        &club.jonah_cookie,
+        &[
+            ("read", jonahs_friends.to_string()),
+            ("read", list.to_string()),
+        ],
+    )
+    .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
-    // Ruth, who administers it with him, names her Book club alongside
-    // Jonah's Friends, which she knows only as his choice.
+    let mut expected = vec![list, jonahs_friends];
+    expected.sort();
+    assert_eq!(grant_groups(&club, "read").await, expected);
+    // Ruth, who runs it with him, knows his Friends only as his choice.
+    // It is kept only where it is: it isn't offered for another verb.
     let page = club
         .f
         .page_as("/c/reading/settings", &club.ruth_cookie)
         .await;
     assert!(!page.contains("Jonah’s Friends"), "{page}");
+    assert!(
+        !page.contains(&format!("value=\"{jonahs_friends}\"")),
+        "{page}"
+    );
     assert_eq!(
         group_choices(&page, "read"),
         [
             (organisers.to_string(), "Organisers".to_owned()),
             (list.to_string(), "Your Book club".to_owned()),
             (ruths_friends.to_string(), "Your Friends".to_owned()),
-            (
-                jonahs_friends.to_string(),
-                "People Jonah has chosen".to_owned()
-            ),
+            (chosen_by(club.jonah), "People Jonah has chosen".to_owned()),
         ]
     );
-    // His list is kept only where it is: it isn't offered for another verb.
     assert_eq!(
         group_choices(&page, "administer"),
         [
@@ -1095,55 +1122,38 @@ async fn grant_forms_offer_the_lists_the_editor_knows(pool: PgPool) {
             (ruths_friends.to_string(), "Your Friends".to_owned()),
         ]
     );
-    let response = save_reading(
-        &club,
-        &club.ruth_cookie,
-        &[("read", jonahs_friends), ("administer", jonahs_friends)],
-    )
-    .await;
-    assert_eq!(response.status, StatusCode::BAD_REQUEST);
-    let response = save_reading(
-        &club,
-        &club.ruth_cookie,
-        &[("read", jonahs_friends), ("read", list)],
-    )
-    .await;
-    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
-    // Jonah, on the Book club, now sees it by name where the grant names
-    // it, and nowhere else.
-    let page = club
-        .f
-        .page_as("/c/reading/settings", &club.jonah_cookie)
-        .await;
-    assert_eq!(
-        group_choices(&page, "read"),
-        [
-            (organisers.to_string(), "Organisers".to_owned()),
-            (jonahs_friends.to_string(), "Your Friends".to_owned()),
-            (list.to_string(), "Ruth’s Book club".to_owned()),
-        ]
-    );
-    for verb in ["reply", "start", "administer"] {
-        assert_eq!(
-            group_choices(&page, verb),
-            [
-                (organisers.to_string(), "Organisers".to_owned()),
-                (jonahs_friends.to_string(), "Your Friends".to_owned()),
+    for administer in [jonahs_friends.to_string(), chosen_by(club.jonah)] {
+        let response = save_reading(
+            &club,
+            &club.ruth_cookie,
+            &[
+                ("read", chosen_by(club.jonah)),
+                ("read", list.to_string()),
+                ("administer", administer),
             ],
-            "{verb}"
-        );
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
     }
+    // Nor can his list be ticked by its id, which the form doesn't give.
     let response = save_reading(
         &club,
-        &club.jonah_cookie,
+        &club.ruth_cookie,
         &[
-            ("read", jonahs_friends),
-            ("read", list),
-            ("administer", list),
+            ("read", jonahs_friends.to_string()),
+            ("read", list.to_string()),
         ],
     )
     .await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    let response = save_reading(
+        &club,
+        &club.ruth_cookie,
+        &[("read", chosen_by(club.jonah)), ("read", list.to_string())],
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(grant_groups(&club, "read").await, expected);
     // An admin, on neither list, sees that the grant names lists without
     // learning what they are, and saving keeps them; but can't name them
     // anywhere else.
@@ -1155,17 +1165,17 @@ async fn grant_forms_offer_the_lists_the_editor_knows(pool: PgPool) {
         !page.contains("Book club") && !page.contains("Jonah’s Friends"),
         "{page}"
     );
+    for id in [list, jonahs_friends] {
+        assert!(!page.contains(&format!("value=\"{id}\"")), "{page}");
+    }
     let sams_friends = friends_of(&club.f, club.f.user_id("sam").await).await;
     assert_eq!(
         group_choices(&page, "read"),
         [
             (organisers.to_string(), "Organisers".to_owned()),
             (sams_friends.to_string(), "Your Friends".to_owned()),
-            (
-                jonahs_friends.to_string(),
-                "People Jonah has chosen".to_owned()
-            ),
-            (list.to_string(), "People Ruth has chosen".to_owned()),
+            (chosen_by(club.jonah), "People Jonah has chosen".to_owned()),
+            (chosen_by(club.ruth), "People Ruth has chosen".to_owned()),
         ]
     );
     assert_eq!(
@@ -1179,9 +1189,9 @@ async fn grant_forms_offer_the_lists_the_editor_knows(pool: PgPool) {
         &club,
         &club.admin_cookie,
         &[
-            ("read", list),
-            ("read", jonahs_friends),
-            ("administer", jonahs_friends),
+            ("read", chosen_by(club.ruth)),
+            ("read", chosen_by(club.jonah)),
+            ("administer", chosen_by(club.jonah)),
         ],
     )
     .await;
@@ -1189,26 +1199,156 @@ async fn grant_forms_offer_the_lists_the_editor_knows(pool: PgPool) {
     let response = save_reading(
         &club,
         &club.admin_cookie,
-        &[("read", list), ("read", jonahs_friends)],
+        &[
+            ("read", chosen_by(club.ruth)),
+            ("read", chosen_by(club.jonah)),
+        ],
     )
     .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
-    let mut expected = vec![list, jonahs_friends];
-    expected.sort();
     assert_eq!(grant_groups(&club, "read").await, expected);
     assert!(grant_groups(&club, "administer").await.is_empty());
-    // Unticking a list takes it out, and then nobody but its owner can put
-    // it back.
-    let response = save_reading(&club, &club.jonah_cookie, &[("read", jonahs_friends)]).await;
+    // Unticking a list takes it out, and then only its owner and the
+    // people on it can put it back: not the admin, but Jonah can.
+    let response = save_reading(
+        &club,
+        &club.admin_cookie,
+        &[("read", chosen_by(club.jonah))],
+    )
+    .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     assert_eq!(grant_groups(&club, "read").await, [jonahs_friends]);
+    for value in [list.to_string(), chosen_by(club.ruth)] {
+        let response = save_reading(
+            &club,
+            &club.admin_cookie,
+            &[("read", chosen_by(club.jonah)), ("read", value)],
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    }
     let response = save_reading(
         &club,
         &club.jonah_cookie,
-        &[("read", jonahs_friends), ("read", list)],
+        &[
+            ("read", jonahs_friends.to_string()),
+            ("read", list.to_string()),
+            ("administer", list.to_string()),
+        ],
     )
     .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(grant_groups(&club, "read").await, expected);
+    assert_eq!(grant_groups(&club, "administer").await, [list]);
+}
+
+/// Someone who isn't on any of a member's lists that a grant names sees
+/// them in its form as one choice, "People Ruth has chosen", however many
+/// there are, and without their ids, as everywhere else (DESIGN.md §3.3):
+/// they learn neither how many lists there are nor which. Keeping it
+/// ticked keeps them all; unticking it takes them all out.
+#[sqlx::test]
+async fn a_grant_form_shows_lists_the_editor_isnt_on_once_per_owner(pool: PgPool) {
+    let club = club(pool).await;
+    let book_club = club.ruths_list("Book club").await;
+    let climbing = club.ruths_list("Climbing").await;
+    club.add(book_club, "jonah").await;
+    reading(&club).await;
+    // Jonah has Ruth and Maya help run it, and Ruth names both her lists
+    // for reading.
+    let response = save_reading(&club, &club.jonah_cookie, &[]).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let response = save_reading(
+        &club,
+        &club.ruth_cookie,
+        &[
+            ("read", book_club.to_string()),
+            ("read", climbing.to_string()),
+        ],
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let mut both = vec![book_club, climbing];
+    both.sort();
+    assert_eq!(grant_groups(&club, "read").await, both);
+    // Maya, who helps run the space and is on neither, sees one choice.
+    let page = club
+        .f
+        .page_as("/c/reading/settings", &club.maya_cookie)
+        .await;
+    assert_eq!(page.matches("People Ruth has chosen").count(), 1, "{page}");
+    for id in [book_club, climbing] {
+        assert!(!page.contains(&format!("value=\"{id}\"")), "{page}");
+    }
+    let mayas_friends = friends_of(&club.f, club.maya).await;
+    assert_eq!(
+        group_choices(&page, "read"),
+        [
+            (mayas_friends.to_string(), "Your Friends".to_owned()),
+            (chosen_by(club.ruth), "People Ruth has chosen".to_owned()),
+        ]
+    );
+    assert!(page.contains(&format!("value=\"{}\" checked", chosen_by(club.ruth))));
+    // Jonah, on the Book club only, sees it by name, and the other list
+    // only as Ruth's choice.
+    let page = club
+        .f
+        .page_as("/c/reading/settings", &club.jonah_cookie)
+        .await;
+    assert!(!page.contains("Climbing"), "{page}");
+    assert!(!page.contains(&format!("value=\"{climbing}\"")), "{page}");
+    let jonahs_friends = friends_of(&club.f, club.jonah).await;
+    assert_eq!(
+        group_choices(&page, "read"),
+        [
+            (jonahs_friends.to_string(), "Your Friends".to_owned()),
+            (book_club.to_string(), "Ruth’s Book club".to_owned()),
+            (chosen_by(club.ruth), "People Ruth has chosen".to_owned()),
+        ]
+    );
+    // Saving with it ticked keeps both lists.
+    let response = save_reading(&club, &club.maya_cookie, &[("read", chosen_by(club.ruth))]).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(grant_groups(&club, "read").await, both);
+    // A form sent back with errors keeps it ticked.
+    let mut fields = reading_fields(&[("read", chosen_by(club.ruth))]);
+    fields.retain(|(k, _)| k != "name");
+    let fields: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let response = club
+        .f
+        .submit("/c/reading/settings", &fields, Some(&club.maya_cookie))
+        .await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(
+        response
+            .body
+            .contains(&format!("value=\"{}\" checked", chosen_by(club.ruth))),
+        "{}",
+        response.body
+    );
+    // Jonah keeping Ruth's other list while unticking the Book club keeps
+    // only the other one.
+    let response = save_reading(&club, &club.jonah_cookie, &[("read", chosen_by(club.ruth))]).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(grant_groups(&club, "read").await, [climbing]);
+    let response = save_reading(
+        &club,
+        &club.jonah_cookie,
+        &[
+            ("read", chosen_by(club.ruth)),
+            ("read", book_club.to_string()),
+        ],
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(grant_groups(&club, "read").await, both);
+    // Unticking it takes them all out.
+    let response = save_reading(&club, &club.maya_cookie, &[]).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert!(grant_groups(&club, "read").await.is_empty());
 }
 
 #[sqlx::test]

@@ -8,7 +8,8 @@
 //! them, admins included: everything here that lists or finds groups for
 //! admins and invites knows only site groups. [`choosable`] is what a
 //! grant form offers, which is where the two meet: a list can be named in
-//! a grant only by its owner.
+//! a grant by its owner and the people on it, and anyone else sees only
+//! that a grant names some of its owner's lists.
 //!
 //! Group names show on the index next to restricted spaces, but only to
 //! viewers who can read those spaces, and they are never in the anonymous
@@ -248,34 +249,46 @@ pub async fn existing(db: &Db, ids: &[i64]) -> sqlx::Result<Vec<i64>> {
     .await
 }
 
-/// A group or list a grant form offers, as the person filling it in may
-/// know it.
+/// A choice a grant form offers, as the person filling it in may know it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GroupChoice {
-    pub id: i64,
+    /// What the form sends when it is ticked: a group's id, or, for the
+    /// lists of someone's that the editor isn't on, `owner:{their id}`,
+    /// which says neither how many lists that is nor which.
+    pub value: String,
     pub label: String,
-    /// Whether they may name it in any grant: a site group, or a list of
-    /// their own. Anyone else's list is offered only where a grant names
-    /// it already.
-    pub nameable: bool,
+    /// The groups it stands for: one, or every list of that owner's that
+    /// the grant names and the editor isn't on.
+    pub ids: Vec<i64>,
 }
 
-/// The groups and lists a grant form offers `viewer` (DESIGN.md §3.3):
-/// every site group, by name, and their own lists ("Your Friends"), which
-/// they may name anywhere; and, so that a form can keep what a grant
-/// already says, the other lists in `named`: by name if they are on it
-/// ("Ruth’s Book club"), otherwise only as "People Ruth has chosen". A
-/// list's owner alone decides who is on it, so only they can name it in a
-/// grant that doesn't already.
+/// A group or list as [`choosable`] finds it, before the lists the editor
+/// doesn't know are put together.
+struct Found {
+    id: i64,
+    owner_id: Option<i64>,
+    label: String,
+    /// Whether the editor knows it: a site group, or a list they own or
+    /// are on.
+    known: bool,
+}
+
+/// What one grant's form offers `viewer`, given the groups and lists the
+/// grant names already (DESIGN.md §3.3): every site group, by name; their
+/// own lists ("Your Friends") and the lists they are on ("Ruth’s Book
+/// club"), which they may name anywhere; and, so that the form can keep
+/// what the grant already says, the other lists it names, as one choice
+/// per owner, "People Ruth has chosen", standing for all of them. Those
+/// can be kept or taken out, never put anywhere they aren't.
 pub async fn choosable(
     db: &Db,
     viewer: Option<i64>,
     named: &[i64],
 ) -> sqlx::Result<Vec<GroupChoice>> {
-    sqlx::query_as!(
-        GroupChoice,
-        r#"SELECT id AS "id!", label AS "label!", rank < 2 AS "nameable!" FROM (
-               SELECT g.id, g.name, o.display_name, o.id AS owner_id,
+    let found = sqlx::query_as!(
+        Found,
+        r#"SELECT id AS "id!", owner_id, label AS "label!", rank < 3 AS "known!" FROM (
+               SELECT g.id, g.name, o.display_name, g.owner_user_id AS owner_id,
                       CASE WHEN g.owner_user_id IS NULL THEN 0
                            WHEN g.owner_user_id = $1 THEN 1
                            WHEN k.on_it THEN 2
@@ -292,6 +305,7 @@ pub async fn choosable(
                ) k
                WHERE g.owner_user_id IS NULL
                   OR g.owner_user_id = $1
+                  OR k.on_it
                   OR g.id = ANY($2)
            ) c
            ORDER BY rank, CASE WHEN rank >= 2 THEN lower(display_name) END, owner_id,
@@ -300,7 +314,43 @@ pub async fn choosable(
         named,
     )
     .fetch_all(db.pool())
-    .await
+    .await?;
+    let mut choices: Vec<GroupChoice> = Vec::new();
+    for group in found {
+        match group.owner_id.filter(|_| !group.known) {
+            None => choices.push(GroupChoice {
+                value: group.id.to_string(),
+                label: group.label,
+                ids: vec![group.id],
+            }),
+            Some(owner) => {
+                // The query puts each owner's unknown lists together.
+                let value = format!("owner:{owner}");
+                match choices.last_mut() {
+                    Some(last) if last.value == value => last.ids.push(group.id),
+                    _ => choices.push(GroupChoice {
+                        value,
+                        label: group.label,
+                        ids: vec![group.id],
+                    }),
+                }
+            }
+        }
+    }
+    Ok(choices)
+}
+
+/// The groups that these ticked values of a grant's form stand for, given
+/// what the form offered; `None` if one of them wasn't offered.
+pub fn chosen(choices: &[GroupChoice], values: &[String]) -> Option<Vec<i64>> {
+    let mut ids = Vec::new();
+    for value in values {
+        let choice = choices.iter().find(|c| c.value == value.trim())?;
+        ids.extend(&choice.ids);
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    Some(ids)
 }
 
 /// A member of a group.
