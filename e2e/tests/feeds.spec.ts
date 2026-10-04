@@ -48,7 +48,12 @@ test("a member finds their own feed and where to post in it", async ({ page }) =
   await page.goto(`/c/${me}/settings`);
   await expect(page.getByText(`Address: /c/${me}. A feed is always at its owner’s username.`)).toBeVisible();
   await expect(page.getByText("You always run your feed.")).toBeVisible();
-  await expect(page.locator("input[name='administer_level'][value='staff']")).toHaveCount(0);
+  // Nor leave reading, replying or starting threads to staff alone: they
+  // always can.
+  for (const verb of ["read", "reply", "start", "administer"]) {
+    await expect(page.locator(`input[name='${verb}_level'][value='staff']`)).toHaveCount(0);
+  }
+  await expect(page.getByText("You always can.")).toHaveCount(3);
   await expect(page.locator("form[action$='/delete']")).toHaveCount(0);
   await expectFits(page);
 });

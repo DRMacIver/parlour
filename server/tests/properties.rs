@@ -126,6 +126,9 @@ struct SpaceModel {
     /// Whether it is a member's feed (DESIGN.md §3.2): Ruth's, which is
     /// out of sight until it has a thread.
     feed: bool,
+    /// For a feed, its owner, who holds all of its permissions: a grant
+    /// that names people names them too.
+    owner: Option<i64>,
 }
 
 struct ConversationModel {
@@ -493,6 +496,7 @@ impl World {
             read_groups: BTreeSet::new(),
             token,
             feed: false,
+            owner: None,
         });
     }
 
@@ -585,6 +589,7 @@ impl World {
             read_groups: BTreeSet::new(),
             token,
             feed: true,
+            owner: Some(owner),
         });
     }
 
@@ -824,7 +829,9 @@ impl World {
         };
         match (c.read_level, who) {
             ("public", _) | ("members", Who::Member | Who::Staff) | (_, Who::Staff) => true,
-            ("listed", Who::Member) => self.lets_in(&c.read_groups, self.member_id),
+            ("listed", Who::Member) => {
+                self.lets_in(&c.read_groups, self.member_id) || c.owner == Some(self.member_id)
+            }
             _ => false,
         }
     }
@@ -919,7 +926,7 @@ impl World {
         }
         match c.read_level {
             "public" | "members" => true,
-            _ => self.lets_in(&c.read_groups, user),
+            _ => self.lets_in(&c.read_groups, user) || c.owner == Some(user),
         }
     }
 
@@ -1896,11 +1903,14 @@ impl World {
                 self.spaces[space].read_groups.clear();
                 Vec::new()
             };
+            // A feed's owner is named wherever people are (DESIGN.md
+            // §3.2), as the store does.
+            let users: Vec<i64> = self.spaces[space].owner.into_iter().collect();
             self.block(store::set_grant(
                 self.db(),
                 id,
                 "read",
-                &Grant::from_parts(level, &groups, &[]),
+                &Grant::from_parts(level, &groups, &users),
             ))
             .unwrap();
         } else {
@@ -2617,6 +2627,9 @@ struct AccessSpace {
     slug: String,
     level: &'static str,
     read_groups: BTreeSet<usize>,
+    /// The people the read grant names, with a `listed` level: a feed's
+    /// owner, whom the store names there (DESIGN.md §3.2).
+    read_users: BTreeSet<usize>,
     write_level: &'static str,
     write_groups: BTreeSet<usize>,
     /// The people the write grant names, with a `listed` level.
@@ -2786,6 +2799,7 @@ impl Access {
                 slug,
                 level: "members",
                 read_groups: BTreeSet::new(),
+                read_users: BTreeSet::new(),
                 write_level: "listed",
                 write_groups: BTreeSet::new(),
                 write_users: BTreeSet::from([u]),
@@ -2886,6 +2900,7 @@ impl Access {
             slug,
             level,
             read_groups: BTreeSet::new(),
+            read_users: BTreeSet::new(),
             write_level: "members",
             write_groups: BTreeSet::new(),
             write_users: BTreeSet::new(),
@@ -2997,7 +3012,9 @@ impl Access {
             (_, None) => false,
             ("members", Some(_)) => true,
             ("staff", Some(u)) => self.users[u].staff,
-            (_, Some(u)) => self.users[u].staff || self.lets_in(&c.read_groups, u),
+            (_, Some(u)) => {
+                self.users[u].staff || self.lets_in(&c.read_groups, u) || c.read_users.contains(&u)
+            }
         }
     }
 
@@ -3220,7 +3237,9 @@ impl Access {
             ("public", _) => true,
             ("members", "members" | "staff" | "listed") => true,
             ("staff", "staff") => true,
-            ("listed", "listed") => d.read_groups.is_subset(&s.read_groups),
+            ("listed", "listed") => {
+                d.read_groups.is_subset(&s.read_groups) && d.read_users.is_subset(&s.read_users)
+            }
             _ => false,
         }
     }
@@ -3282,15 +3301,18 @@ impl Access {
         let to_ids = |groups: &BTreeSet<usize>| -> Vec<i64> {
             groups.iter().map(|&g| self.groups[g]).collect()
         };
-        // A feed's owner keeps starting threads in it when the write grant
-        // lists who may, and always runs it: the form doesn't name them
-        // there, and the store does.
-        let write_users: BTreeSet<usize> = match (space.owner, write_level) {
-            (Some(owner), "listed") => BTreeSet::from([owner]),
-            _ => BTreeSet::new(),
+        // A feed's owner holds all of its permissions (DESIGN.md §3.2):
+        // the form doesn't name them, and the store names them in every
+        // grant that lists people.
+        let owner_where = |grant_level: &str| -> BTreeSet<usize> {
+            match (space.owner, grant_level) {
+                (Some(owner), "listed") => BTreeSet::from([owner]),
+                _ => BTreeSet::new(),
+            }
         };
-        let user_ids: Vec<i64> = write_users.iter().map(|&u| self.users[u].id).collect();
-        let write = Grant::from_parts(write_level, &to_ids(&write_groups), &user_ids);
+        let read_users = owner_where(level);
+        let write_users = owner_where(write_level);
+        let write = Grant::from_parts(write_level, &to_ids(&write_groups), &[]);
         let settings = SpaceSettings {
             slug: space.slug.clone(),
             name: format!("Space {c}"),
@@ -3306,11 +3328,18 @@ impl Access {
         }
         .clean()
         .unwrap();
-        self.block(store::update_space(&self.db, space.id, &settings))
-            .unwrap()
+        let saved = self
+            .block(store::update_space(&self.db, space.id, &settings))
             .unwrap();
+        // Nor may any of a feed's grants be left to staff alone.
+        if space.owner.is_some() && (level == "staff" || write_level == "staff") {
+            assert_eq!(saved, Err(store::FEED_OWNER_TAKES_PART.to_owned()));
+            return;
+        }
+        saved.unwrap();
         let space = &mut self.spaces[c];
         space.level = level;
+        space.read_users = read_users;
         space.read_groups = if level == "listed" {
             read_groups
         } else {
@@ -4226,15 +4255,19 @@ impl Access {
             assert!(self.knows_group(u, g) || self.spaces[c].read_groups.contains(&g));
         }
         let id = self.spaces[c].id;
+        // A feed's owner is named too, as the store names them.
+        let read_users: BTreeSet<usize> = self.spaces[c].owner.into_iter().collect();
+        let user_ids: Vec<i64> = read_users.iter().map(|&u| self.users[u].id).collect();
         self.block(store::set_grant(
             &self.pool,
             id,
             "read",
-            &Grant::from_parts("listed", &ids, &[]),
+            &Grant::from_parts("listed", &ids, &user_ids),
         ))
         .unwrap();
         self.spaces[c].level = "listed";
         self.spaces[c].read_groups = read_groups;
+        self.spaces[c].read_users = read_users;
     }
 
     /// What the admin's space form does: new read and write levels and
@@ -4774,28 +4807,50 @@ impl Access {
     /// Everything each viewer can get from the content module. It makes
     /// hundreds of queries, so it is sampled: it always runs on the first
     /// and last states, and now and then in between.
-    /// A feed's owner always runs it (DESIGN.md §3.2), whatever its
-    /// administrators have saved.
+    /// A feed's owner holds all of its permissions (DESIGN.md §2, §3.2),
+    /// whatever its administrators have saved: every grant lets them
+    /// through, and they can always open it and its settings.
     #[invariant]
     fn feeds_are_run_by_their_owners(&self, _: TestCase) {
         for c in &self.spaces {
             let Some(owner) = c.owner else { continue };
-            let (level, user_ids): (String, Vec<i64>) = self
+            let grants: Vec<(String, String, Vec<i64>)> = self
                 .block(
                     sqlx::query_as(
-                        "SELECT level, user_ids FROM space_grants
-                         WHERE space_id = $1 AND verb = 'administer'",
+                        "SELECT verb, level, user_ids FROM space_grants WHERE space_id = $1",
                     )
                     .bind(c.id)
-                    .fetch_one(&self.pool),
+                    .fetch_all(&self.pool),
                 )
                 .unwrap();
-            assert!(
-                level == "members"
-                    || (level == "listed" && user_ids.contains(&self.users[owner].id)),
-                "feed {} is run by {level} {user_ids:?}",
-                c.slug
-            );
+            assert_eq!(grants.len(), 4);
+            for (verb, level, user_ids) in grants {
+                assert!(
+                    level == "members"
+                        || (level == "public" && verb == "read")
+                        || (level == "listed" && user_ids.contains(&self.users[owner].id)),
+                    "feed {}: {verb} is {level} {user_ids:?}",
+                    c.slug
+                );
+            }
+            // A suspended member reads only what visitors read.
+            if self.users[owner].suspended {
+                continue;
+            }
+            let viewer = self.viewer(Some(owner));
+            let target = self
+                .block(content::space_target(&self.db, &viewer, &c.slug))
+                .unwrap()
+                .unwrap_or_else(|| panic!("the owner of feed {} can't read it", c.slug));
+            let rules = &target.rules;
+            assert!(rules.may_administer(&viewer), "feed {}", c.slug);
+            if !self.users[owner].silenced {
+                assert!(
+                    rules.may_start(&viewer) && rules.may_reply(&viewer, false),
+                    "feed {}",
+                    c.slug
+                );
+            }
         }
     }
 

@@ -213,6 +213,65 @@ async fn setup_checks_the_form(db: PgPool) {
     assert_eq!(response.status, StatusCode::SEE_OTHER);
 }
 
+/// Setup is about to make spaces at /c/announcements and /c/general, and
+/// usernames share their namespace (DESIGN.md §3.1): the admin can't take
+/// either, since their feed would be at that address.
+#[sqlx::test]
+async fn setup_keeps_the_first_spaces_addresses(db: PgPool) {
+    let forum = Forum::new(db);
+    let token = token_of(&setup::prepare(&forum.state).await.unwrap().unwrap());
+    for username in ["General", "announcements"] {
+        let mut fields = with_token(&token, ADMIN);
+        fields.retain(|(k, _)| *k != "username");
+        fields.push(("username", username));
+        let response = forum.submit("/setup", &fields, None).await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{username}");
+        assert!(
+            response.body.contains("That username is taken."),
+            "{}",
+            response.body
+        );
+    }
+    let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+        .fetch_one(&forum.db)
+        .await
+        .unwrap();
+    assert_eq!(users, 0);
+}
+
+/// A database that isn't quite empty may already have a member called
+/// General, and so their feed at /c/general. Setup leaves it alone: the
+/// feed isn't taken for the General space, made essential or put on the
+/// default front page.
+#[sqlx::test]
+async fn setup_never_takes_a_feed_for_a_first_space(db: PgPool) {
+    let forum = Forum::new(db);
+    let general = forum.member("general", "user", None).await;
+    let token = token_of(&setup::prepare(&forum.state).await.unwrap().unwrap());
+    let response = forum
+        .submit("/setup", &with_token(&token, ADMIN), None)
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let spaces: Vec<(bool, String, Option<i64>)> =
+        sqlx::query_as("SELECT essential, kind, owner_user_id FROM spaces WHERE slug = 'general'")
+            .fetch_all(&forum.db)
+            .await
+            .unwrap();
+    assert_eq!(spaces, vec![(false, "feed".to_owned(), Some(general))]);
+    let default = layouts::default_id(&forum.db).await.unwrap();
+    let sections = layouts::read(&forum.db, default)
+        .await
+        .unwrap()
+        .unwrap()
+        .sections;
+    assert!(
+        sections
+            .iter()
+            .all(|s| s.spaces.iter().all(|c| c.slug != "general")),
+        "{sections:?}"
+    );
+}
+
 #[sqlx::test]
 async fn a_new_token_replaces_the_old_one(db: PgPool) {
     let forum = Forum::new(db);

@@ -271,6 +271,8 @@ fn feed_slug(slug: &str) -> bool {
 pub const SPACE_SLUG_TAKEN: &str = "Another space has that address.";
 pub const FEED_ADDRESS: &str = "A feed’s address is its owner’s username.";
 pub const FEED_RUN_BY_OWNER: &str = "The owner of a feed always runs it.";
+pub const FEED_OWNER_TAKES_PART: &str =
+    "The owner of a feed can always read it, reply in it and start threads in it.";
 pub const FEED_NOT_DELETED: &str = "A feed can’t be deleted. Archive it instead.";
 pub const SPACE_SLUG_IS_USERNAME: &str =
     "That address is a member’s name. Space addresses and usernames can’t be the same.";
@@ -361,12 +363,19 @@ pub async fn add_space<'c>(
     Ok(Ok(id))
 }
 
-/// The id of the space at this address, if there is one.
-pub async fn space_id_by_slug<'c>(db: impl Handle<'c>, slug: &str) -> sqlx::Result<Option<i64>> {
+/// The id of the topic space at this address, if there is one (never a
+/// member's feed).
+pub async fn topic_space_id_by_slug<'c>(
+    db: impl Handle<'c>,
+    slug: &str,
+) -> sqlx::Result<Option<i64>> {
     let mut conn = db.open(KEY).acquire().await?;
-    sqlx::query_scalar!("SELECT id FROM spaces WHERE slug = $1", slug)
-        .fetch_optional(&mut *conn)
-        .await
+    sqlx::query_scalar!(
+        "SELECT id FROM spaces WHERE slug = $1 AND kind = 'topic'",
+        slug
+    )
+    .fetch_optional(&mut *conn)
+    .await
 }
 
 /// Changes a space to settings that [`SpaceSettings::clean`] accepted.
@@ -388,18 +397,26 @@ pub async fn update_space<'c>(
         return Ok(Ok(false));
     };
     let mut settings = settings.clone();
-    // A feed is at its owner's username, and they always run it
-    // (DESIGN.md §3.2): a grant that lists who runs it lists them too.
+    // A feed is at its owner's username, and they hold all of its
+    // permissions (DESIGN.md §2, §3.2): every grant that lists people
+    // lists them too, and none may be left to staff alone.
     if let Some(owner) = current.owner_user_id {
         if settings.slug != current.slug {
             return Ok(Err(FEED_ADDRESS.to_owned()));
         }
-        match settings.administer.level {
-            Level::Members => {}
-            Level::Listed => {
-                settings.administer.user_ids.insert(owner);
+        for (grant, refusal) in [
+            (&mut settings.read, FEED_OWNER_TAKES_PART),
+            (&mut settings.reply, FEED_OWNER_TAKES_PART),
+            (&mut settings.start, FEED_OWNER_TAKES_PART),
+            (&mut settings.administer, FEED_RUN_BY_OWNER),
+        ] {
+            match grant.level {
+                Level::Public | Level::Members => {}
+                Level::Listed => {
+                    grant.user_ids.insert(owner);
+                }
+                Level::Staff => return Ok(Err(refusal.to_owned())),
             }
-            Level::Public | Level::Staff => return Ok(Err(FEED_RUN_BY_OWNER.to_owned())),
         }
     } else if !topic_slug(&settings.slug) {
         return Ok(Err(SPACE_ADDRESS_FORM.to_owned()));

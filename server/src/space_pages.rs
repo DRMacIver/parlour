@@ -528,21 +528,25 @@ impl SettingsForm {
             .into_iter()
             .map(|user| (user.id, user.username))
             .collect();
-        // A feed's owner always runs it, without being named in the form.
-        let mut administer = settings.administer.clone();
-        if let Some(owner) = &space.owner {
-            administer.user_ids.remove(&owner.user.id);
-        }
+        // A feed's owner holds all of its permissions, without being
+        // named in the form.
+        let unnamed = |grant: &Grant| {
+            let mut grant = grant.clone();
+            if let Some(owner) = &space.owner {
+                grant.user_ids.remove(&owner.user.id);
+            }
+            grant
+        };
         Ok(SettingsForm {
             name: settings.name.clone(),
             slug: settings.slug.clone(),
             description: settings.description.clone(),
             section: section.map(|id| id.to_string()).unwrap_or_default(),
             essential: space.essential,
-            read: GrantForm::from_grant(&settings.read, &usernames),
-            reply: GrantForm::from_grant(&settings.reply, &usernames),
-            start: GrantForm::from_grant(&settings.start, &usernames),
-            administer: GrantForm::from_grant(&administer, &usernames),
+            read: GrantForm::from_grant(&unnamed(&settings.read), &usernames),
+            reply: GrantForm::from_grant(&unnamed(&settings.reply), &usernames),
+            start: GrantForm::from_grant(&unnamed(&settings.start), &usernames),
+            administer: GrantForm::from_grant(&unnamed(&settings.administer), &usernames),
         })
     }
 
@@ -655,6 +659,16 @@ impl SettingsTemplate {
     /// which stays archived (DESIGN.md §3.2).
     fn owner_gone(&self) -> bool {
         self.space.owner.as_ref().is_some_and(|owner| owner.deleted)
+    }
+
+    /// What a feed's form says under reading, replying and starting
+    /// threads: that its owner always can, then `base`.
+    fn feed_hint(&self, owner: &FeedOwner, base: &str) -> String {
+        if self.own_feed {
+            format!("You always can. {base}")
+        } else {
+            format!("{} always can. {base}", owner.user.display_name)
+        }
     }
 
     /// What a feed's form says about who runs it.

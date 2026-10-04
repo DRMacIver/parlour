@@ -349,3 +349,87 @@ async fn every_member_gets_a_feed(db: PgPool) {
         [("5".to_owned(), "kit".to_owned())]
     );
 }
+
+/// Migration 0028 (DESIGN.md §2, §3.2): 0027's notice that a topic space
+/// moved aside named the space, so it is kept only for the people who can
+/// read that space; anyone else it went to (its maker, or someone named to
+/// run it, since taken off its read grant) loses it. And a feed's owner
+/// holds every permission on it: grants saved before that are mended.
+#[sqlx::test(migrations = false)]
+async fn notices_of_moved_spaces_go_only_to_their_readers(db: PgPool) {
+    run_to(&db, 26).await;
+    exec(
+        &db,
+        "INSERT INTO users (id, username, display_name, email, role) OVERRIDING SYSTEM VALUE VALUES
+             (1, 'ruth', 'Ruth', 'ruth@example.com', 'admin'),
+             (2, 'plans', 'Plans', 'plans@example.com', 'user'),
+             (3, 'maya', 'Maya', 'maya@example.com', 'user'),
+             (4, 'jonah', 'Jonah', 'jonah@example.com', 'user'),
+             (5, 'kit', 'Kit', 'kit@example.com', 'user'),
+             (6, 'games', 'Games', 'games@example.com', 'user');
+         INSERT INTO spaces (id, slug, name, visibility, created_by) OVERRIDING SYSTEM VALUE VALUES
+             (1, 'plans', 'Secret Plans', 'restricted', 3),
+             (2, 'games', 'Games', 'members', 5);
+         INSERT INTO space_grants (space_id, verb, level, user_ids) VALUES
+             (1, 'read', 'listed', '{4}'), (1, 'reply', 'members', '{}'),
+             (1, 'start', 'members', '{}'), (1, 'administer', 'listed', '{4,5}'),
+             (2, 'read', 'members', '{}'), (2, 'reply', 'members', '{}'),
+             (2, 'start', 'members', '{}'), (2, 'administer', 'staff', '{}');
+         SELECT setval(pg_get_serial_sequence('spaces', 'id'), 2);",
+    )
+    .await;
+    run_to(&db, 27).await;
+    // A feed whose owner left themselves out of starting threads, as the
+    // store let them then, and one only staff could read.
+    exec(
+        &db,
+        "UPDATE space_grants SET level = 'listed', user_ids = '{4}'
+         WHERE verb = 'start' AND space_id = (SELECT id FROM spaces WHERE owner_user_id = 3);
+         UPDATE space_grants SET level = 'staff', user_ids = '{}'
+         WHERE verb = 'read' AND space_id = (SELECT id FROM spaces WHERE owner_user_id = 4);",
+    )
+    .await;
+
+    run_to(&db, 28).await;
+
+    // Maya made Secret Plans and Kit helps run it, but neither can read
+    // it; Jonah can, and so can Ruth, who as an admin reads every space
+    // until milestone 15. Everyone who runs Games reads it.
+    let notices = pairs(
+        &db,
+        "SELECT user_id::text, message FROM notifications WHERE kind = 'moderation' ORDER BY user_id, id",
+    )
+    .await;
+    assert_eq!(
+        notices
+            .iter()
+            .map(|(u, m)| (u.as_str(), m.contains("Secret Plans")))
+            .collect::<Vec<_>>(),
+        [("1", true), ("1", false), ("4", true), ("5", false)]
+    );
+    // The owners are back in their feeds' grants.
+    assert_eq!(
+        pairs(
+            &db,
+            "SELECT c.owner_user_id::text, g.verb || ' ' || g.level || ' ' || g.user_ids::text
+             FROM spaces c JOIN space_grants g ON g.space_id = c.id
+             WHERE c.owner_user_id IN (3, 4) AND g.verb IN ('read', 'start') ORDER BY 1, g.verb"
+        )
+        .await,
+        [
+            ("3", "read members {}"),
+            ("3", "start listed {4,3}"),
+            ("4", "read listed {4}"),
+            ("4", "start listed {4}"),
+        ]
+        .map(|(u, s)| (u.to_owned(), s.to_owned()))
+    );
+    // And from now on nothing can leave them out.
+    let refused = sqlx::raw_sql(
+        "UPDATE space_grants SET level = 'listed', user_ids = '{}'
+         WHERE verb = 'reply' AND space_id = (SELECT id FROM spaces WHERE owner_user_id = 3)",
+    )
+    .execute(&db)
+    .await;
+    assert!(refused.is_err());
+}

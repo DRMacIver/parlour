@@ -188,6 +188,13 @@ pub async fn create_admin(
     let username = form.username.trim();
     if let Err(why) = accounts::validate_username(username) {
         problems.push(why.to_owned());
+    } else if FIRST_SPACES
+        .iter()
+        .any(|space| space.0.eq_ignore_ascii_case(username))
+    {
+        // Setup is about to make a space at that address, and the admin's
+        // feed would be there (DESIGN.md §3.1: one namespace).
+        problems.push("That username is taken.".to_owned());
     }
     let display_name = accounts::clean_display_name(&form.display_name).unwrap_or_else(|why| {
         problems.push(why.to_owned());
@@ -267,29 +274,40 @@ pub async fn create_admin(
     ))
 }
 
+/// The first two spaces (DESIGN.md §3.5), as (address, name,
+/// description, whether only staff start threads): Announcements and
+/// General.
+const FIRST_SPACES: [(&str, &str, &str, bool); 2] = [
+    (
+        "announcements",
+        "Announcements",
+        "News about the forum, from the people who run it.",
+        true,
+    ),
+    (
+        "general",
+        "General",
+        "Anything that doesn’t have a space of its own yet.",
+        false,
+    ),
+];
+
 /// The first two spaces and the default front page (DESIGN.md §3.5):
 /// Announcements, in which only staff start threads, and General, both
 /// essential and open for anyone to read, in a section called "Forum",
-/// followed by an empty "Feeds" section. Site staff run them. A space
-/// whose address is taken already (the database was not quite empty) is
-/// used as it is.
+/// followed by an empty "Feeds" section. Site staff run them. A topic
+/// space whose address is taken already (the database was not quite
+/// empty) is used as it is; one at a member's name (and so their feed's
+/// address) is left out.
 async fn first_spaces(tx: &mut crate::db::Tx, admin_id: i64) -> Result<(), AppError> {
     let default = layouts::default_id(&mut *tx).await?;
     let forum = layouts::add_section(&mut *tx, default, "Forum").await?;
-    for (slug, name, description, start) in [
-        (
-            "announcements",
-            "Announcements",
-            "News about the forum, from the people who run it.",
-            Grant::staff(),
-        ),
-        (
-            "general",
-            "General",
-            "Anything that doesn’t have a space of its own yet.",
-            Grant::members(),
-        ),
-    ] {
+    for (slug, name, description, staff_start) in FIRST_SPACES {
+        let start = if staff_start {
+            Grant::staff()
+        } else {
+            Grant::members()
+        };
         let settings = SpaceSettings {
             slug: slug.to_owned(),
             name: name.to_owned(),
@@ -301,7 +319,7 @@ async fn first_spaces(tx: &mut crate::db::Tx, admin_id: i64) -> Result<(), AppEr
         };
         let space_id = match store::add_space(&mut *tx, &settings, Some(admin_id)).await? {
             Ok(id) => id,
-            Err(_) => match store::space_id_by_slug(&mut *tx, slug).await? {
+            Err(_) => match store::topic_space_id_by_slug(&mut *tx, slug).await? {
                 Some(id) => id,
                 None => continue,
             },

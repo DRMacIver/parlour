@@ -578,3 +578,120 @@ async fn topic_spaces_cant_take_a_members_name(pool: PgPool) {
         response.body
     );
 }
+
+/// The owner holds every permission on their feed (DESIGN.md §2, §3.2):
+/// whatever its settings say, they can read it, reply and start threads
+/// in it, and run it, so they can never lock themselves out of it.
+#[sqlx::test]
+async fn the_owner_holds_every_permission_on_their_feed(pool: PgPool) {
+    let s = setup(pool).await;
+    let feed = feed_id(&s.f, s.ruth).await;
+    // The form offers no "only moderators and admins" for any of them,
+    // and says she always can.
+    let settings = s.f.page_as("/c/ruth/settings", &s.ruth_cookie).await;
+    for verb in ["read", "reply", "start", "administer"] {
+        assert!(
+            !settings.contains(&format!("name=\"{verb}_level\" value=\"staff\"")),
+            "{verb}: {settings}"
+        );
+    }
+    assert!(settings.contains("You always can."), "{settings}");
+    let sams_view = s.f.page_as("/c/ruth/settings", &s.staff_cookie).await;
+    assert!(sams_view.contains("Ruth always can."), "{sams_view}");
+
+    // Ruth lets only Jonah read it, and names nobody to reply, start
+    // threads or help run it: she is kept in every grant.
+    let fields = |read_level: &'static str| {
+        vec![
+            ("name", "Ruth"),
+            ("description", ""),
+            ("read_level", read_level),
+            ("read_users", "jonah"),
+            ("reply_level", "listed"),
+            ("reply_users", ""),
+            ("start_level", "listed"),
+            ("start_users", ""),
+            ("administer_level", "listed"),
+            ("administer_users", ""),
+        ]
+    };
+    let response =
+        s.f.submit("/c/ruth/settings", &fields("listed"), Some(&s.ruth_cookie))
+            .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(
+        grants(&s.f, feed).await,
+        vec![
+            grant("read", "listed", &[s.ruth, s.jonah]),
+            grant("reply", "listed", &[s.ruth]),
+            grant("start", "listed", &[s.ruth]),
+            grant("administer", "listed", &[s.ruth]),
+        ]
+    );
+    for path in ["/c/ruth", "/c/ruth/settings", "/c/ruth/new"] {
+        assert_eq!(
+            s.f.get_as(path, Some(&s.ruth_cookie)).await.status,
+            StatusCode::OK,
+            "{path}"
+        );
+    }
+    start_thread(&s, "Still mine").await;
+    // The form doesn't name her where she is kept anyway.
+    let settings = s.f.page_as("/c/ruth/settings", &s.ruth_cookie).await;
+    assert!(
+        settings.contains("name=\"read_users\" type=\"text\" value=\"jonah\""),
+        "{settings}"
+    );
+
+    // Handing reading, replying or starting threads to the moderators
+    // alone is refused, through the form and the store.
+    let response =
+        s.f.submit("/c/ruth/settings", &fields("staff"), Some(&s.ruth_cookie))
+            .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert!(
+        response.body.contains(store::FEED_OWNER_TAKES_PART),
+        "{}",
+        response.body
+    );
+    let base = store::SpaceSettings {
+        slug: "ruth".into(),
+        name: "Ruth".into(),
+        description: String::new(),
+        read: Grant::members(),
+        reply: Grant::members(),
+        start: Grant::listed([], []),
+        administer: Grant::listed([], []),
+    };
+    for verb in ["read", "reply", "start"] {
+        let mut settings = base.clone();
+        match verb {
+            "read" => settings.read = Grant::staff(),
+            "reply" => settings.reply = Grant::staff(),
+            _ => settings.start = Grant::staff(),
+        }
+        assert_eq!(
+            store::update_space(&s.f.db, feed, &settings).await.unwrap(),
+            Err(store::FEED_OWNER_TAKES_PART.to_owned()),
+            "{verb}"
+        );
+        // Nor can anything else leave her out.
+        for g in [Grant::staff(), Grant::listed([], [s.jonah])] {
+            assert!(
+                store::set_grant(&s.f.db, feed, verb, &g).await.is_err(),
+                "{verb} {g:?}"
+            );
+        }
+    }
+    assert_eq!(
+        grants(&s.f, feed).await[0],
+        grant("read", "listed", &[s.ruth, s.jonah])
+    );
+    // Opening it to everyone is as before.
+    let mut open = base.clone();
+    open.read = Grant::public();
+    assert_eq!(
+        store::update_space(&s.f.db, feed, &open).await.unwrap(),
+        Ok(true)
+    );
+}
