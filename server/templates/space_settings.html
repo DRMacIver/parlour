@@ -64,10 +64,10 @@
   </div>
   <h2 class="panel-bar">Who can do what</h2>
   <div class="form">
-    {% call grant_fields("read", "Who can read it", form.read, groups, true, "Nobody can post where they can’t read. Moderators and admins read every space for now.") %}{% endcall %}
-    {% call grant_fields("reply", "Who can reply in its threads", form.reply, groups, false, "Of those who can read it.") %}{% endcall %}
-    {% call grant_fields("start", "Who can start threads", form.start, groups, false, "Of those who can read it.") %}{% endcall %}
-    {% call grant_fields("administer", "Who runs it", form.administer, groups, false, "They change these settings, pin and lock threads, and can archive the space. Moderators and admins always can.") %}{% endcall %}
+    {% call grant_fields("read", "Who can read it", form.read, groups.read, true, "Nobody can post where they can’t read. Moderators and admins read every space for now.") %}{% endcall %}
+    {% call grant_fields("reply", "Who can reply in its threads", form.reply, groups.reply, false, "Of those who can read it.") %}{% endcall %}
+    {% call grant_fields("start", "Who can start threads", form.start, groups.start, false, "Of those who can read it.") %}{% endcall %}
+    {% call grant_fields("administer", "Who runs it", form.administer, groups.administer, false, "They change these settings, pin and lock threads, and can archive the space. Moderators and admins always can.") %}{% endcall %}
     <div class="form-actions">
       <button class="button" type="submit">Save</button>
       <a href="/c/{{ space.space.slug }}">Back to the space</a>

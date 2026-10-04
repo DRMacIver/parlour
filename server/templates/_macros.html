@@ -32,4 +32,4 @@
 {% endmacro %}
 
 {# Breadcrumbs for a page about one post: its space and thread, or its conversation. #}
-{% macro post_crumbs(thread) %}<nav class="breadcrumbs" aria-label="Breadcrumb">{% match thread.place %}{% when crate::content::Place::Space(c) %}<a href="/">Forum index</a> › <a href="/c/{{ c.space.slug }}">{{ c.space.name }}</a>{% when crate::content::Place::Conversation(_) %}<a href="/messages">Messages</a>{% endmatch %} › <a href="{{ thread.href() }}">{{ thread.name }}</a></nav>{% endmacro %}
+{% macro post_crumbs(thread) %}<nav class="breadcrumbs" aria-label="Breadcrumb">{% match thread.place %}{% when crate::content::Place::Space(c) %}<a href="/">Forum index</a> › <a href="/c/{{ c.space.slug }}">{{ c.space.name }}</a> › <a href="{{ thread.href() }}">{{ thread.name }}</a>{% when crate::content::Place::Conversation(_) %}<a href="/messages">Messages</a> › <a href="{{ thread.href() }}">{{ thread.name }}</a>{% when crate::content::Place::Unreadable %}<a href="/">Forum index</a>{% endmatch %}</nav>{% endmacro %}

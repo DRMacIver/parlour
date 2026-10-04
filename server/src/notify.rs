@@ -314,7 +314,11 @@ pub async fn email_if_away(state: &AppState, id: i64) -> anyhow::Result<bool> {
                 let Some(post) = content::post_target(db, &viewer, post_id).await? else {
                     continue;
                 };
-                let Some(text) = &post.body else { continue };
+                // Only a live post: staff see a hidden one on the site,
+                // marked as hidden, to moderate it, but it isn't sent.
+                let Some(text) = post.body.as_ref().filter(|_| post.is_live()) else {
+                    continue;
+                };
                 let Some(location) = content::post_location(db, &viewer, post_id).await? else {
                     continue;
                 };

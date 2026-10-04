@@ -507,7 +507,7 @@ impl SettingsForm {
     async fn settings(
         &self,
         state: &AppState,
-        groups: &[GroupChoice],
+        groups: &GrantChoices,
     ) -> Result<Result<SpaceSettings, Vec<String>>, AppError> {
         let mut problems = Vec::new();
         let mut grants = Vec::new();
@@ -530,7 +530,7 @@ impl SettingsForm {
                 .groups
                 .iter()
                 .filter_map(|id| id.trim().parse::<i64>().ok())
-                .filter(|id| groups.iter().any(|g| g.id == *id))
+                .filter(|id| groups.for_verb(verb).iter().any(|g| g.id == *id))
                 .collect();
             if group_ids.len() != form.groups.len() {
                 problems.push("Choose groups from the list.".to_owned());
@@ -583,8 +583,8 @@ struct SettingsTemplate {
     form: SettingsForm,
     /// The default front page's sections, for staff to choose from.
     sections: Vec<Section>,
-    /// The groups and lists the viewer may name (DESIGN.md §3.3).
-    groups: Vec<GroupChoice>,
+    /// The groups and lists the viewer may name, per verb (DESIGN.md §3.3).
+    groups: GrantChoices,
     /// Staff also place the space on the default front page.
     staff: bool,
     /// Admins also mark it essential.
@@ -609,20 +609,54 @@ async fn default_sections(state: &AppState) -> Result<Vec<Section>, AppError> {
         .unwrap_or_default())
 }
 
-/// The groups and lists the viewer may name in the space's grants: the
-/// site's groups, the lists they own or are on, and whatever lists the
-/// grants name already, which are kept without being explained to them.
+/// What each of a space's grant forms offers (DESIGN.md §3.3).
+struct GrantChoices {
+    read: Vec<GroupChoice>,
+    reply: Vec<GroupChoice>,
+    start: Vec<GroupChoice>,
+    administer: Vec<GroupChoice>,
+}
+
+impl GrantChoices {
+    fn for_verb(&self, verb: &str) -> &[GroupChoice] {
+        match verb {
+            "read" => &self.read,
+            "reply" => &self.reply,
+            "start" => &self.start,
+            _ => &self.administer,
+        }
+    }
+}
+
+/// The groups and lists the viewer may name in each of the space's
+/// grants: the site's groups and their own lists in any of them, and
+/// whatever other lists a grant names already, in that grant only, kept
+/// without being explained to them. Nobody but its owner can put a list
+/// where it wasn't.
 async fn choosable(
     state: &AppState,
     viewer: &Viewer,
     space: &SpaceTarget,
-) -> Result<Vec<GroupChoice>, AppError> {
+) -> Result<GrantChoices, AppError> {
     let rules = &space.rules;
     let named: Vec<i64> = [&rules.read, &rules.reply, &rules.start, &rules.administer]
         .iter()
         .flat_map(|grant| grant.group_ids())
         .collect();
-    Ok(groups::choosable(state.db(), viewer.user_id(), &named).await?)
+    let all = groups::choosable(state.db(), viewer.user_id(), &named).await?;
+    let offered = |grant: &Grant| -> Vec<GroupChoice> {
+        let named = grant.group_ids();
+        all.iter()
+            .filter(|choice| choice.nameable || named.contains(&choice.id))
+            .cloned()
+            .collect()
+    };
+    Ok(GrantChoices {
+        read: offered(&rules.read),
+        reply: offered(&rules.reply),
+        start: offered(&rules.start),
+        administer: offered(&rules.administer),
+    })
 }
 
 /// The space at `slug` if the viewer administers it, or the page for

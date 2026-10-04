@@ -832,6 +832,52 @@ async fn blocks_and_unsubscribing_before_the_email_stop_it(pool: PgPool) {
     }
 }
 
+/// Regression (found by the property tests): a moderator mentioned in a
+/// post that was hidden before the email went was emailed its text. Staff
+/// see a hidden post on the site, marked as hidden, to moderate it; an
+/// email is no place for it, so it goes to nobody.
+#[sqlx::test]
+async fn hidden_posts_are_not_emailed_even_to_moderators(pool: PgPool) {
+    let s = setup(pool).await;
+    settings::set(
+        &s.f.db,
+        "notifications",
+        &NotificationSettings {
+            email_delay_minutes: 15,
+        },
+    )
+    .await
+    .unwrap();
+    s.f.member("mo", "moderator", None).await;
+    let (thread, first) = new_thread(&s.f, &s.ruth_cookie, "games", "Brass", "Hi").await;
+    let post = reply(
+        &s.f,
+        &s.jonah_cookie,
+        thread,
+        "Hidden words for @mo",
+        Some(first),
+    )
+    .await;
+    s.f.run_jobs().await;
+    s.f.exec(&format!(
+        "UPDATE posts SET hidden_at = now() WHERE id = {post}"
+    ))
+    .await;
+    s.f.exec("UPDATE users SET last_seen_at = now() - interval '1 hour'")
+        .await;
+    s.f.exec("UPDATE notifications SET created_at = created_at - interval '20 minutes'")
+        .await;
+    s.f.exec("UPDATE jobs SET run_at = now()").await;
+    for email in s.f.emails().await {
+        assert!(
+            !email.body.contains("Hidden words"),
+            "emailed to {}: {}",
+            email.to,
+            email.body
+        );
+    }
+}
+
 /// A notification email that can't be sent isn't kept with the private
 /// text it was to carry.
 #[sqlx::test]

@@ -613,6 +613,14 @@ pub async fn permalink(
     };
     match content::post_location(&state.db, &viewer, id).await? {
         Some(location) => Ok(Redirect::temporary(&location.href(id)).into_response()),
+        // An author's post in a thread they can no longer read: to what
+        // they can still see of it (DESIGN.md §3.3).
+        None if content::post_target_or_own(&state.db, &viewer, id)
+            .await?
+            .is_some() =>
+        {
+            Ok(Redirect::temporary(&format!("/p/{id}/revisions")).into_response())
+        }
         None => web::not_found(&state, &viewer).await,
     }
 }

@@ -1734,36 +1734,52 @@ pub enum Place {
     /// Boxed: a space carries its four grants, a conversation little.
     Space(Box<SpaceTarget>),
     Conversation(messages::ConversationTarget),
+    /// A space's thread the viewer can no longer read, which holds a post
+    /// of theirs (see [`post_target_or_own`]). Nothing about it is known
+    /// to them: its title and slug are left empty.
+    Unreadable,
 }
 
 impl ThreadTarget {
     pub fn space(&self) -> Option<&SpaceTarget> {
         match &self.place {
             Place::Space(space) => Some(space),
-            Place::Conversation(_) => None,
+            Place::Conversation(_) | Place::Unreadable => None,
         }
     }
 
     pub fn conversation(&self) -> Option<&messages::ConversationTarget> {
         match &self.place {
-            Place::Space(_) => None,
             Place::Conversation(conversation) => Some(conversation),
+            Place::Space(_) | Place::Unreadable => None,
         }
     }
 
-    /// Who can read it.
+    /// Whether the viewer can read it.
+    pub fn readable(&self) -> bool {
+        !matches!(self.place, Place::Unreadable)
+    }
+
+    /// Who can read it. For a thread the viewer can't read, nobody they
+    /// may count on: it is not theirs to share.
     pub fn audience(&self) -> Audience {
         match &self.place {
             Place::Space(space) => space.audience(),
             Place::Conversation(_) => Audience::Private,
+            Place::Unreadable => Audience::Restricted {
+                groups: BTreeSet::new(),
+                users: BTreeSet::new(),
+            },
         }
     }
 
-    /// Its page: the thread, or the conversation.
+    /// Its page: the thread, or the conversation. The forum's index for a
+    /// thread the viewer can't read.
     pub fn href(&self) -> String {
         match &self.place {
             Place::Space(_) => crate::format::thread_href(&self.thread.id, &self.thread.slug),
             Place::Conversation(_) => format!("/messages/{}", self.thread.id),
+            Place::Unreadable => "/".to_owned(),
         }
     }
 }
@@ -1801,8 +1817,8 @@ pub async fn thread_target(
         None => Place::Conversation(messages::conversation_target(db, row.id).await?),
     };
     let name = match &place {
-        Place::Space(_) => row.title.clone(),
         Place::Conversation(c) => c.name(&row.title, viewer.user_id()),
+        Place::Space(_) | Place::Unreadable => row.title.clone(),
     };
     Ok(Some(ThreadTarget {
         thread: ThreadRef {
@@ -1898,6 +1914,70 @@ pub async fn post_target(
     }))
 }
 
+/// A post the viewer can read ([`post_target`]), or else a post of their
+/// own in a space's thread they can no longer read (DESIGN.md §3.3: an
+/// author taken off a list keeps the ability to see and edit their posts'
+/// revisions). Only its author gets it, and only while it is live, its
+/// thread not deleted, and the author not suspended, since a suspended
+/// member reads only what visitors read. Its thread is
+/// [`Place::Unreadable`]: nothing else about it is shown. This is for the
+/// post's history and its edit form, nowhere else.
+pub async fn post_target_or_own(
+    db: &Db,
+    viewer: &Viewer,
+    post_id: i64,
+) -> sqlx::Result<Option<PostTarget>> {
+    if let Some(post) = post_target(db, viewer, post_id).await? {
+        return Ok(Some(post));
+    }
+    let Some(user) = viewer.user().filter(|user| user.may_act()) else {
+        return Ok(None);
+    };
+    let row = sqlx::query!(
+        r#"
+        SELECT p.id, p.seq, p.thread_id, p.created_at, p.edited_at, p.body_md, p.body_html,
+               t.locked, t.last_seq, u.id AS author_id, u.username, u.display_name
+        FROM posts p
+        JOIN threads t ON t.id = p.thread_id
+        JOIN users u ON u.id = p.author_id
+        WHERE p.id = $1 AND p.author_id = $2
+          AND p.deleted_at IS NULL AND p.hidden_at IS NULL
+          AND t.space_id IS NOT NULL AND t.deleted_at IS NULL
+        "#,
+        post_id,
+        user.id,
+    )
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(row.map(|row| PostTarget {
+        post_id: row.id,
+        seq: i64::from(row.seq),
+        thread: ThreadTarget {
+            thread: ThreadRef {
+                id: row.thread_id,
+                title: String::new(),
+                slug: String::new(),
+            },
+            name: String::new(),
+            place: Place::Unreadable,
+            locked: row.locked,
+            last_seq: i64::from(row.last_seq),
+        },
+        author: UserRef {
+            id: row.author_id,
+            username: row.username.to_string(),
+            display_name: row.display_name,
+        },
+        created_at: row.created_at,
+        edited_at: row.edited_at,
+        hidden: false,
+        body: Some(PostText {
+            markdown: row.body_md,
+            html: row.body_html,
+        }),
+    }))
+}
+
 /// The ids of the threads in these spaces that the viewer can see.
 pub async fn visible_thread_ids(
     db: &Db,
@@ -1990,15 +2070,16 @@ pub struct PostHistory {
     pub versions: Vec<Version>,
 }
 
-/// The versions of a live post the viewer can see. A deleted or hidden
-/// post's history is hidden with it.
+/// The versions of a live post the viewer can see, or of their own post in
+/// a thread they can no longer read ([`post_target_or_own`]). A deleted or
+/// hidden post's history is hidden with it.
 pub async fn post_history(
     db: &Db,
     viewer: &Viewer,
     post_id: i64,
     deps: &mut Deps,
 ) -> sqlx::Result<Option<PostHistory>> {
-    let Some(post) = post_target(db, viewer, post_id).await? else {
+    let Some(post) = post_target_or_own(db, viewer, post_id).await? else {
         return Ok(None);
     };
     deps.add(Tag::Thread(post.thread.thread.id));

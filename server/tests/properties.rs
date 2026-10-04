@@ -730,6 +730,42 @@ impl World {
         !p.deleted && (!p.hidden || who == Who::Staff) && self.thread_readable(p.thread, who)
     }
 
+    /// DESIGN.md §3.3: the author of a post in a thread they can no longer
+    /// read still sees its history, and may edit it, while it is live and
+    /// its thread isn't deleted, unless they are suspended (a suspended
+    /// member reads only what visitors read).
+    fn own_post_kept(&self, post: usize, who: Who) -> bool {
+        let p = &self.posts[post];
+        let suspended = who == Who::Member && self.member_suspended;
+        self.viewer_id(who) == Some(p.author)
+            && !suspended
+            && !p.deleted
+            && !p.hidden
+            && !self.threads[p.thread].deleted
+            && !self.thread_readable(p.thread, who)
+    }
+
+    /// The tokens a page may show beyond what the viewer may see anywhere:
+    /// on the history and edit pages of their own posts in threads they
+    /// can no longer read, those posts' text.
+    fn own_post_tokens(&self, path: &str, who: Who) -> BTreeSet<&str> {
+        let mut tokens = BTreeSet::new();
+        for (i, p) in self.posts.iter().enumerate() {
+            let history = format!("/p/{}/revisions", p.id);
+            let edit = format!("/p/{}/edit", p.id);
+            let on_it = path == history
+                || path
+                    .strip_prefix(history.as_str())
+                    .is_some_and(|rest| rest.starts_with('?'))
+                || path == edit;
+            if on_it && self.own_post_kept(i, who) {
+                tokens.insert(p.body_token.as_str());
+                tokens.extend(p.history.iter().map(String::as_str));
+            }
+        }
+        tokens
+    }
+
     /// The viewer a member is, for the reference permission function:
     /// the logged-in viewers as themselves, and the other members (who
     /// are in no groups, though Ruth owns a list) as a member viewer in no
@@ -1219,6 +1255,28 @@ impl World {
         }
     }
 
+    /// A post's history page shows its text and every version of it.
+    fn check_history(&self, pages: &Pages, post: usize) {
+        let p = &self.posts[post];
+        let history = pages.get(&format!("/p/{}/revisions", p.id));
+        assert_eq!(history.status, StatusCode::OK, "post {}", p.id);
+        assert!(history.body.contains(&p.body_token));
+        assert!(
+            history
+                .body
+                .contains(&format!("{} version", p.history.len() + 1))
+        );
+        for (n, token) in p.history.iter().enumerate() {
+            let version = pages.get(&format!("/p/{}/revisions?v={}", p.id, n + 1));
+            assert!(
+                version.body.contains(token),
+                "version {} of post {} lacks {token}",
+                n + 1,
+                p.id
+            );
+        }
+    }
+
     /// Checks every page `who` can visit, plus `extra` ones.
     fn check_visibility(&self, who: Who, extra: &[String]) {
         // Nothing changes during a check, so each page is fetched once,
@@ -1245,7 +1303,8 @@ impl World {
                     "{path}"
                 );
             }
-            for token in &forbidden {
+            let kept = self.own_post_tokens(path, who);
+            for token in forbidden.iter().filter(|t| !kept.contains(t.as_str())) {
                 assert!(
                     !response.body.contains(token.as_str()),
                     "{path} shows {token} to {who:?}:\n{}",
@@ -1277,6 +1336,14 @@ impl World {
         }
         for (i, p) in self.posts.iter().enumerate() {
             let permalink = pages.get(&format!("/p/{}", p.id));
+            if self.own_post_kept(i, who) {
+                // Their own post, in a thread they can no longer read: its
+                // address leads to its history, which is all there is.
+                assert_eq!(permalink.status, StatusCode::TEMPORARY_REDIRECT);
+                assert_eq!(permalink.location(), format!("/p/{}/revisions", p.id));
+                self.check_history(&pages, i);
+                continue;
+            }
             if !self.thread_readable(p.thread, who) {
                 assert_eq!(permalink.status, StatusCode::NOT_FOUND);
                 continue;
@@ -1298,22 +1365,7 @@ impl World {
                     "post {} missing from {expected}",
                     p.id
                 );
-                assert_eq!(history.status, StatusCode::OK);
-                assert!(history.body.contains(&p.body_token));
-                assert!(
-                    history
-                        .body
-                        .contains(&format!("{} version", p.history.len() + 1))
-                );
-                for (n, token) in p.history.iter().enumerate() {
-                    let version = pages.get(&format!("/p/{}/revisions?v={}", p.id, n + 1));
-                    assert!(
-                        version.body.contains(token),
-                        "version {} of post {} lacks {token}",
-                        n + 1,
-                        p.id
-                    );
-                }
+                self.check_history(&pages, i);
             } else {
                 // Deleted and hidden posts take their history with them.
                 assert_eq!(history.status, StatusCode::NOT_FOUND, "post {}", p.id);
@@ -2702,6 +2754,17 @@ impl Access {
         !self.posts[post].deleted && !self.posts[post].hidden
     }
 
+    /// DESIGN.md §3.3: the author of a live post in a thread they can no
+    /// longer read keeps its history and its edit form, unless the thread
+    /// was deleted or they are suspended.
+    fn keeps_own_post(&self, who: Option<usize>, post: usize) -> bool {
+        let p = &self.posts[post];
+        who.is_some_and(|u| u == p.author && !self.users[u].suspended)
+            && self.post_live(post)
+            && !self.threads[p.thread].deleted
+            && !self.reads_thread(who, p.thread)
+    }
+
     /// Whether the viewer may see the post's text.
     fn reads_post(&self, who: Option<usize>, post: usize) -> bool {
         self.post_live(post) && self.reads_thread(who, self.posts[post].thread)
@@ -3410,12 +3473,27 @@ impl Access {
                 assert_eq!(target.is_live(), self.post_live(p), "{who:?}: post {p}");
             }
             let readable = self.reads_post(who, p);
+            let kept = self.keeps_own_post(who, p);
+            let own = self
+                .block(content::post_target_or_own(db, &viewer, post.id))
+                .unwrap();
+            assert_eq!(own.is_some(), in_thread || kept, "{who:?}: own post {p}");
+            if let Some(own) = own {
+                assert_eq!(
+                    own.thread.readable(),
+                    in_thread,
+                    "{who:?}: post {p}'s thread"
+                );
+                if !in_thread {
+                    assert!(own.thread.thread.title.is_empty(), "{who:?}: post {p}");
+                }
+            }
             let history = self
                 .block(content::post_history(db, &viewer, post.id, &mut deps))
                 .unwrap();
             assert_eq!(
                 history.is_some(),
-                in_thread && self.shown_post(who, p),
+                (in_thread && self.shown_post(who, p)) || kept,
                 "{who:?}: history of {p}"
             );
             let reactions = self

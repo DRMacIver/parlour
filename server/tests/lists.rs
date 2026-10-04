@@ -536,6 +536,261 @@ async fn removing_someone_ends_their_access_but_keeps_their_posts(pool: PgPool) 
         post.contains("Middlemarch") && post.contains("@jonah"),
         "{post}"
     );
+    // Ruth's post, and the thread itself, are closed to him like the rest.
+    for path in [
+        format!("/p/{}", thread.first_post_id),
+        format!("/p/{}/revisions", thread.first_post_id),
+        format!("/p/{}/edit", thread.first_post_id),
+    ] {
+        let response = club.f.get_as(&path, Some(&club.jonah_cookie)).await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "{path}");
+        assert!(!response.body.contains("Suggestions?"), "{path}");
+    }
+}
+
+/// DESIGN.md §3.3: someone taken off a list keeps the ability to see and
+/// edit their own posts' revisions, though not the thread they are in.
+#[sqlx::test]
+async fn someone_taken_off_a_list_still_sees_and_edits_their_own_posts(pool: PgPool) {
+    let club = club(pool).await;
+    let list = club.ruths_list("Book club").await;
+    club.add(list, "jonah").await;
+    let space = book_space(&club, list).await;
+    let thread = club
+        .f
+        .thread(space, club.ruth, "Next month", "Suggestions?")
+        .await;
+    let reply = club
+        .f
+        .post(thread.thread_id, club.jonah, "Middlemarch, I think")
+        .await;
+    club.f
+        .submit(
+            &format!("/settings/lists/{list}/members/{}/remove", club.jonah),
+            &[],
+            Some(&club.ruth_cookie),
+        )
+        .await;
+    // His post's address leads him to its history, which shows his post
+    // and nothing else of the thread: not its title, its space or Ruth's
+    // post.
+    let response = club
+        .f
+        .get_as(&format!("/p/{reply}"), Some(&club.jonah_cookie))
+        .await;
+    assert_eq!(response.status, StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(response.location(), format!("/p/{reply}/revisions"));
+    let history = club
+        .f
+        .page_as(&format!("/p/{reply}/revisions"), &club.jonah_cookie)
+        .await;
+    assert!(history.contains("Middlemarch, I think"), "{history}");
+    assert!(
+        history.contains("You can no longer read the thread this post is in"),
+        "{history}"
+    );
+    for hidden in [
+        "Next month",
+        "next-month",
+        "Books",
+        "/c/books",
+        "Suggestions?",
+    ] {
+        assert!(!history.contains(hidden), "{hidden}: {history}");
+    }
+    // He can edit it.
+    let form = club
+        .f
+        .page_as(&format!("/p/{reply}/edit"), &club.jonah_cookie)
+        .await;
+    assert!(form.contains("Middlemarch, I think"), "{form}");
+    for hidden in ["Next month", "Books", "Suggestions?"] {
+        assert!(!form.contains(hidden), "{hidden}: {form}");
+    }
+    let response = club
+        .f
+        .submit(
+            &format!("/p/{reply}/edit"),
+            &[("body", "Middlemarch, or Persuasion")],
+            Some(&club.jonah_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(response.location(), format!("/p/{reply}/revisions"));
+    let page = club
+        .f
+        .page_as(
+            &format!("/t/{}/next-month", thread.thread_id),
+            &club.ruth_cookie,
+        )
+        .await;
+    assert!(
+        common::post_html(&page, reply).contains("Middlemarch, or Persuasion"),
+        "{page}"
+    );
+    // A locked thread keeps him from editing, as it would anyone, but not
+    // from looking.
+    club.f
+        .exec(&format!(
+            "UPDATE threads SET locked = true WHERE id = {}",
+            thread.thread_id
+        ))
+        .await;
+    assert_eq!(
+        club.f
+            .get_as(&format!("/p/{reply}/edit"), Some(&club.jonah_cookie))
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+    let response = club
+        .f
+        .submit(
+            &format!("/p/{reply}/edit"),
+            &[("body", "Something else")],
+            Some(&club.jonah_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        club.f
+            .get_as(&format!("/p/{reply}/revisions"), Some(&club.jonah_cookie))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    // Nobody else gains anything: Maya, never on the list, finds nothing.
+    for path in [
+        format!("/p/{reply}"),
+        format!("/p/{reply}/revisions"),
+        format!("/p/{reply}/edit"),
+    ] {
+        assert_eq!(
+            club.f.get_as(&path, Some(&club.maya_cookie)).await.status,
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
+    // A post a moderator hid, or that he deleted, or in a thread that was
+    // deleted, is gone for him as for anyone without the thread.
+    club.f
+        .exec(&format!(
+            "UPDATE posts SET hidden_at = now() WHERE id = {reply}"
+        ))
+        .await;
+    for path in [
+        format!("/p/{reply}"),
+        format!("/p/{reply}/revisions"),
+        format!("/p/{reply}/edit"),
+    ] {
+        assert_eq!(
+            club.f.get_as(&path, Some(&club.jonah_cookie)).await.status,
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
+    club.f
+        .exec(&format!(
+            "UPDATE posts SET hidden_at = NULL WHERE id = {reply};
+             UPDATE threads SET deleted_at = now() WHERE id = {}",
+            thread.thread_id
+        ))
+        .await;
+    assert_eq!(
+        club.f
+            .get_as(&format!("/p/{reply}/revisions"), Some(&club.jonah_cookie))
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+}
+
+/// What a suspended member reads is what a visitor reads, so a suspension
+/// isn't a way back to posts in threads they can't read.
+#[sqlx::test]
+async fn a_suspended_member_doesnt_see_their_posts_in_threads_they_cant_read(pool: PgPool) {
+    let club = club(pool).await;
+    let list = club.ruths_list("Book club").await;
+    club.add(list, "jonah").await;
+    let space = book_space(&club, list).await;
+    let thread = club
+        .f
+        .thread(space, club.ruth, "Next month", "Suggestions?")
+        .await;
+    let reply = club
+        .f
+        .post(thread.thread_id, club.jonah, "Middlemarch, I think")
+        .await;
+    let response = club
+        .f
+        .submit(
+            "/mod/users/jonah/suspend",
+            &[("days", "7"), ("reason", "Spamming")],
+            Some(&club.admin_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    for path in [
+        format!("/p/{reply}"),
+        format!("/p/{reply}/revisions"),
+        format!("/p/{reply}/edit"),
+    ] {
+        let response = club.f.get_as(&path, Some(&club.jonah_cookie)).await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "{path}");
+        assert!(!response.body.contains("Middlemarch"), "{path}");
+    }
+}
+
+#[sqlx::test]
+async fn a_suspended_owner_can_look_at_their_lists_but_not_change_them(pool: PgPool) {
+    let club = club(pool).await;
+    let list = club.ruths_list("Book club").await;
+    club.add(list, "jonah").await;
+    let response = club
+        .f
+        .submit(
+            "/mod/users/ruth/suspend",
+            &[("days", "7"), ("reason", "Spamming")],
+            Some(&club.admin_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    for path in [
+        "/settings/lists".to_owned(),
+        format!("/settings/lists/{list}"),
+    ] {
+        let response = club.f.get_as(&path, Some(&club.ruth_cookie)).await;
+        assert_eq!(response.status, StatusCode::OK, "{path}");
+        assert!(response.body.contains("Book club"), "{path}");
+    }
+    let lists_of_ruth = || async {
+        sqlx::query_scalar::<_, String>(
+            "SELECT name FROM groups WHERE owner_user_id = $1 ORDER BY name",
+        )
+        .bind(club.ruth)
+        .fetch_all(&club.f.db)
+        .await
+        .unwrap()
+    };
+    assert_eq!(lists_of_ruth().await, ["Book club", "Friends"]);
+    for (path, fields) in [
+        ("/settings/lists".to_owned(), vec![("name", "Another")]),
+        (format!("/settings/lists/{list}"), vec![("name", "Readers")]),
+        (
+            format!("/settings/lists/{list}/members"),
+            vec![("username", "maya")],
+        ),
+        (
+            format!("/settings/lists/{list}/members/{}/remove", club.jonah),
+            vec![],
+        ),
+        (format!("/settings/lists/{list}/delete"), vec![]),
+    ] {
+        let response = club.f.submit(&path, &fields, Some(&club.ruth_cookie)).await;
+        assert_eq!(response.status, StatusCode::FORBIDDEN, "{path}");
+    }
+    assert_eq!(lists_of_ruth().await, ["Book club", "Friends"]);
+    assert_eq!(club.members_of(list).await, ["jonah"]);
 }
 
 #[sqlx::test]
@@ -553,6 +808,41 @@ async fn a_list_a_grant_names_cant_be_deleted_only_renamed_or_emptied(pool: PgPo
         "{page}"
     );
     assert!(page.contains("Books"), "{page}");
+    assert!(!page.contains("can’t read"), "{page}");
+    // A space Ruth can't read names it too (its administrators changed
+    // its read grant after she named her list for replying). She is told,
+    // so that she knows why she can't delete it, but nobody else on the
+    // list learns of a space they can't read.
+    let organisers = club.f.group("organisers", "Organisers").await;
+    let hidden = club.f.space("plans", "members", None, 0).await;
+    club.f
+        .set_grant(hidden, "read", Grant::listed([organisers], []))
+        .await;
+    club.f
+        .set_grant(hidden, "reply", Grant::listed([list], []))
+        .await;
+    let page = club
+        .f
+        .page_as(&format!("/settings/lists/{list}"), &club.ruth_cookie)
+        .await;
+    assert!(page.contains("Books"), "{page}");
+    assert!(
+        page.contains("A space you can’t read names it too. Only that space’s administrators can take the list out of its settings."),
+        "{page}"
+    );
+    assert!(
+        page.contains("The list can’t be deleted while 2 spaces name it"),
+        "{page}"
+    );
+    let page = club
+        .f
+        .page_as(&format!("/settings/lists/{list}"), &club.jonah_cookie)
+        .await;
+    assert!(page.contains("Books"), "{page}");
+    assert!(
+        !page.contains("can’t read") && !page.contains("2 spaces"),
+        "{page}"
+    );
     let response = club
         .f
         .submit(
@@ -565,7 +855,7 @@ async fn a_list_a_grant_names_cant_be_deleted_only_renamed_or_emptied(pool: PgPo
     assert!(
         response
             .body
-            .contains("The list can’t be deleted while 1 space names it"),
+            .contains("The list can’t be deleted while 2 spaces name it"),
         "{}",
         response.body
     );
@@ -684,6 +974,55 @@ fn group_choices(page: &str, verb: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The fields of the Reading space's settings form: read and administer
+/// listed, read by Ruth and administered by Jonah and Ruth, with these
+/// groups ticked per verb.
+fn reading_fields(groups: &[(&str, i64)]) -> Vec<(String, String)> {
+    let mut fields = vec![
+        ("name".to_owned(), "Reading".to_owned()),
+        ("slug".to_owned(), "reading".to_owned()),
+        ("description".to_owned(), String::new()),
+        ("read_level".to_owned(), "listed".to_owned()),
+        ("read_users".to_owned(), "ruth".to_owned()),
+        ("reply_level".to_owned(), "members".to_owned()),
+        ("start_level".to_owned(), "members".to_owned()),
+        ("administer_level".to_owned(), "listed".to_owned()),
+        ("administer_users".to_owned(), "jonah, ruth".to_owned()),
+    ];
+    fields.extend(
+        groups
+            .iter()
+            .map(|(verb, id)| (format!("{verb}_group"), id.to_string())),
+    );
+    fields
+}
+
+async fn save_reading(club: &Club, cookie: &str, groups: &[(&str, i64)]) -> common::Response {
+    let fields = reading_fields(groups);
+    let fields: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    club.f
+        .submit("/c/reading/settings", &fields, Some(cookie))
+        .await
+}
+
+async fn grant_groups(club: &Club, verb: &str) -> Vec<i64> {
+    sqlx::query_scalar(
+        "SELECT unnest(group_ids) FROM space_grants g JOIN spaces s ON s.id = g.space_id
+         WHERE s.slug = 'reading' AND g.verb = $1 ORDER BY 1",
+    )
+    .bind(verb)
+    .fetch_all(&club.f.db)
+    .await
+    .unwrap()
+}
+
+/// DESIGN.md §3.3: a list's owner alone decides who is on it, so only they
+/// can name it in a grant. Anyone editing a grant that names someone
+/// else's list keeps it there, or takes it out, without learning more about
+/// it than they knew, and can't put it anywhere else.
 #[sqlx::test]
 async fn grant_forms_offer_the_lists_the_editor_knows(pool: PgPool) {
     let club = club(pool).await;
@@ -692,8 +1031,8 @@ async fn grant_forms_offer_the_lists_the_editor_knows(pool: PgPool) {
     let ruths_friends = friends_of(&club.f, club.ruth).await;
     let jonahs_friends = friends_of(&club.f, club.jonah).await;
     club.add(list, "jonah").await;
-    // Jonah makes a space, and can name the site's groups, his own lists
-    // and the lists he is on, but nobody else's.
+    // Jonah makes a space, and can name the site's groups and his own
+    // lists, but nobody else's: not even Ruth's Book club, which he is on.
     let response = club
         .f
         .submit(
@@ -711,56 +1050,103 @@ async fn grant_forms_offer_the_lists_the_editor_knows(pool: PgPool) {
         .f
         .page_as("/c/reading/settings", &club.jonah_cookie)
         .await;
-    let choices = group_choices(&page, "read");
+    for verb in ["read", "reply", "start", "administer"] {
+        assert_eq!(
+            group_choices(&page, verb),
+            [
+                (organisers.to_string(), "Organisers".to_owned()),
+                (jonahs_friends.to_string(), "Your Friends".to_owned()),
+            ],
+            "{verb}"
+        );
+    }
+    for list in [ruths_friends, list] {
+        let response = save_reading(&club, &club.jonah_cookie, &[("read", list)]).await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+        assert!(!response.body.contains("Ruth’s Friends"));
+    }
+    let response = save_reading(&club, &club.jonah_cookie, &[("read", jonahs_friends)]).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    // Ruth, who administers it with him, names her Book club alongside
+    // Jonah's Friends, which she knows only as his choice.
+    let page = club
+        .f
+        .page_as("/c/reading/settings", &club.ruth_cookie)
+        .await;
+    assert!(!page.contains("Jonah’s Friends"), "{page}");
     assert_eq!(
-        choices,
+        group_choices(&page, "read"),
+        [
+            (organisers.to_string(), "Organisers".to_owned()),
+            (list.to_string(), "Your Book club".to_owned()),
+            (ruths_friends.to_string(), "Your Friends".to_owned()),
+            (
+                jonahs_friends.to_string(),
+                "People Jonah has chosen".to_owned()
+            ),
+        ]
+    );
+    // His list is kept only where it is: it isn't offered for another verb.
+    assert_eq!(
+        group_choices(&page, "administer"),
+        [
+            (organisers.to_string(), "Organisers".to_owned()),
+            (list.to_string(), "Your Book club".to_owned()),
+            (ruths_friends.to_string(), "Your Friends".to_owned()),
+        ]
+    );
+    let response = save_reading(
+        &club,
+        &club.ruth_cookie,
+        &[("read", jonahs_friends), ("administer", jonahs_friends)],
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    let response = save_reading(
+        &club,
+        &club.ruth_cookie,
+        &[("read", jonahs_friends), ("read", list)],
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    // Jonah, on the Book club, now sees it by name where the grant names
+    // it, and nowhere else.
+    let page = club
+        .f
+        .page_as("/c/reading/settings", &club.jonah_cookie)
+        .await;
+    assert_eq!(
+        group_choices(&page, "read"),
         [
             (organisers.to_string(), "Organisers".to_owned()),
             (jonahs_friends.to_string(), "Your Friends".to_owned()),
             (list.to_string(), "Ruth’s Book club".to_owned()),
         ]
     );
-    let save = |groups: Vec<String>| {
-        let mut fields = vec![
-            ("name".to_owned(), "Reading".to_owned()),
-            ("slug".to_owned(), "reading".to_owned()),
-            ("description".to_owned(), String::new()),
-            ("read_level".to_owned(), "listed".to_owned()),
-            ("read_users".to_owned(), String::new()),
-            ("reply_level".to_owned(), "members".to_owned()),
-            ("start_level".to_owned(), "members".to_owned()),
-            ("administer_level".to_owned(), "listed".to_owned()),
-            ("administer_users".to_owned(), "jonah".to_owned()),
-        ];
-        fields.extend(groups.into_iter().map(|g| ("read_group".to_owned(), g)));
-        fields
-    };
-    let submit = |fields: Vec<(String, String)>, cookie: String| {
-        let f = &club.f;
-        async move {
-            let fields: Vec<(&str, &str)> = fields
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
-            f.submit("/c/reading/settings", &fields, Some(&cookie))
-                .await
-        }
-    };
-    let response = submit(
-        save(vec![ruths_friends.to_string()]),
-        club.jonah_cookie.clone(),
+    for verb in ["reply", "start", "administer"] {
+        assert_eq!(
+            group_choices(&page, verb),
+            [
+                (organisers.to_string(), "Organisers".to_owned()),
+                (jonahs_friends.to_string(), "Your Friends".to_owned()),
+            ],
+            "{verb}"
+        );
+    }
+    let response = save_reading(
+        &club,
+        &club.jonah_cookie,
+        &[
+            ("read", jonahs_friends),
+            ("read", list),
+            ("administer", list),
+        ],
     )
     .await;
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
-    assert!(!response.body.contains("Ruth’s Friends"));
-    let response = submit(
-        save(vec![list.to_string(), jonahs_friends.to_string()]),
-        club.jonah_cookie.clone(),
-    )
-    .await;
-    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     // An admin, on neither list, sees that the grant names lists without
-    // learning what they are, and saving keeps them.
+    // learning what they are, and saving keeps them; but can't name them
+    // anywhere else.
     let page = club
         .f
         .page_as("/c/reading/settings", &club.admin_cookie)
@@ -770,9 +1156,8 @@ async fn grant_forms_offer_the_lists_the_editor_knows(pool: PgPool) {
         "{page}"
     );
     let sams_friends = friends_of(&club.f, club.f.user_id("sam").await).await;
-    let choices = group_choices(&page, "read");
     assert_eq!(
-        choices,
+        group_choices(&page, "read"),
         [
             (organisers.to_string(), "Organisers".to_owned()),
             (sams_friends.to_string(), "Your Friends".to_owned()),
@@ -783,22 +1168,47 @@ async fn grant_forms_offer_the_lists_the_editor_knows(pool: PgPool) {
             (list.to_string(), "People Ruth has chosen".to_owned()),
         ]
     );
-    let response = submit(
-        save(vec![list.to_string(), jonahs_friends.to_string()]),
-        club.admin_cookie.clone(),
+    assert_eq!(
+        group_choices(&page, "administer"),
+        [
+            (organisers.to_string(), "Organisers".to_owned()),
+            (sams_friends.to_string(), "Your Friends".to_owned()),
+        ]
+    );
+    let response = save_reading(
+        &club,
+        &club.admin_cookie,
+        &[
+            ("read", list),
+            ("read", jonahs_friends),
+            ("administer", jonahs_friends),
+        ],
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    let response = save_reading(
+        &club,
+        &club.admin_cookie,
+        &[("read", list), ("read", jonahs_friends)],
     )
     .await;
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
-    let named: Vec<i64> = sqlx::query_scalar(
-        "SELECT unnest(group_ids) FROM space_grants g JOIN spaces s ON s.id = g.space_id
-         WHERE s.slug = 'reading' AND g.verb = 'read' ORDER BY 1",
-    )
-    .fetch_all(&club.f.db)
-    .await
-    .unwrap();
     let mut expected = vec![list, jonahs_friends];
     expected.sort();
-    assert_eq!(named, expected);
+    assert_eq!(grant_groups(&club, "read").await, expected);
+    assert!(grant_groups(&club, "administer").await.is_empty());
+    // Unticking a list takes it out, and then nobody but its owner can put
+    // it back.
+    let response = save_reading(&club, &club.jonah_cookie, &[("read", jonahs_friends)]).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(grant_groups(&club, "read").await, [jonahs_friends]);
+    let response = save_reading(
+        &club,
+        &club.jonah_cookie,
+        &[("read", jonahs_friends), ("read", list)],
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
 }
 
 #[sqlx::test]

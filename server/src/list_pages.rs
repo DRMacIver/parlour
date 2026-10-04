@@ -212,6 +212,29 @@ impl ListTemplate {
     fn named_in(&self) -> String {
         lists::named_in(self.named_in)
     }
+
+    /// For its owner, how many spaces they can't read name the list. Only
+    /// its owner is told: to anyone else on it, a space they can't read
+    /// might as well not exist.
+    fn unreadable_spaces(&self) -> i64 {
+        if self.list.yours {
+            self.named_in - self.spaces.len() as i64
+        } else {
+            0
+        }
+    }
+
+    fn unreadable_note(&self) -> String {
+        let too = if self.spaces.is_empty() { "" } else { " too" };
+        match self.unreadable_spaces() {
+            1 => format!(
+                "A space you can’t read names it{too}. Only that space’s administrators can take the list out of its settings."
+            ),
+            n => format!(
+                "{n} spaces you can’t read name it{too}. Only their administrators can take the list out of their settings."
+            ),
+        }
+    }
 }
 
 /// What to show on a list's page besides the list.

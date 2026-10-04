@@ -150,7 +150,7 @@ fn is_public(audience: &Audience) -> bool {
 /// names the thread, to those who may read it then.
 fn place_name(thread: &ThreadTarget) -> &'static str {
     match &thread.place {
-        Place::Space(_) => "a thread",
+        Place::Space(_) | Place::Unreadable => "a thread",
         Place::Conversation(_) => "a conversation",
     }
 }

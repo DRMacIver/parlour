@@ -5,7 +5,8 @@
 {%- let post = history.post -%}
 {% call m::post_crumbs(post.thread) %}{% endcall %}
 <h1 class="page-title">Edit history</h1>
-<p class="lede"><a href="/p/{{ post.post_id }}">№ {{ post.seq }}</a> by <a href="/u/{{ post.author.username }}">{{ post.author.display_name }}</a> · {{ crate::format::plural(history.versions.len() as i64, "version", "versions") }} · Edits made within 5 minutes of posting count as part of the original.</p>
+{% if !post.thread.readable() %}<div class="notice" role="status"><p>You can no longer read the thread this post is in, but it is still yours: you can see its history{% if !post.thread.locked %} and <a href="/p/{{ post.post_id }}/edit">edit it</a>{% endif %}.</p></div>{% endif %}
+<p class="lede">{% if post.thread.readable() %}<a href="/p/{{ post.post_id }}">№ {{ post.seq }}</a>{% else %}№ {{ post.seq }}{% endif %} by <a href="/u/{{ post.author.username }}">{{ post.author.display_name }}</a> · {{ crate::format::plural(history.versions.len() as i64, "version", "versions") }} · Edits made within 5 minutes of posting count as part of the original.</p>
 <div class="with-sidebar revisions">
   <section class="panel" aria-labelledby="version-heading">
     <h2 class="panel-bar" id="version-heading">Version {{ selected }}{% if !note.is_empty() %} · {{ note }}{% endif %}</h2>

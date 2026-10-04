@@ -222,6 +222,7 @@ pub async fn reply_refusal(
     };
     Ok(match &thread.place {
         Place::Conversation(_) => crate::messages::send_refusal(state, viewer, thread).await?,
+        Place::Unreadable => Some("You can no longer read this thread."),
         Place::Space(space) => {
             if let Some(why) = restriction(user) {
                 Some(why)
@@ -358,7 +359,7 @@ pub async fn reply(
         return Ok(Err(Refused::Invalid(problems)));
     }
     let action = match thread.place {
-        Place::Space(_) => Action::Post,
+        Place::Space(_) | Place::Unreadable => Action::Post,
         Place::Conversation(_) => Action::Message,
     };
     if !allowed_to_post(state, user, action).await? {
@@ -417,7 +418,9 @@ pub async fn edit(
     let Some(user) = viewer.user() else {
         return Ok(Err(Refused::LogIn));
     };
-    let Some(post) = content::post_target(state.db(), viewer, post_id).await? else {
+    // An author can edit their post in a thread they can no longer read
+    // (DESIGN.md §3.3).
+    let Some(post) = content::post_target_or_own(state.db(), viewer, post_id).await? else {
         return Ok(Err(Refused::NotFound));
     };
     if post.body.is_none() || (!post.is_live() && !viewer.is_staff()) {

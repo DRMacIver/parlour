@@ -53,14 +53,17 @@
 
 <section class="panel" aria-labelledby="spaces-heading">
   <h2 class="panel-bar" id="spaces-heading">Where it is named</h2>
-  {% if spaces.is_empty() %}
-  <p class="empty">{% if named_in == 0 %}No space’s settings name this list yet.{% else %}No space you can read names this list.{% endif %}</p>
-  {% else %}
+  {% if !spaces.is_empty() %}
   <ul class="member-list">
   {% for space in spaces %}
     <li><a href="/c/{{ space.slug }}">{{ space.name }}</a></li>
   {% endfor %}
   </ul>
+  {% endif %}
+  {% if self.unreadable_spaces() > 0 %}
+  <p class="{% if spaces.is_empty() %}empty{% else %}panel-foot{% endif %}">{{ self.unreadable_note() }}</p>
+  {% else if spaces.is_empty() %}
+  <p class="empty">{% if list.yours && named_in == 0 %}No space’s settings name this list yet.{% else %}No space you can read names this list.{% endif %}</p>
   {% endif %}
 </section>
 

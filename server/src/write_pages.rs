@@ -148,6 +148,11 @@ fn space_crumbs(space: &SpaceTarget) -> Vec<Crumb> {
 }
 
 fn thread_crumbs(thread: &ThreadTarget) -> Vec<Crumb> {
+    // Nothing about a thread the viewer can't read, though a post of
+    // theirs is in it.
+    if !thread.readable() {
+        return Vec::new();
+    }
     let mut crumbs = match thread.space() {
         Some(space) => space_crumbs(space),
         None => vec![Crumb {
@@ -680,13 +685,14 @@ pub async fn reply(
 
 // -- Editing
 
-/// A live post the viewer may edit.
+/// A live post the viewer may edit: one they can read, or their own in a
+/// thread they can no longer read (DESIGN.md §3.3).
 async fn edit_target(
     state: &AppState,
     viewer: &Viewer,
     post_id: i64,
 ) -> Result<Result<PostTarget, Refused>, AppError> {
-    let Some(post) = content::post_target(state.db(), viewer, post_id)
+    let Some(post) = content::post_target_or_own(state.db(), viewer, post_id)
         .await?
         .filter(|post| post.is_live() || (viewer.is_staff() && post.body.is_some()))
     else {
@@ -771,7 +777,14 @@ pub async fn edit(
         };
     }
     match writing::edit(&state, &viewer, post_id, &draft.body, Some(&draft.reason)).await? {
-        Ok(done) => posted(&state, &viewer, done).await,
+        // To the post, or to its history if it is the author's own in a
+        // thread they can no longer read.
+        Ok(done) => Ok(see_other(
+            &match content::post_location(state.db(), &viewer, done.post_id).await? {
+                Some(location) => location.href(done.post_id),
+                None => format!("/p/{}/revisions", done.post_id),
+            },
+        )),
         Err(refusal) => {
             let compose = match edit_target(&state, &viewer, post_id).await? {
                 Ok(post) => Typed::Form(Box::new(Compose::Edit(post)), draft),

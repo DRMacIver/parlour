@@ -7,7 +7,8 @@
 //! (see [`crate::lists`]), but they are hidden from everyone who isn't on
 //! them, admins included: everything here that lists or finds groups for
 //! admins and invites knows only site groups. [`choosable`] is what a
-//! grant form offers, which is where the two meet.
+//! grant form offers, which is where the two meet: a list can be named in
+//! a grant only by its owner.
 //!
 //! Group names show on the index next to restricted spaces, but only to
 //! viewers who can read those spaces, and they are never in the anonymous
@@ -253,13 +254,19 @@ pub async fn existing(db: &Db, ids: &[i64]) -> sqlx::Result<Vec<i64>> {
 pub struct GroupChoice {
     pub id: i64,
     pub label: String,
+    /// Whether they may name it in any grant: a site group, or a list of
+    /// their own. Anyone else's list is offered only where a grant names
+    /// it already.
+    pub nameable: bool,
 }
 
-/// The groups and lists `viewer` may name in a grant (DESIGN.md §3.3):
-/// every site group, by name; their own lists ("Your Friends"); the lists
-/// they are on ("Ruth’s Book club"); and, so that a form can keep what a
-/// grant already says, the lists in `named` that they know nothing about,
-/// only as "People Ruth has chosen".
+/// The groups and lists a grant form offers `viewer` (DESIGN.md §3.3):
+/// every site group, by name, and their own lists ("Your Friends"), which
+/// they may name anywhere; and, so that a form can keep what a grant
+/// already says, the other lists in `named`: by name if they are on it
+/// ("Ruth’s Book club"), otherwise only as "People Ruth has chosen". A
+/// list's owner alone decides who is on it, so only they can name it in a
+/// grant that doesn't already.
 pub async fn choosable(
     db: &Db,
     viewer: Option<i64>,
@@ -267,7 +274,7 @@ pub async fn choosable(
 ) -> sqlx::Result<Vec<GroupChoice>> {
     sqlx::query_as!(
         GroupChoice,
-        r#"SELECT id AS "id!", label AS "label!" FROM (
+        r#"SELECT id AS "id!", label AS "label!", rank < 2 AS "nameable!" FROM (
                SELECT g.id, g.name, o.display_name, o.id AS owner_id,
                       CASE WHEN g.owner_user_id IS NULL THEN 0
                            WHEN g.owner_user_id = $1 THEN 1
@@ -285,7 +292,6 @@ pub async fn choosable(
                ) k
                WHERE g.owner_user_id IS NULL
                   OR g.owner_user_id = $1
-                  OR k.on_it
                   OR g.id = ANY($2)
            ) c
            ORDER BY rank, CASE WHEN rank >= 2 THEN lower(display_name) END, owner_id,
