@@ -269,6 +269,54 @@ async fn a_lock_shows_only_where_a_thread_is_narrower_than_its_space(pool: PgPoo
 }
 
 #[sqlx::test]
+async fn a_restriction_no_narrower_than_its_space_shows_no_lock(pool: PgPool) {
+    let club = club(pool).await;
+    let f = &club.f;
+    // Only Organisers read, reply and start threads in Organising.
+    let organising = f.space("organising", "public", None, 1).await;
+    f.restrict(organising, &[club.organisers], Some(&[club.organisers]))
+        .await;
+    let thread = f
+        .thread(organising, club.kit, "Agenda", "What shall we do?")
+        .await
+        .thread_id;
+    let path = format!("/t/{thread}/agenda");
+    let organisers = || Grant::listed([club.organisers], [club.kit]);
+    // A restriction naming just the space's own groups (and its author)
+    // leaves out nobody the space lets in, so it shows nothing extra.
+    club.restrict(thread, Some(organisers()), Some(organisers()))
+        .await;
+    let page = f.page_as(&path, &club.kit_cookie).await;
+    assert!(page.contains("Agenda"), "{page}");
+    assert!(!page.contains("thread-audience"), "{page}");
+    let list = f.page_as("/c/organising", &club.kit_cookie).await;
+    assert!(list.contains("Agenda"), "{list}");
+    assert!(!list.contains("flag-restricted"), "{list}");
+
+    // Narrower replying alone shows only who may reply.
+    club.restrict(
+        thread,
+        Some(organisers()),
+        Some(Grant::listed([], [club.kit])),
+    )
+    .await;
+    let page = f.page_as(&path, &club.kit_cookie).await;
+    assert!(page.contains("Only Kit can reply."), "{page}");
+    assert!(!page.contains("can read this thread"), "{page}");
+    let list = f.page_as("/c/organising", &club.kit_cookie).await;
+    assert!(!list.contains("flag-restricted"), "{list}");
+
+    // Narrower reading shows the lock, in the thread and in lists.
+    club.restrict(thread, Some(Grant::listed([], [club.kit])), None)
+        .await;
+    let page = f.page_as(&path, &club.kit_cookie).await;
+    assert!(page.contains("Only Kit can read this thread."), "{page}");
+    assert!(!page.contains("can reply."), "{page}");
+    let list = f.page_as("/c/organising", &club.kit_cookie).await;
+    assert!(list.contains("flag-restricted"), "{list}");
+}
+
+#[sqlx::test]
 async fn the_author_restricts_a_thread_through_the_form(pool: PgPool) {
     let club = club(pool).await;
     let f = &club.f;
@@ -683,6 +731,92 @@ async fn a_held_new_thread_keeps_its_restriction(pool: PgPool) {
     .await
     .unwrap();
     assert!(!public);
+}
+
+#[sqlx::test]
+async fn a_held_new_thread_loses_a_list_deleted_while_it_waits(pool: PgPool) {
+    let mut club = club(pool).await;
+    club.f = club.f.without_rate_limits();
+    let f = &club.f;
+    // Tomasz is new, so his first posts are held.
+    parlour::settings::set(
+        &f.db,
+        "messages",
+        &parlour::settings::MessageSettings::default(),
+    )
+    .await
+    .unwrap();
+    let tomasz = f.member("tomasz", "user", None).await;
+    let cookie = f.session(tomasz).await;
+    let friends = f
+        .id(&format!(
+            "SELECT id FROM groups WHERE owner_user_id = {tomasz} AND name = 'Friends'"
+        ))
+        .await;
+    f.join_group(friends, club.jonah).await;
+    let response = f
+        .submit(
+            "/c/general/new",
+            &[
+                ("title", "Hi from Leeds"),
+                ("body", "Just to my friends and Maya."),
+                ("read", "only"),
+                ("read_group", &friends.to_string()),
+                ("read_users", "maya"),
+            ],
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert!(
+        response.location().starts_with("/held/"),
+        "{}",
+        response.location()
+    );
+    // A held thread doesn't keep its list from being deleted.
+    let response = f
+        .submit(
+            &format!("/settings/lists/{friends}/delete"),
+            &[],
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(
+        f.id(&format!("SELECT count(*) FROM groups WHERE id = {friends}"))
+            .await,
+        0
+    );
+    let held = f.id("SELECT max(id) FROM held_posts").await;
+    let response = f
+        .submit(
+            &format!("/mod/held/{held}/approve"),
+            &[("reason", "")],
+            Some(&club.staff_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    // The thread keeps the rest of its restriction, which is only narrower
+    // for losing the list.
+    let thread = f
+        .id("SELECT id FROM threads WHERE title = 'Hi from Leeds'")
+        .await;
+    assert_eq!(
+        club.stored(thread).await,
+        (Some(vec![]), Some(vec![club.maya, tomasz]), None, None)
+    );
+    assert_eq!(club.visibility(thread).await, "restricted");
+    assert!(!f.page("/c/general").await.contains("Hi from Leeds"));
+    assert!(
+        !f.page_as("/c/general", &club.jonah_cookie)
+            .await
+            .contains("Hi from Leeds")
+    );
+    assert!(
+        f.page_as("/c/general", &club.maya_cookie)
+            .await
+            .contains("Hi from Leeds")
+    );
 }
 
 #[sqlx::test]

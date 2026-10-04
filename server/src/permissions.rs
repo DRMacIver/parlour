@@ -271,6 +271,16 @@ fn basic_at_most_as_visible(source: &Audience, dest: &Audience) -> bool {
     }
 }
 
+/// Whether a thread's restriction of one verb leaves out someone its
+/// space's grant of that verb lets in, comparing names: unless everyone the
+/// grant lets in is let in by the grant narrowed by the restriction.
+pub fn narrows(space: &Grant, restriction: Option<&Grant>) -> bool {
+    restriction.is_some_and(|restriction| {
+        let whole = space.audience();
+        !at_most_as_visible(&whole.clone().narrowed(Some(restriction)), &whole)
+    })
+}
+
 /// Whether a member can read something with this audience. The access
 /// layer decides this in SQL for reads; this is the same rule, for checking
 /// the destination of a write. Staff read every space for now (DESIGN.md
@@ -420,6 +430,20 @@ impl ThreadRestriction {
         }
     }
 
+    /// Whether its read restriction leaves out someone its space lets
+    /// read, so that the thread is narrower than its space and shows its
+    /// lock (DESIGN.md §3.4). Names are compared, as [`at_most_as_visible`]
+    /// compares them: a restriction naming every group and person the
+    /// space's grant names (and perhaps more) narrows nothing.
+    pub fn narrows_reading(&self, space: &SpaceRules) -> bool {
+        narrows(&space.read, self.read.as_ref())
+    }
+
+    /// The same for its reply restriction and the space's reply grant.
+    pub fn narrows_replying(&self, space: &SpaceRules) -> bool {
+        narrows(&space.reply, self.reply.as_ref())
+    }
+
     /// Who can read the thread: its space's readers, narrowed by its own
     /// read restriction.
     pub fn audience(&self, space: &SpaceRules) -> Audience {
@@ -506,6 +530,35 @@ mod tests {
         ];
         for (s, d) in no {
             assert!(!at_most_as_visible(&s, &d), "{s:?} -> {d:?}");
+        }
+    }
+
+    #[test]
+    fn a_restriction_narrows_unless_it_names_all_the_space_names() {
+        let g1 = || Grant::listed([1], []);
+        let cases = [
+            (Grant::public(), None, false),
+            (Grant::public(), Some(Grant::listed([1, 2], [7])), true),
+            (Grant::members(), Some(Grant::listed([1], [])), true),
+            (Grant::staff(), Some(Grant::listed([1], [7])), true),
+            (g1(), None, false),
+            (g1(), Some(g1()), false),
+            (g1(), Some(Grant::listed([1, 2], [7])), false),
+            (g1(), Some(Grant::listed([2], [7])), true),
+            (g1(), Some(Grant::listed([], [7])), true),
+            (Grant::listed([1], [7]), Some(g1()), true),
+            (
+                Grant::listed([1], [7]),
+                Some(Grant::listed([1], [7])),
+                false,
+            ),
+        ];
+        for (space, restriction, narrower) in cases {
+            assert_eq!(
+                narrows(&space, restriction.as_ref()),
+                narrower,
+                "{space:?} narrowed by {restriction:?}"
+            );
         }
     }
 

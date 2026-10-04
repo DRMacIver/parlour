@@ -637,6 +637,16 @@ impl World {
         }
     }
 
+    /// Whether thread `t`'s read restriction leaves out someone its space
+    /// lets read, comparing names. A feed's owner is named in both.
+    fn narrower_than_its_space(&self, t: usize) -> bool {
+        let thread = &self.threads[t];
+        let space = &self.spaces[thread.space];
+        thread.read.as_ref().is_some_and(|(groups, _)| {
+            space.read_level != "listed" || !space.read_groups.is_subset(groups)
+        })
+    }
+
     /// Whether space `c` is out of sight in `who`'s lists of spaces
     /// (DESIGN.md §3.2): a feed with no thread they can read.
     fn out_of_sight(&self, c: usize, who: Who) -> bool {
@@ -1582,10 +1592,11 @@ impl World {
                 assert!(response.body.contains(&t.title_token));
                 self.check_toggle(who, t.id, true, &response.body);
                 // A lock and its audience only for a thread narrower than
-                // its space (DESIGN.md §3.4).
+                // its space (DESIGN.md §3.4): one whose restriction doesn't
+                // name every group its listed space names.
                 assert_eq!(
                     response.body.contains("class=\"thread-audience\""),
-                    t.read.is_some(),
+                    self.narrower_than_its_space(i),
                     "{who:?}'s lock on thread {i}"
                 );
             } else if let Some(into) = t.merged_into.filter(|&into| {

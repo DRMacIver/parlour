@@ -350,8 +350,9 @@ pub struct ThreadRow {
     /// For a logged-in viewer, how many posts they haven't read yet: those
     /// after their read marker, or every post if they've never opened it.
     pub unread: Option<i64>,
-    /// For a thread with its own read restriction, who it names, as the
-    /// viewer may know them (DESIGN.md §3.3, §3.4): what its lock says.
+    /// For a thread whose own read restriction makes it narrower than its
+    /// space, who it names, as the viewer may know them (DESIGN.md §3.3,
+    /// §3.4): what its lock says.
     pub restricted_to: Option<String>,
 }
 
@@ -673,13 +674,16 @@ async fn thread_rows(
                src.visible AS "source_visible?",
                CASE WHEN $6::bigint IS NULL THEN NULL
                     ELSE t.last_seq - coalesce(tr.last_read_seq, 0) END AS unread,
-               t.read_group_ids IS NOT NULL AS "restricted!",
+               t.read_group_ids AS "thread_read_group_ids?", t.read_user_ids AS "thread_read_user_ids?",
+               r.level AS space_read_level, r.group_ids AS space_read_group_ids,
+               r.user_ids AS space_read_user_ids,
                site_group_names(coalesce(t.read_group_ids, '{}')) AS "restricted_groups!",
                list_labels(coalesce(t.read_group_ids, '{}'), $6) AS "restricted_lists!",
                people_names(coalesce(t.read_user_ids, '{}')) AS "restricted_people!"
         FROM threads t
         LEFT JOIN thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $6
         JOIN spaces c ON c.id = t.space_id
+        JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'
         JOIN users a ON a.id = t.author_id
         LEFT JOIN LATERAL (
             SELECT p.id, p.author_id, p.created_at FROM posts p
@@ -758,7 +762,22 @@ async fn thread_rows(
                 locked: row.locked,
                 forked_from,
                 unread: row.unread.map(i64::from),
-                restricted_to: row.restricted.then(|| {
+                restricted_to: crate::permissions::narrows(
+                    &Grant::from_parts(
+                        &row.space_read_level,
+                        &row.space_read_group_ids,
+                        &row.space_read_user_ids,
+                    ),
+                    ThreadRestriction::from_parts(
+                        row.thread_read_group_ids.as_deref(),
+                        row.thread_read_user_ids.as_deref(),
+                        None,
+                        None,
+                    )
+                    .read
+                    .as_ref(),
+                )
+                .then(|| {
                     crate::format::restriction_label(
                         &row.restricted_groups,
                         &row.restricted_lists,
@@ -786,10 +805,11 @@ pub struct ThreadPage {
     pub locked: bool,
     /// Its own read and reply restriction, if it has one (DESIGN.md §3.4).
     pub restriction: ThreadRestriction,
-    /// Who its read restriction names, if it has one, as the viewer may
-    /// know them: the audience shown beside its lock.
+    /// Who its read restriction names, if it makes the thread narrower
+    /// than its space, as the viewer may know them: the audience shown
+    /// beside its lock.
     pub read_label: Option<String>,
-    /// And its reply restriction.
+    /// And its reply restriction, if it narrows the space's reply grant.
     pub reply_label: Option<String>,
     /// For a quote-fork, the post it quotes.
     pub embed: Option<Embed>,
@@ -972,6 +992,51 @@ pub async fn thread_page(
 
     let posts = posts_on_page(db, viewer, thread.id, page, deps).await?;
 
+    let rules = SpaceRules {
+        read: Grant::from_parts(
+            &thread.read_level,
+            &thread.read_group_ids,
+            &thread.read_user_ids,
+        ),
+        reply: Grant::from_parts(
+            &thread.reply_level,
+            &thread.reply_group_ids,
+            &thread.reply_user_ids,
+        ),
+        start: Grant::from_parts(
+            &thread.start_level,
+            &thread.start_group_ids,
+            &thread.start_user_ids,
+        ),
+        administer: Grant::from_parts(
+            &thread.administer_level,
+            &thread.administer_group_ids,
+            &thread.administer_user_ids,
+        ),
+        archived: thread.archived_at.is_some(),
+    };
+    let restriction = ThreadRestriction::from_parts(
+        thread.thread_read_group_ids.as_deref(),
+        thread.thread_read_user_ids.as_deref(),
+        thread.thread_reply_group_ids.as_deref(),
+        thread.thread_reply_user_ids.as_deref(),
+    );
+    // The lock, only for a part narrower than the space's (DESIGN.md §3.4).
+    let read_label = restriction.narrows_reading(&rules).then(|| {
+        crate::format::restriction_label(
+            &thread.read_groups,
+            &thread.read_lists,
+            &thread.read_people,
+        )
+    });
+    let reply_label = restriction.narrows_replying(&rules).then(|| {
+        crate::format::restriction_label(
+            &thread.reply_groups,
+            &thread.reply_lists,
+            &thread.reply_people,
+        )
+    });
+
     Ok(Some(ThreadPage {
         thread: ThreadRef {
             id: thread.id,
@@ -991,29 +1056,7 @@ pub async fn thread_page(
             list_names: thread.list_names,
             created_by: thread.created_by,
             created_at: thread.space_created_at,
-            rules: SpaceRules {
-                read: Grant::from_parts(
-                    &thread.read_level,
-                    &thread.read_group_ids,
-                    &thread.read_user_ids,
-                ),
-                reply: Grant::from_parts(
-                    &thread.reply_level,
-                    &thread.reply_group_ids,
-                    &thread.reply_user_ids,
-                ),
-                start: Grant::from_parts(
-                    &thread.start_level,
-                    &thread.start_group_ids,
-                    &thread.start_user_ids,
-                ),
-                administer: Grant::from_parts(
-                    &thread.administer_level,
-                    &thread.administer_group_ids,
-                    &thread.administer_user_ids,
-                ),
-                archived: thread.archived_at.is_some(),
-            },
+            rules,
             owner: user_ref(
                 thread.owner_id,
                 thread.owner_username,
@@ -1035,26 +1078,9 @@ pub async fn thread_page(
         last_seq: i64::from(thread.last_seq),
         pinned: thread.pinned,
         locked: thread.locked,
-        read_label: thread.thread_read_group_ids.is_some().then(|| {
-            crate::format::restriction_label(
-                &thread.read_groups,
-                &thread.read_lists,
-                &thread.read_people,
-            )
-        }),
-        reply_label: thread.thread_reply_group_ids.is_some().then(|| {
-            crate::format::restriction_label(
-                &thread.reply_groups,
-                &thread.reply_lists,
-                &thread.reply_people,
-            )
-        }),
-        restriction: ThreadRestriction::from_parts(
-            thread.thread_read_group_ids.as_deref(),
-            thread.thread_read_user_ids.as_deref(),
-            thread.thread_reply_group_ids.as_deref(),
-            thread.thread_reply_user_ids.as_deref(),
-        ),
+        read_label,
+        reply_label,
+        restriction,
         embed,
         posts,
         read_marker: thread.read_marker.map(i64::from),
