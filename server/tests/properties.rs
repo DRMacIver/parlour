@@ -620,10 +620,21 @@ impl World {
                 .unwrap()
         );
         self.threads[t].read = read;
+        self.name_feed_owner(t);
         self.changed(Change::ThreadChanged {
             thread_id: id,
             previous_space_id: None,
         });
+    }
+
+    /// The database names a feed's owner in any restriction of a thread
+    /// in their feed (DESIGN.md §2, §3.2), however it came there.
+    fn name_feed_owner(&mut self, t: usize) {
+        if let Some(owner) = self.spaces[self.threads[t].space].owner
+            && let Some((_, users)) = &mut self.threads[t].read
+        {
+            users.insert(owner);
+        }
     }
 
     /// Whether space `c` is out of sight in `who`'s lists of spaces
@@ -897,9 +908,15 @@ impl World {
     /// those who read its space and whom it names; staff read every
     /// thread for now.
     fn thread_readable(&self, thread: usize, who: Who) -> bool {
+        !self.threads[thread].deleted && self.readable_if_live(thread, who)
+    }
+
+    /// Whether the viewer would read a thread were it live: what a merged
+    /// thread's address needs to lead them on to the thread it was merged
+    /// into.
+    fn readable_if_live(&self, thread: usize, who: Who) -> bool {
         let t = &self.threads[thread];
-        !t.deleted
-            && self.space_readable(t.space, who)
+        self.space_readable(t.space, who)
             && match (&t.read, who) {
                 (None, _) | (_, Who::Staff) => true,
                 (Some(_), Who::Anonymous) => false,
@@ -1564,7 +1581,7 @@ impl World {
                 assert!(response.body.contains(&t.title_token));
                 self.check_toggle(who, t.id, true, &response.body);
             } else if let Some(into) = t.merged_into.filter(|&into| {
-                t.deleted && self.space_readable(t.space, who) && self.thread_readable(into, who)
+                t.deleted && self.readable_if_live(i, who) && self.thread_readable(into, who)
             }) {
                 // A merged thread leads to the one it was merged into.
                 let into = &self.threads[into];
@@ -1948,6 +1965,7 @@ impl World {
         let space = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
         let previous = self.threads[thread].space;
         self.threads[thread].space = space;
+        self.name_feed_owner(thread);
         self.exec(format!(
             "UPDATE threads SET space_id = {} WHERE id = {}",
             self.spaces[space].id, self.threads[thread].id
@@ -4782,6 +4800,21 @@ impl Access {
             .unwrap();
         assert_eq!(previous, Some(self.spaces[self.threads[t].space].id));
         self.threads[t].space = c;
+        self.name_feed_owner(t);
+    }
+
+    /// A feed's owner holds every permission on it (DESIGN.md §2, §3.2),
+    /// so the database names them in every part of a restriction of a
+    /// thread in their feed, however it came there; a thread moved out
+    /// keeps the names it had.
+    fn name_feed_owner(&mut self, t: usize) {
+        let Some(owner) = self.spaces[self.threads[t].space].owner else {
+            return;
+        };
+        let thread = &mut self.threads[t];
+        for names in [&mut thread.read, &mut thread.reply].into_iter().flatten() {
+            names.users.insert(owner);
+        }
     }
 
     /// Gives a thread its own read and reply restrictions, naming random
@@ -4803,6 +4836,7 @@ impl Access {
         );
         self.threads[t].read = read;
         self.threads[t].reply = reply;
+        self.name_feed_owner(t);
     }
 
     /// A member tries to change a thread's restriction as the writing
@@ -4813,8 +4847,34 @@ impl Access {
         tc.assume(!self.threads.is_empty());
         let t = tc.draw(gs::integers::<usize>().max_value(self.threads.len() - 1));
         let u = tc.draw(gs::integers::<usize>().max_value(self.users.len() - 1));
-        let read = self.draw_names(&tc);
-        let reply = self.draw_names(&tc);
+        let mut read = self.draw_names(&tc);
+        let mut reply = self.draw_names(&tc);
+        // Each part may name the groups and lists `u` knows, and keep
+        // those it names already (DESIGN.md §3.3; decisions #52, #67).
+        let nameable = |names: &Option<Names>, now: &Option<Names>| {
+            names.as_ref().is_none_or(|names| {
+                names.groups.iter().all(|&g| {
+                    self.knows_group(u, g)
+                        || now.as_ref().is_some_and(|now| now.groups.contains(&g))
+                })
+            })
+        };
+        if tc.draw(gs::booleans()) {
+            // Mostly, only what they may name.
+            for (names, now) in [
+                (&mut read, &self.threads[t].read),
+                (&mut reply, &self.threads[t].reply),
+            ] {
+                if let Some(names) = names {
+                    names.groups.retain(|&g| {
+                        self.knows_group(u, g)
+                            || now.as_ref().is_some_and(|now| now.groups.contains(&g))
+                    });
+                }
+            }
+        }
+        let lawful =
+            nameable(&read, &self.threads[t].read) && nameable(&reply, &self.threads[t].reply);
         let restriction = self.restriction(&read, &reply);
         let viewer = self.viewer(Some(u));
         let outcome = self
@@ -4853,6 +4913,13 @@ impl Access {
             );
             return;
         }
+        if !lawful {
+            assert!(
+                matches!(outcome, Err(Refused::Invalid(_))),
+                "{u} naming what they don't know in {t}: {outcome:?}"
+            );
+            return;
+        }
         assert_eq!(outcome, Ok(()), "{u} restricting {t}");
         let author = thread.author;
         let with_author = |names: Option<Names>| {
@@ -4863,6 +4930,7 @@ impl Access {
         };
         self.threads[t].read = with_author(read);
         self.threads[t].reply = with_author(reply);
+        self.name_feed_owner(t);
     }
 
     #[rule]
@@ -5121,10 +5189,11 @@ impl Access {
     /// and last states, and now and then in between.
     /// A feed's owner holds all of its permissions (DESIGN.md §2, §3.2),
     /// whatever its administrators have saved: every grant lets them
-    /// through, and they can always open it and its settings.
+    /// through, they can always open it and its settings, and they can
+    /// read and reply in every thread in it, whoever restricted it.
     #[invariant]
     fn feeds_are_run_by_their_owners(&self, _: TestCase) {
-        for c in &self.spaces {
+        for (space, c) in self.spaces.iter().enumerate() {
             let Some(owner) = c.owner else { continue };
             let grants: Vec<(String, String, Vec<i64>)> = self
                 .block(
@@ -5162,6 +5231,27 @@ impl Access {
                     "feed {}",
                     c.slug
                 );
+            }
+            // And every thread in it, whatever its own restriction says
+            // (DESIGN.md §3.4): it names the owner.
+            for (t, thread) in self.threads.iter().enumerate() {
+                if thread.space != space || thread.deleted {
+                    continue;
+                }
+                let target = self
+                    .block(content::thread_target(&self.db, &viewer, thread.id))
+                    .unwrap()
+                    .filter(|target| target.readable())
+                    .unwrap_or_else(|| {
+                        panic!("the owner of feed {} can't read thread {t}", c.slug)
+                    });
+                if !self.users[owner].silenced {
+                    assert!(
+                        target.restriction.may_reply(rules, &viewer, false),
+                        "the owner of feed {} can't reply in thread {t}",
+                        c.slug
+                    );
+                }
             }
         }
     }

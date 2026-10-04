@@ -516,9 +516,15 @@ async fn the_author_and_the_spaces_administrators_restrict_a_thread(pool: PgPool
     .await
     .unwrap();
     assert!(matches!(refused, Err(Refused::Invalid(_))), "{refused:?}");
-    // A moderator who doesn't run the space may too, and it is logged.
+    // A moderator who doesn't run the space may too, naming what they
+    // may name (not Ruth's list, which they aren't on), and it is logged.
     let sam = f.id("SELECT id FROM users WHERE username = 'sam'").await;
-    writing::restrict_thread(&f.state, &club.viewer(sam).await, thread, &friends_only)
+    let organisers = f.group("organisers", "Organisers").await;
+    let organisers_only = ThreadRestriction {
+        read: Some(Grant::listed([organisers], [])),
+        reply: None,
+    };
+    writing::restrict_thread(&f.state, &club.viewer(sam).await, thread, &organisers_only)
         .await
         .unwrap()
         .unwrap();
@@ -664,4 +670,347 @@ async fn the_moderation_log_keeps_restricted_threads_private(pool: PgPool) {
     }
     let log = f.get_as("/moderation", Some(&club.jonah_cookie)).await.body;
     assert!(log.contains("Loud word"), "{log}");
+}
+
+/// The id of a member's feed.
+async fn feed_of(f: &Forum, owner: i64) -> i64 {
+    f.id(&format!(
+        "SELECT id FROM spaces WHERE kind = 'feed' AND owner_user_id = {owner}"
+    ))
+    .await
+}
+
+#[sqlx::test]
+async fn a_feeds_owner_is_named_in_every_restriction_there(pool: PgPool) {
+    let club = club(pool).await;
+    let f = &club.f;
+    // Ruth opens her feed to every member's threads: a guestbook.
+    let feed = feed_of(f, club.ruth).await;
+    f.set_grant(feed, "start", Grant::members()).await;
+    let thread = f
+        .thread(feed, club.maya, "Hello Ruth", "Signing your book.")
+        .await
+        .thread_id;
+    // Maya narrows it to herself, but it is in Ruth's feed, and the owner
+    // holds every permission on it (DESIGN.md §2, §3.2).
+    writing::restrict_thread(
+        &f.state,
+        &club.viewer(club.maya).await,
+        thread,
+        &ThreadRestriction {
+            read: Some(Grant::listed([], [club.maya])),
+            reply: Some(Grant::listed([], [club.maya])),
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let ruth = club.viewer(club.ruth).await;
+    let target = content::thread_target(f.state.db(), &ruth, thread)
+        .await
+        .unwrap()
+        .expect("Ruth reads every thread in her feed");
+    assert!(target.readable());
+    let space = target.space().unwrap();
+    assert!(target.restriction.may_reply(&space.rules, &ruth, false));
+    // Kit isn't named, and reads nothing.
+    assert!(
+        content::thread_target(f.state.db(), &club.viewer(club.kit).await, thread)
+            .await
+            .unwrap()
+            .is_none_or(|t| !t.readable())
+    );
+    // The store can't leave her out either.
+    store::set_thread_restriction(
+        f.state.db(),
+        thread,
+        &ThreadRestriction {
+            read: Some(Grant::listed([], [club.kit])),
+            reply: Some(Grant::listed([], [])),
+        },
+    )
+    .await
+    .unwrap();
+    let (read_users, reply_users): (Vec<i64>, Vec<i64>) =
+        sqlx::query_as("SELECT read_user_ids, reply_user_ids FROM threads WHERE id = $1")
+            .bind(thread)
+            .fetch_one(&f.db)
+            .await
+            .unwrap();
+    assert!(read_users.contains(&club.ruth), "{read_users:?}");
+    assert!(reply_users.contains(&club.ruth), "{reply_users:?}");
+    // Nor does a restricted thread moved into her feed.
+    let general = f.space("general", "members", None, 0).await;
+    let moved = f
+        .thread(general, club.maya, "Moving in", "Soon to be Ruth's.")
+        .await
+        .thread_id;
+    club.restrict(moved, Some(Grant::listed([], [club.maya])), None)
+        .await;
+    store::move_thread(f.state.db(), moved, feed)
+        .await
+        .unwrap()
+        .unwrap();
+    let read_users: Vec<i64> =
+        sqlx::query_scalar("SELECT read_user_ids FROM threads WHERE id = $1")
+            .bind(moved)
+            .fetch_one(&f.db)
+            .await
+            .unwrap();
+    assert!(read_users.contains(&club.ruth), "{read_users:?}");
+}
+
+#[sqlx::test]
+async fn a_deleted_thread_doesnt_hold_on_to_a_list_or_group(pool: PgPool) {
+    let club = club(pool).await;
+    let f = &club.f;
+    let general = f.space("general", "members", None, 0).await;
+    let organisers = f.group("organisers", "Organisers").await;
+    let thread = f
+        .thread(general, club.ruth, "Plans", "Who is coming?")
+        .await
+        .thread_id;
+    club.restrict(
+        thread,
+        Some(Grant::listed([club.friends, organisers], [])),
+        Some(Grant::listed([organisers], [])),
+    )
+    .await;
+    f.exec(&format!(
+        "UPDATE threads SET deleted_at = now() WHERE id = {thread}"
+    ))
+    .await;
+    // Nobody can change a deleted thread's restriction, so it doesn't
+    // keep the list from being deleted.
+    let page = f
+        .page_as(
+            &format!("/settings/lists/{}", club.friends),
+            &club.ruth_cookie,
+        )
+        .await;
+    assert!(!page.contains("names it"), "{page}");
+    assert_eq!(
+        parlour::lists::threads_naming(f.state.db(), club.friends)
+            .await
+            .unwrap(),
+        0
+    );
+    let response = f
+        .submit(
+            &format!("/settings/lists/{}/delete", club.friends),
+            &[],
+            Some(&club.ruth_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(
+        parlour::groups::delete(f.state.db(), organisers)
+            .await
+            .unwrap(),
+        Ok(true)
+    );
+    // The names go from the deleted thread, which, restored, is still
+    // restricted, to the names left: only ever narrower.
+    let (read_groups, reply_groups, read_users): (Vec<i64>, Vec<i64>, Vec<i64>) = sqlx::query_as(
+        "SELECT read_group_ids, reply_group_ids, read_user_ids FROM threads WHERE id = $1",
+    )
+    .bind(thread)
+    .fetch_one(&f.db)
+    .await
+    .unwrap();
+    assert!(read_groups.is_empty() && reply_groups.is_empty());
+    assert!(read_users.is_empty());
+    f.exec(&format!(
+        "UPDATE threads SET deleted_at = NULL WHERE id = {thread}"
+    ))
+    .await;
+    assert_eq!(club.visibility(thread).await, "restricted");
+    // A live thread still holds on to what it names.
+    let live = f
+        .thread(general, club.ruth, "More plans", "Still coming?")
+        .await
+        .thread_id;
+    let book_club = parlour::lists::create(f.state.db(), club.ruth, "Book club")
+        .await
+        .unwrap()
+        .unwrap();
+    club.restrict(live, Some(Grant::listed([book_club], [])), None)
+        .await;
+    assert_eq!(
+        parlour::lists::delete(f.state.db(), club.ruth, book_club)
+            .await
+            .unwrap(),
+        parlour::lists::Change::Refused(parlour::lists::named_in(0, 1))
+    );
+}
+
+#[sqlx::test]
+async fn a_restriction_names_only_groups_and_people_the_editor_may(pool: PgPool) {
+    let club = club(pool).await;
+    let f = &club.f;
+    let general = f.space("general", "members", None, 0).await;
+    f.set_grant(general, "administer", Grant::listed([], [club.kit]))
+        .await;
+    let inner = parlour::lists::create(f.state.db(), club.maya, "Inner circle")
+        .await
+        .unwrap()
+        .unwrap();
+    let organisers = f.group("organisers", "Organisers").await;
+    let thread = f
+        .thread(general, club.ruth, "Plans", "Who is coming?")
+        .await
+        .thread_id;
+    let ruth = club.viewer(club.ruth).await;
+    let read = |groups: Vec<i64>, users: Vec<i64>| ThreadRestriction {
+        read: Some(Grant::listed(groups, users)),
+        reply: None,
+    };
+    // Maya's list is hidden from Ruth; a group that doesn't exist, and
+    // someone who doesn't, can't be named either.
+    let deleted = f.member("gone", "user", None).await;
+    f.exec(&format!(
+        "UPDATE users SET deleted_at = now() WHERE id = {deleted}"
+    ))
+    .await;
+    for restriction in [
+        read(vec![inner], vec![]),
+        read(vec![999_999], vec![]),
+        read(vec![], vec![999_999]),
+        read(vec![], vec![deleted]),
+        ThreadRestriction {
+            read: None,
+            reply: Some(Grant::listed([inner], [])),
+        },
+    ] {
+        let refused = writing::restrict_thread(&f.state, &ruth, thread, &restriction)
+            .await
+            .unwrap();
+        assert!(
+            matches!(refused, Err(Refused::Invalid(_))),
+            "{restriction:?}: {refused:?}"
+        );
+    }
+    let named: Option<Vec<i64>> =
+        sqlx::query_scalar("SELECT read_group_ids FROM threads WHERE id = $1")
+            .bind(thread)
+            .fetch_one(&f.db)
+            .await
+            .unwrap();
+    assert_eq!(named, None);
+    // Her own list, a site group and live members are hers to name.
+    writing::restrict_thread(
+        &f.state,
+        &ruth,
+        thread,
+        &read(vec![club.friends, organisers], vec![club.maya]),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    // Jonah is on Ruth's Friends, so he may name it too.
+    let jonahs = f
+        .thread(general, club.jonah, "Jonah's", "Mine.")
+        .await
+        .thread_id;
+    writing::restrict_thread(
+        &f.state,
+        &club.viewer(club.jonah).await,
+        jonahs,
+        &read(vec![club.friends], vec![]),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    // Kit runs the space and doesn't know Ruth's Friends, but may keep it
+    // where it is named already, while changing the rest.
+    let kit = club.viewer(club.kit).await;
+    writing::restrict_thread(
+        &f.state,
+        &kit,
+        thread,
+        &ThreadRestriction {
+            read: Some(Grant::listed([club.friends], [club.maya])),
+            reply: Some(Grant::listed([organisers], [])),
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    // But not put it somewhere it isn't.
+    let refused = writing::restrict_thread(
+        &f.state,
+        &kit,
+        thread,
+        &ThreadRestriction {
+            read: Some(Grant::listed([club.friends], [])),
+            reply: Some(Grant::listed([club.friends], [])),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(refused, Err(Refused::Invalid(_))), "{refused:?}");
+    // And the database refuses a group that doesn't exist.
+    assert!(
+        store::set_thread_restriction(f.state.db(), thread, &read(vec![999_999], vec![]))
+            .await
+            .is_err()
+    );
+}
+
+#[sqlx::test]
+async fn a_busy_feed_visitors_cant_read_clears_no_cached_front_page(pool: PgPool) {
+    let club = club(pool).await;
+    let f = &club.f;
+    // Ruth's feed is read by members, as feeds are made.
+    let feed = feed_of(f, club.ruth).await;
+    let mut posts = Vec::new();
+    for title in ["One", "Two", "Three"] {
+        posts.push(
+            f.thread(feed, club.ruth, title, "In my feed.")
+                .await
+                .first_post_id,
+        );
+    }
+    let thread = f.id("SELECT id FROM threads WHERE title = 'Three'").await;
+    for change in [
+        Change::PostCreated {
+            post_id: *posts.last().unwrap(),
+        },
+        Change::ThreadChanged {
+            thread_id: thread,
+            previous_space_id: None,
+        },
+    ] {
+        let tags = parlour::changes::tags_for(f.state.db(), change)
+            .await
+            .unwrap();
+        assert!(
+            !tags.contains(&parlour::cache::Tag::Site),
+            "{change:?}: {tags:?}"
+        );
+    }
+    // Opened to visitors, its first public thread does clear it.
+    f.set_grant(feed, "read", Grant::public()).await;
+    let tags = parlour::changes::tags_for(
+        f.state.db(),
+        Change::ThreadChanged {
+            thread_id: thread,
+            previous_space_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!tags.contains(&parlour::cache::Tag::Site), "{tags:?}");
+    f.exec("UPDATE threads SET deleted_at = now() WHERE title IN ('One', 'Two')")
+        .await;
+    let tags = parlour::changes::tags_for(
+        f.state.db(),
+        Change::ThreadChanged {
+            thread_id: thread,
+            previous_space_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(tags.contains(&parlour::cache::Tag::Site), "{tags:?}");
 }

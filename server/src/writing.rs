@@ -565,8 +565,10 @@ pub async fn react(
 /// it away to leave the space's audience (DESIGN.md §3.4). Its author may,
 /// while they can read it, and so may the space's administrators, staff
 /// included, whether or not they can read it. A restriction only names
-/// groups, lists and people, and always names the author, who could
-/// otherwise shut themselves out of their own thread. Staff changing a
+/// groups, lists and people the editor may name (see [`unnameable`]), and
+/// always names the author, who could otherwise shut themselves out of
+/// their own thread, and in a feed its owner, who holds every permission
+/// on it (the database names them too, however a thread comes there). Staff changing a
 /// thread in a space they don't run in their own right, and that isn't
 /// theirs, is recorded in the moderation log.
 pub async fn restrict_thread(
@@ -602,14 +604,28 @@ pub async fn restrict_thread(
             "A thread can only be narrowed to groups, lists and people.".to_owned(),
         ])));
     }
-    let restriction = restriction.clone().naming(target.author_id);
+    let problems = unnameable(state, user.id, restriction, &target.restriction).await?;
+    if !problems.is_empty() {
+        return Ok(Err(Refused::Invalid(problems)));
+    }
+    let mut restriction = restriction.clone().naming(target.author_id);
+    // A feed's owner holds every permission on it (DESIGN.md §2, §3.2).
+    if let Some(owner) = &target.space.owner {
+        restriction = restriction.naming(owner.user.id);
+    }
     if restriction == target.restriction {
         return Ok(Ok(()));
     }
     let before = target.audience();
     let after = restriction.audience(&target.space.rules);
-    if !store::set_thread_restriction(state.db(), thread_id, &restriction).await? {
-        return Ok(Err(Refused::NotFound));
+    match store::set_thread_restriction(state.db(), thread_id, &restriction).await {
+        Ok(true) => {}
+        Ok(false) => return Ok(Err(Refused::NotFound)),
+        // A group it names was deleted in the meantime.
+        Err(sqlx::Error::Database(err)) if err.is_foreign_key_violation() => {
+            return Ok(Err(Refused::Invalid(vec![CHOOSE_GROUPS.to_owned()])));
+        }
+        Err(err) => return Err(err.into()),
     }
     if !author && viewer.is_staff() && !target.space.rules.administers_by_grant(viewer) {
         mod_records::record(
@@ -640,6 +656,53 @@ pub async fn restrict_thread(
         })
         .await?;
     Ok(Ok(()))
+}
+
+const CHOOSE_GROUPS: &str = "Choose groups and lists from those offered.";
+
+/// What is wrong with the names a member gives a thread's restriction
+/// (DESIGN.md §3.3, §3.4), as a grant's form checks them
+/// (`docs/v02-decisions.md` #52, #66, #67): each part may name the site
+/// groups, the lists the editor owns or is on, and whatever lists that
+/// part names already, which they may keep without knowing them; and
+/// members whose accounts aren't deleted, or people it names already.
+async fn unnameable(
+    state: &AppState,
+    editor: i64,
+    restriction: &ThreadRestriction,
+    current: &ThreadRestriction,
+) -> Result<Vec<String>, AppError> {
+    let mut problems = Vec::new();
+    for (part, now) in [
+        (&restriction.read, &current.read),
+        (&restriction.reply, &current.reply),
+    ] {
+        let Some(grant) = part else { continue };
+        let named_groups: Vec<i64> = now
+            .iter()
+            .flat_map(|g| g.group_ids.iter().copied())
+            .collect();
+        let offered: std::collections::BTreeSet<i64> =
+            crate::groups::choosable(state.db(), Some(editor), &named_groups)
+                .await?
+                .into_iter()
+                .flat_map(|choice| choice.ids)
+                .collect();
+        if !grant.group_ids.is_subset(&offered) {
+            problems.push(CHOOSE_GROUPS.to_owned());
+        }
+        let new_users: Vec<i64> = grant
+            .user_ids
+            .iter()
+            .copied()
+            .filter(|id| now.as_ref().is_none_or(|g| !g.user_ids.contains(id)))
+            .collect();
+        if crate::users::live(state.db(), &new_users).await?.len() != new_users.len() {
+            problems.push("Name only people who are members here.".to_owned());
+        }
+    }
+    problems.dedup();
+    Ok(problems)
 }
 
 /// The spaces a post could be quoted into: those the viewer may post

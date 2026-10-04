@@ -88,6 +88,16 @@ pub async fn usernames_of(db: &Db, ids: &[i64]) -> sqlx::Result<Vec<NamedUser>> 
     .await
 }
 
+/// Those of these ids that are members whose accounts aren't deleted.
+pub async fn live(db: &Db, ids: &[i64]) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar!(
+        "SELECT id FROM users WHERE id = ANY($1) AND deleted_at IS NULL ORDER BY id",
+        ids
+    )
+    .fetch_all(db.pool())
+    .await
+}
+
 /// Records that the member can read their email (a magic link or reset
 /// link reached them).
 pub async fn mark_verified(db: &Db, user_id: i64) -> sqlx::Result<()> {

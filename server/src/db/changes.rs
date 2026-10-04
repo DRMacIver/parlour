@@ -152,20 +152,22 @@ pub async fn post_seq(db: &Db, post_id: i64) -> sqlx::Result<Option<(i64, i64)>>
 }
 
 /// Whether a change in this space's threads may have brought a feed into
-/// visitors' view or taken it out (DESIGN.md §3.2): it is a feed with at
-/// most one public thread that isn't deleted. A feed without threads its
+/// visitors' view or taken it out (DESIGN.md §3.2): it is a feed that
+/// visitors can read, with at most one public thread that isn't deleted. A feed without threads its
 /// viewer can read is left out of the space index, front pages and the
 /// like, which are tagged `site`, and only visitors' pages are cached, so
 /// only public threads count; clearing it only when a feed has one or none
 /// keeps busy feeds from clearing it on every post. (A thread that gains
 /// or loses its own read restriction has just stopped or started being
-/// public, so it is counted as it is now.)
+/// public, so it is counted as it is now. A feed visitors can't read has
+/// no public threads and is never in their view; a change to its read
+/// grant clears `site` as any space's does.)
 async fn feed_came_or_went(db: &Db, space_id: Option<i64>) -> sqlx::Result<bool> {
     let Some(space_id) = space_id else {
         return Ok(false);
     };
     sqlx::query_scalar!(
-        r#"SELECT c.kind = 'feed'
+        r#"SELECT c.kind = 'feed' AND c.visibility = 'public'
                   AND (SELECT count(*) FROM threads t
                        WHERE t.space_id = c.id AND t.deleted_at IS NULL
                          AND t.visibility = 'public') <= 1 AS "turned!"

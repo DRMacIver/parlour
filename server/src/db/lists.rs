@@ -119,12 +119,15 @@ pub async fn spaces_naming(db: &Db, id: i64) -> sqlx::Result<i64> {
     .await
 }
 
-/// How many threads' own restrictions (DESIGN.md §3.4) name a group or
-/// list.
+/// How many live threads' own restrictions (DESIGN.md §3.4) name a group
+/// or list. A deleted thread's restriction can't be changed, so it doesn't
+/// hold on to what it names: deleting the group takes it out of the thread
+/// (migration 0030).
 pub async fn threads_naming(db: &Db, id: i64) -> sqlx::Result<i64> {
     sqlx::query_scalar!(
         r#"SELECT count(*) AS "n!" FROM threads
-           WHERE read_group_ids @> ARRAY[$1]::bigint[] OR reply_group_ids @> ARRAY[$1]::bigint[]"#,
+           WHERE deleted_at IS NULL
+             AND (read_group_ids @> ARRAY[$1]::bigint[] OR reply_group_ids @> ARRAY[$1]::bigint[])"#,
         id
     )
     .fetch_one(db.pool())
@@ -152,8 +155,8 @@ pub fn named_in(spaces: i64, threads: i64) -> String {
     )
 }
 
-/// Deletes one of `owner`'s lists, unless a space's grants or a thread's
-/// restriction name it (DESIGN.md §3.3, §3.4).
+/// Deletes one of `owner`'s lists, unless a space's grants or a live
+/// thread's restriction name it (DESIGN.md §3.3, §3.4).
 pub async fn delete(db: &Db, owner: i64, id: i64) -> sqlx::Result<Change> {
     let mut tx = db.pool().begin().await?;
     let Some(_) = sqlx::query_scalar!(
@@ -170,8 +173,9 @@ pub async fn delete(db: &Db, owner: i64, id: i64) -> sqlx::Result<Change> {
         r#"SELECT (SELECT count(DISTINCT space_id) FROM space_grants
                    WHERE group_ids @> ARRAY[$1]::bigint[]) AS "spaces!",
                   (SELECT count(*) FROM threads
-                   WHERE read_group_ids @> ARRAY[$1]::bigint[]
-                      OR reply_group_ids @> ARRAY[$1]::bigint[]) AS "threads!""#,
+                   WHERE deleted_at IS NULL
+                     AND (read_group_ids @> ARRAY[$1]::bigint[]
+                          OR reply_group_ids @> ARRAY[$1]::bigint[])) AS "threads!""#,
         id
     )
     .fetch_one(&mut *tx)
