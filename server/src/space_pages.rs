@@ -648,6 +648,9 @@ struct SettingsTemplate {
     thread_count: i64,
     /// Whether it is the viewer's own feed.
     own_feed: bool,
+    /// Whether the viewer runs it as staff without being able to read it,
+    /// so may break glass on it from here (DESIGN.md §8).
+    closed: bool,
 }
 
 impl SettingsTemplate {
@@ -774,6 +777,10 @@ async fn render_settings(
             staff: viewer.is_staff(),
             admin: viewer.is_admin(),
             own_feed: space.owned_by(viewer),
+            closed: viewer.is_staff()
+                && viewer
+                    .user()
+                    .is_some_and(|user| !user_can_read(user, &space.rules.read.audience())),
             space,
             notice,
             errors,
@@ -878,19 +885,49 @@ pub async fn save_settings(
         .settings(&state, &choosable(&state, &viewer, &space).await?)
         .await?;
     // Staff run spaces they can't read, but changing who may read one so
-    // that they could would be reading it by another way: breaking glass,
-    // which isn't done from here (DESIGN.md §3.1, §8). Naming themselves
+    // that they could is reading it by another way: breaking glass, which
+    // they confirm, saying why (DESIGN.md §3.1, §8). Naming themselves
     // among those who run it changes nothing: anyone else the administer
     // grant names must read the space to run it, so a member of staff who
-    // can't read it runs it only by their role.
+    // can't read it runs it only by their role. Those told are those who
+    // could read it before the change.
+    let mut glass = None;
     if let (Some(user), Ok(new)) = (viewer.user(), &settings)
         && viewer.is_staff()
         && !user_can_read(user, &space.rules.read.audience())
         && user_can_read(user, &new.read.audience())
     {
-        settings = Err(vec![
-            "You can’t read this space, and that would let you read it. Leave who can read it to someone who can, or choose an audience that still leaves you out.".to_owned(),
-        ]);
+        let opens: Vec<_> = content::access::closed(
+            db,
+            &viewer,
+            crate::staff_access::Scope::Space(space.space.id),
+        )
+        .await?
+        .into_iter()
+        .collect();
+        let action = format!("/c/{}/settings", space.space.slug);
+        match crate::glass_pages::ask_change(
+            &state,
+            &viewer,
+            opens.clone(),
+            crate::glass_pages::Change {
+                action: &action,
+                fields: &fields,
+                says: format!(
+                    "You can’t read {}, and saving these settings would let you.",
+                    space.space.name
+                ),
+                button: "Break glass and save",
+                back: &action,
+            },
+        )
+        .await?
+        {
+            crate::glass_pages::Confirmation::Ask(response) => return Ok(response),
+            crate::glass_pages::Confirmation::Given(reason) => {
+                glass = Some((reason, crate::glass::readers(&state, user, &opens).await?));
+            }
+        }
     }
     // Where it goes on the default front page is for staff to say.
     let section = if viewer.is_staff() {
@@ -936,6 +973,9 @@ pub async fn save_settings(
         }
         Ok(false) => web::not_found(&state, &viewer).await,
         Ok(true) => {
+            if let (Some(user), Some((reason, readers))) = (viewer.user(), &glass) {
+                crate::glass::record(&state, user, readers, reason, None).await?;
+            }
             if let Some(section) = section {
                 place_on_default(&state, space.space.id, section).await?;
             }

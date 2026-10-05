@@ -6,6 +6,7 @@
 <h1 class="page-title">{{ space.space.name }} {% call m::access_flag(space.read_level, space.group_names, space.list_names) %}{% endcall %}{% if space.archived %} <span class="flag">Archived</span>{% endif %}</h1>
 {% if let Some(owner) = space.owner %}<p class="thread-meta">{% if own_feed %}Your feed.{% else %}The feed of <a href="/u/{{ owner.username }}">{{ owner.display_name }}</a>.{% endif %}</p>{% endif %}
 {% if !space.description.is_empty() %}<p class="lede">{{ space.description }}</p>{% endif %}
+{% call m::glass_notices(space.notices) %}{% endcall %}
 {% if space.granted %}<div class="notice" role="status"><p>You can see more of this space than you could yourself because you broke glass on it, and every page of it you open is recorded.</p></div>{% endif %}
 {% if muted %}<div class="notice" role="status"><p>You’ve muted this space: it is left out of your front page, the All tab of Latest, the space index and your searches. You can still read and post here.</p></div>{% endif %}
 <div class="toolbar">

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        WITH claimed AS (\n            UPDATE notifications SET emailed_at = now()\n            WHERE user_id = $1 AND read_at IS NULL AND emailed_at IS NULL AND created_at <= $2\n            RETURNING id, kind, post_id, message, created_at, actor_id\n        )\n        SELECT c.id, c.kind, c.post_id, c.message, c.created_at,\n               (EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id\n                        WHERE b.user_id = $1 AND b.blocked_user_id = c.actor_id AND bu.role = 'user')\n                OR (c.kind IN ('subscription', 'message')\n                    AND NOT EXISTS (SELECT 1 FROM posts p\n                                    JOIN thread_subscriptions s ON s.thread_id = p.thread_id\n                                    WHERE p.id = c.post_id AND s.user_id = $1))) AS \"quiet!\"\n        FROM claimed c\n        ORDER BY c.created_at, c.id\n        ",
+  "query": "\n        WITH claimed AS (\n            UPDATE notifications SET emailed_at = now()\n            WHERE user_id = $1 AND read_at IS NULL AND emailed_at IS NULL\n              AND (created_at <= $2 OR kind = 'staff_access')\n            RETURNING id, kind, post_id, message, staff_access_id, created_at, actor_id\n        )\n        SELECT c.id, c.kind, c.post_id, c.message, c.staff_access_id, c.created_at,\n               (EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id\n                        WHERE b.user_id = $1 AND b.blocked_user_id = c.actor_id AND bu.role = 'user')\n                OR (c.kind IN ('subscription', 'message')\n                    AND NOT EXISTS (SELECT 1 FROM posts p\n                                    JOIN thread_subscriptions s ON s.thread_id = p.thread_id\n                                    WHERE p.id = c.post_id AND s.user_id = $1))) AS \"quiet!\"\n        FROM claimed c\n        ORDER BY c.created_at, c.id\n        ",
   "describe": {
     "columns": [
       {
@@ -49,6 +49,17 @@
       },
       {
         "ordinal": 4,
+        "name": "staff_access_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "notifications",
+            "name": "staff_access_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "quiet!",
         "type_info": "Bool",
         "origin": "Expression"
@@ -76,9 +87,10 @@
       false,
       true,
       true,
+      true,
       false,
       null
     ]
   },
-  "hash": "359458b745e2f34c03c09408e2b390eac47d5c1a64988d563c24d2053ee8b96c"
+  "hash": "f80833afbe636161ae8a7a0637b918d94f3271bdef2d03cb05b899a36c5d3deb"
 }

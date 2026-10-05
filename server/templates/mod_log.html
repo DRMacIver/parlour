@@ -17,5 +17,15 @@
   {% endif %}
 </section>
 {% call m::pagination(pagination, "Pages of the log") %}{% endcall %}
+{% if let Some(counts) = glass %}
+<section class="panel" aria-labelledby="glass-heading">
+  <h2 class="panel-bar" id="glass-heading">Moderators who read private content</h2>
+  <p class="panel-text">Moderators and admins read only what their own groups and lists let them. To read a private thread, space or conversation beyond that, to deal with a report for instance, they have to say why, and everyone who can read it is told at once. {{ self.glass_total() }}</p>
+  <table class="glass-counts">
+    <thead><tr><th scope="col">Month</th><th scope="col">Times</th></tr></thead>
+    <tbody>{% for (month, n) in counts.months %}<tr><td>{{ crate::format::month_year(month) }}</td><td>{{ n }}</td></tr>{% endfor %}</tbody>
+  </table>
+</section>
+{% endif %}
 <p class="panel-foot">To report something, use the report link on a post or profile, or <a href="/contact">write to the moderators</a>.</p>
 {% endblock %}

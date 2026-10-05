@@ -25,6 +25,7 @@ use crate::admin_pages::DoneQuery;
 use crate::content::{self, NamedGroup, ThreadAudience};
 use crate::error::AppError;
 use crate::format;
+use crate::glass_pages;
 use crate::groups::{self, GroupChoice};
 use crate::messages::parse_recipients;
 use crate::pages::parse_id;
@@ -362,21 +363,62 @@ pub async fn save(
             problems.extend(more);
             None
         });
-    let outcome = if problems.is_empty() {
-        writing::restrict_thread(
-            &state,
-            &viewer,
-            thread_id,
-            &ThreadRestriction {
-                read: read_grant,
-                reply: reply_grant,
-            },
-        )
-        .await?
+    let restriction = ThreadRestriction {
+        read: read_grant,
+        reply: reply_grant,
+    };
+    let glass = fields
+        .iter()
+        .find(|(key, _)| key == glass_pages::REASON_FIELD)
+        .map(|(_, value)| value.as_str());
+    let mut outcome = if problems.is_empty() {
+        writing::restrict_thread_breaking_glass(&state, &viewer, thread_id, &restriction, glass)
+            .await?
     } else {
         problems.dedup();
         Err(Refused::Invalid(problems))
     };
+    // Letting themselves read it is breaking glass, for staff, which the
+    // confirmation page asks about first (DESIGN.md §8).
+    if matches!(outcome, Err(Refused::BreaksGlass))
+        || (glass.is_some() && matches!(&outcome, Err(Refused::Invalid(_))))
+    {
+        let opens = content::access::closed(
+            state.db(),
+            &viewer,
+            crate::staff_access::Scope::Thread(thread_id),
+        )
+        .await?
+        .into_iter()
+        .collect();
+        let action = format!("/t/{thread_id}/audience");
+        match glass_pages::ask_change(
+            &state,
+            &viewer,
+            opens,
+            crate::glass_pages::Change {
+                action: &action,
+                fields: &fields,
+                says: "You can’t read this thread, and saving this would let you.".to_owned(),
+                button: "Break glass and save",
+                back: &action,
+            },
+        )
+        .await?
+        {
+            glass_pages::Confirmation::Ask(response) => return Ok(response),
+            glass_pages::Confirmation::Given(reason) => {
+                outcome = writing::restrict_thread_breaking_glass(
+                    &state,
+                    &viewer,
+                    thread_id,
+                    &restriction,
+                    Some(&reason),
+                )
+                .await?;
+            }
+        }
+    }
     match outcome {
         Ok(()) => Ok(see_other(&format!("/t/{thread_id}/audience?done=saved"))),
         Err(Refused::Invalid(problems)) => {
@@ -396,5 +438,6 @@ pub async fn save(
         Err(Refused::NotAllowed(reason)) => not_allowed(&state, &viewer, reason).await,
         Err(Refused::NotAllowedBecause(reason)) => not_allowed(&state, &viewer, &reason).await,
         Err(Refused::RateLimited) => web::rate_limited(&state, &viewer).await,
+        Err(Refused::BreaksGlass) => not_allowed(&state, &viewer, writing::BREAKS_GLASS).await,
     }
 }

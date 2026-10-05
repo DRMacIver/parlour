@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO notifications (user_id, kind, actor_id, thread_id, staff_access_id)\n           VALUES ($1, 'staff_access', $2, $3, $4)\n           ON CONFLICT (user_id, staff_access_id) WHERE staff_access_id IS NOT NULL DO NOTHING\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "notifications",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3a6d7ed0ce10d6172fefbf2567fc0a289ac5a50701f0fe8dbe664e8a06b55525"
+}

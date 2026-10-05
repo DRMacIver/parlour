@@ -2,14 +2,15 @@
 //! `staff_access_views` recorded under each grant. Both are append-only
 //! (migration 0032): nothing here, or anywhere, changes or removes a row.
 //!
-//! Opening a grant is all this step of milestone 15 does; the confirmation
-//! page that asks for the reason, and the notices to everyone who can read
-//! what it opens, come with the pages that use it. Reads under a grant go
-//! through [`crate::content`], which records each page shown.
+//! A grant is opened from the confirmation page (or a change that would
+//! let its maker read what they can't), by [`crate::glass`], which also
+//! tells everyone who can read what it opens. Reads under a grant go
+//! through [`crate::content`], which records each page shown; what the
+//! log shows its readers is in [`crate::content::access`].
 
 use chrono::{DateTime, Utc};
 
-use crate::db::{Handle, KEY};
+use crate::db::{Db, Handle, KEY};
 
 /// How long a grant lasts (DESIGN.md §8).
 pub const HOURS: i64 = 72;
@@ -71,4 +72,75 @@ pub async fn views<'c>(db: impl Handle<'c>, access_id: i64) -> sqlx::Result<Vec<
     )
     .fetch_all(&mut *conn)
     .await
+}
+
+/// The members who can read what a grant on `scope` would open, now, as
+/// the access layer decides for each of them (`Viewer::filter`: members
+/// read public and members-only spaces, and what a grant or restriction
+/// names them in; suspended members read only what visitors read), apart
+/// from `except`, the member of staff opening it. They are the people told
+/// about it (DESIGN.md §8).
+pub async fn readers<'c>(db: impl Handle<'c>, scope: Scope, except: i64) -> sqlx::Result<Vec<i64>> {
+    let mut conn = db.open(KEY).acquire().await?;
+    let (thread_id, space_id) = match scope {
+        Scope::Thread(id) => (Some(id), None),
+        Scope::Space(id) => (None, Some(id)),
+    };
+    sqlx::query_scalar!(
+        r#"WITH viewers AS (
+               SELECT m.id,
+                      CASE WHEN s.suspended THEN ARRAY['public'] ELSE ARRAY['public', 'members'] END
+                          AS vis,
+                      CASE WHEN s.suspended THEN '{}' ELSE m.restricted_space_ids END AS restricted,
+                      CASE WHEN s.suspended THEN NULL ELSE m.id END AS reader,
+                      CASE WHEN s.suspended THEN '{}' ELSE m.group_ids END AS groups
+               FROM member_contexts m,
+                    LATERAL (SELECT coalesce(m.suspended_until > now(), false) AS suspended) s
+               WHERE m.id <> $3
+           )
+           SELECT v.id AS "id!" FROM viewers v
+           LEFT JOIN threads t ON t.id = $1
+           LEFT JOIN spaces c ON c.id = $2
+           WHERE (t.id IS NOT NULL AND t.deleted_at IS NULL
+                  AND (thread_readable(t, v.vis, v.restricted, v.reader, v.groups)
+                       OR dm_readable(t.id, t.visibility, v.reader)))
+              OR (c.id IS NOT NULL AND space_readable(c.visibility, c.id, v.vis, v.restricted))
+           ORDER BY v.id"#,
+        thread_id,
+        space_id,
+        except,
+    )
+    .fetch_all(&mut *conn)
+    .await
+}
+
+/// How many break-glass grants were opened in each month, newest first,
+/// over the `months` months up to and including this one, months with
+/// none included, as `/moderation` shows them (DESIGN.md §8).
+pub async fn counts_by_month(db: &Db, months: i32) -> sqlx::Result<Vec<(DateTime<Utc>, i64)>> {
+    let rows = sqlx::query!(
+        r#"SELECT m.month AS "month!", count(a.id) AS "n!"
+           FROM generate_series(date_trunc('month', now() AT TIME ZONE 'UTC')
+                                    - make_interval(months => $1 - 1),
+                                date_trunc('month', now() AT TIME ZONE 'UTC'),
+                                interval '1 month') AS m(month)
+           LEFT JOIN staff_access a
+             ON date_trunc('month', a.created_at AT TIME ZONE 'UTC') = m.month
+           GROUP BY m.month
+           ORDER BY m.month DESC"#,
+        months,
+    )
+    .fetch_all(db.pool())
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.month.and_utc(), row.n))
+        .collect())
+}
+
+/// How many break-glass grants there have been in all.
+pub async fn total(db: &Db) -> sqlx::Result<i64> {
+    sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM staff_access"#)
+        .fetch_one(db.pool())
+        .await
 }

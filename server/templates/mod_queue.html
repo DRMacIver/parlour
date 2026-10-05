@@ -32,7 +32,6 @@
       {% if post.hidden %}<span class="flag flag-hidden">Hidden</span> {% endif %}{{ self.excerpt(post) }}
     </blockquote>
     <ul class="queue-context">
-      {% if post.thread.conversation().is_some() %}<li>Reporting shared only this conversation with moderators</li>{% endif %}
       {% if let Some(inviter) = author.invited_by %}<li>Invited by <a href="/mod/users/{{ inviter.username }}">{{ inviter.username }}</a></li>{% endif %}
       {% if let Some(c) = post.thread.space() %}{% if let Some(access) = crate::format::access_label(c.read_level(), c.group_names, c.list_names) %}<li>{{ access }}</li>{% endif %}{% endif %}
     </ul>
@@ -72,6 +71,7 @@
     <blockquote class="queue-excerpt">
       <div class="row-meta"><strong><a href="/mod/users/{{ author.user.username }}">{{ author.user.username }}</a></strong> · joined {{ crate::format::date(author.created_at) }} · {{ crate::format::plural(author.posts, "post", "posts") }}{% if author.is_suspended() %} · <span class="flag">Suspended</span>{% else if author.is_silenced() %} · <span class="flag">Silenced</span>{% endif %}</div>
       You can’t read {% if post.space.is_none() %}this conversation{% else %}this thread{% endif %}, so what the {% if post.space.is_none() %}message{% else %}post{% endif %} says isn’t shown here.
+      {% if post.granted %}You broke glass on it: <a href="{% if post.space.is_none() %}/messages/{{ post.thread_id }}{% else %}/t/{{ post.thread_id }}{% endif %}">read № {{ post.seq }} there</a>, where every page you open is recorded.{% else %}To read it, <a href="/mod/break-glass?report={{ reports[0].id }}">open it</a>: that is breaking glass, and everyone who can read {% if post.space.is_none() %}the conversation{% else %}the thread{% endif %} will be told.{% endif %}
     </blockquote>
     {% if let Some(inviter) = author.invited_by %}<ul class="queue-context"><li>Invited by <a href="/mod/users/{{ inviter.username }}">{{ inviter.username }}</a></li></ul>{% endif %}
     {% let report = reports[0].id %}
@@ -82,6 +82,12 @@
       {% call md::reason_field(format!("reason-{}", n), self.main_reason(reports)) %}{% endcall %}
       {% call md::days_field(format!("days-{}", n), durations, 7) %}{% endcall %}
       <span class="queue-buttons">
+        {% if post.granted %}
+        <button class="button button-small" type="submit" formaction="/mod/p/{{ post.post_id }}" name="action" value="hide">Hide post</button>
+        <button class="button button-small" type="submit" formaction="/mod/p/{{ post.post_id }}" name="action" value="delete">Delete post</button>
+        {% else %}
+        <a class="button button-small" href="/mod/break-glass?report={{ report }}">Open…</a>
+        {% endif %}
         {% if !author.role.is_staff() %}
         <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ author.user.username }}/silence">Silence {{ author.user.username }}</button>
         <button class="button button-small button-quiet" type="submit" formaction="/mod/users/{{ author.user.username }}/suspend">Suspend</button>

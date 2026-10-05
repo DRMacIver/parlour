@@ -8,6 +8,7 @@
 //! recorded even for things the viewer can't see (such as a fork in a
 //! private space), because a later change could make them visible.
 
+pub mod access;
 pub mod arrangement;
 pub mod messages;
 pub mod moderation;
@@ -373,6 +374,9 @@ pub struct SpacePage {
     /// Whether a break-glass grant shows the viewer something here that
     /// they couldn't read otherwise (DESIGN.md §8).
     pub granted: bool,
+    /// The break-glass grants on the whole space, which its page names to
+    /// everyone who reads it (DESIGN.md §8).
+    pub notices: Vec<access::PageNotice>,
 }
 
 /// One page of a space's threads, or `None` if the space doesn't
@@ -400,6 +404,7 @@ pub async fn space_page(
                 WHERE t.space_id = c.id AND t.deleted_at IS NULL
                   AND NOT thread_readable(t, $2, $3, $5, $6)) AS "unreadable_threads!",
                space_readable(c.visibility, c.id, $2, $3) AS "readable!",
+               EXISTS (SELECT 1 FROM staff_access sa WHERE sa.space_id = c.id) AS "noticed!",
                o.id AS "owner_id?", o.username::text AS "owner_username?",
                o.display_name AS "owner_display_name?"
         FROM spaces c
@@ -457,6 +462,11 @@ pub async fn space_page(
         thread_count: space.thread_count,
         threads,
         granted: opened,
+        notices: if space.noticed {
+            access::space_notices(db, space.id).await?
+        } else {
+            Vec::new()
+        },
     }))
 }
 
@@ -859,6 +869,9 @@ pub struct ThreadPage {
     /// Whether only a break-glass grant lets the viewer read it (DESIGN.md
     /// §8): the page is then for reading, and says so.
     pub granted: bool,
+    /// The break-glass grants on this thread, which its page names to
+    /// everyone who reads it (DESIGN.md §8).
+    pub notices: Vec<access::PageNotice>,
 }
 
 impl ThreadPage {
@@ -1003,7 +1016,8 @@ pub async fn thread_page(
                site_group_names(coalesce(t.reply_group_ids, '{}')) AS "reply_groups!",
                list_labels(coalesce(t.reply_group_ids, '{}'), $5) AS "reply_lists!",
                people_names(coalesce(t.reply_user_ids, '{}')) AS "reply_people!",
-               thread_readable(t, $2, $3, $4, $6) AS "readable!"
+               thread_readable(t, $2, $3, $4, $6) AS "readable!",
+               EXISTS (SELECT 1 FROM staff_access sa WHERE sa.thread_id = t.id) AS "noticed!"
         FROM threads t
         JOIN space_targets c ON c.id = t.space_id
         JOIN users a ON a.id = t.author_id
@@ -1141,6 +1155,11 @@ pub async fn thread_page(
         read_marker: thread.read_marker.map(i64::from),
         subscribed: thread.subscribed,
         granted: !thread.readable,
+        notices: if thread.noticed {
+            access::thread_notices(db, thread.id, access::What::Thread).await?
+        } else {
+            Vec::new()
+        },
     }))
 }
 

@@ -60,7 +60,7 @@ fn report_field(fields: &Fields) -> Option<i64> {
 
 /// Shows a refusal from a one-click form: there is no form to show again,
 /// so problems are listed with a link back.
-async fn refused(
+pub(crate) async fn refused(
     state: &AppState,
     viewer: &Viewer,
     refusal: Refused,
@@ -84,6 +84,7 @@ async fn refused(
             .await
         }
         Refused::RateLimited => web::rate_limited(state, viewer).await,
+        Refused::BreaksGlass => not_allowed(state, viewer, crate::writing::BREAKS_GLASS).await,
     }
 }
 
@@ -610,7 +611,33 @@ struct LogTemplate {
     staff_view: bool,
     /// Whether the viewer is staff (who get the moderation tabs).
     staff: bool,
+    /// On the first page of the public log, how many times staff broke
+    /// glass (DESIGN.md §8): in all, and in each of the last months.
+    glass: Option<GlassCounts>,
 }
+
+/// How often staff have broken glass (DESIGN.md §8): in all, and in each
+/// of the last months, newest first.
+struct GlassCounts {
+    total: i64,
+    months: Vec<(chrono::DateTime<chrono::Utc>, i64)>,
+}
+
+impl LogTemplate {
+    /// How often staff have broken glass, as the public log says it.
+    fn glass_total(&self) -> String {
+        match self.glass.as_ref().map(|counts| counts.total) {
+            Some(0) | None => "It hasn’t happened yet.".to_owned(),
+            Some(n) => format!(
+                "It has happened {} in all.",
+                crate::format::plural(n, "time", "times")
+            ),
+        }
+    }
+}
+
+/// How many months of break-glass counts `/moderation` shows.
+const GLASS_MONTHS: i32 = 12;
 
 /// `/moderation`: the public log, the same for everyone (DESIGN.md §8).
 pub async fn public_log(
@@ -653,6 +680,23 @@ async fn render_log(
     if page > total {
         return web::not_found(state, viewer).await;
     }
+    let glass = if scope == Scope::Public && page == 1 {
+        let months = crate::staff_access::counts_by_month(state.db(), GLASS_MONTHS).await?;
+        // The months shown change when a month begins.
+        if let Some((this_month, _)) = months.first() {
+            deps.expires_at(
+                this_month
+                    .checked_add_months(chrono::Months::new(1))
+                    .unwrap_or(*this_month),
+            );
+        }
+        Some(GlassCounts {
+            total: crate::staff_access::total(state.db()).await?,
+            months,
+        })
+    } else {
+        None
+    };
     cacheable(
         &LogTemplate {
             layout: Layout::load(
@@ -669,6 +713,7 @@ async fn render_log(
             pagination: Pagination::new(base, page, total),
             staff_view: scope != Scope::Public,
             staff: viewer.is_staff(),
+            glass,
         },
         &deps,
     )
@@ -1103,9 +1148,63 @@ pub async fn moderate_thread(
             .await;
         }
     };
-    match moderation::moderate_thread(&state, &viewer, thread_id, action, field(&fields, "reason"))
-        .await?
+    let glass = fields
+        .iter()
+        .find(|(key, _)| key == crate::glass_pages::REASON_FIELD)
+        .map(|(_, value)| value.as_str());
+    let reason = field(&fields, "reason");
+    let mut outcome = moderation::moderate_thread_breaking_glass(
+        &state,
+        &viewer,
+        thread_id,
+        action.clone(),
+        reason,
+        glass,
+    )
+    .await?;
+    // Moving a thread they can't read where they could is breaking glass,
+    // which the confirmation page asks about first (DESIGN.md §8).
+    if matches!(outcome, Err(Refused::BreaksGlass))
+        || (glass.is_some() && matches!(&outcome, Err(Refused::Invalid(_))))
     {
+        let opens = content::access::closed(
+            state.db(),
+            &viewer,
+            crate::staff_access::Scope::Thread(thread_id),
+        )
+        .await?
+        .into_iter()
+        .collect();
+        let action_path = format!("/mod/t/{thread_id}");
+        match crate::glass_pages::ask_change(
+            &state,
+            &viewer,
+            opens,
+            crate::glass_pages::Change {
+                action: &action_path,
+                fields: &fields,
+                says: "You can’t read this thread, and moving it there would let you.".to_owned(),
+                button: "Break glass and move it",
+                back: &action_path,
+            },
+        )
+        .await?
+        {
+            crate::glass_pages::Confirmation::Ask(response) => return Ok(response),
+            crate::glass_pages::Confirmation::Given(why) => {
+                outcome = moderation::moderate_thread_breaking_glass(
+                    &state,
+                    &viewer,
+                    thread_id,
+                    action,
+                    reason,
+                    Some(&why),
+                )
+                .await?;
+            }
+        }
+    }
+    match outcome {
         // A deleted thread's page here offers to restore it.
         Ok(_) => Ok(see_other(&back)),
         Err(refusal) => refused(&state, &viewer, refusal, &back).await,

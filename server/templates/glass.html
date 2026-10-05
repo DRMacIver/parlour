@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{%- import "_forms.html" as f -%}
+{% block title %}Break glass · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/mod/queue">Moderation</a> › <span aria-current="page">Break glass</span></nav>
+<h1 class="page-title">Break glass?</h1>
+{% call f::errors(problems) %}{% endcall %}
+{% if let Some(one) = self.one() %}
+{% if let Some(text) = change %}
+<p class="lede">{{ text }} That is breaking glass on {{ one.label }}{% if one.what == crate::content::access::What::Space %}, every thread in it included{% endif %}.</p>
+{% else %}
+<p class="lede">You can’t read {{ one.label }}. Reading it means breaking glass on {% match one.what %}{% when crate::content::access::What::Conversation %}this conversation{% when crate::content::access::What::Thread %}this thread{% when crate::content::access::What::Space %}this whole space, every thread in it included{% endmatch %}.</p>
+{% endif %}
+{% else %}
+<p class="lede">{% if let Some(text) = change %}{{ text }}{% endif %} That is breaking glass on each of these:</p>
+<ul class="glass-opens">{% for closed in proposal.opens %}<li>{{ crate::format::capitalised(closed.label.as_str()) }}</li>{% endfor %}</ul>
+{% endif %}
+<section class="panel" aria-labelledby="glass-heading">
+  <h2 class="panel-bar" id="glass-heading">What happens</h2>
+  <div class="panel-text">
+    <ul>
+      <li>You can read it for {{ crate::staff_access::HOURS }} hours, until {{ self.expires() }}. Every page of it you open is recorded.</li>
+      <li>{{ self.told() }}</li>
+      <li>Your reason goes in the access log, which every admin can read, and so can everyone who can read what you opened. Don’t name who reported it.</li>
+      <li>No one else needs to approve this, and it can’t be taken back: the log can’t be changed.</li>
+    </ul>
+  </div>
+</section>
+<form class="panel" method="post" action="{{ action }}">
+  {% for (name, value) in hidden %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+  <div class="form">
+    <div class="field">
+      <label for="glass_reason">Why do you need to read it?</label>
+      <textarea id="glass_reason" name="glass_reason" rows="3" maxlength="500" required>{{ reason }}</textarea>
+    </div>
+    <div class="form-actions">
+      <button class="button button-danger" type="submit">{{ button }}</button>
+      <a href="{{ back }}">Cancel</a>
+    </div>
+  </div>
+</form>
+</div>
+{% endblock %}

@@ -21,6 +21,9 @@ pub enum Kind {
     Message,
     /// A notice about the member or their posts.
     Moderation,
+    /// A moderator broke glass on a thread, space or conversation the
+    /// member can read (DESIGN.md §8).
+    StaffAccess,
 }
 
 impl Kind {
@@ -30,6 +33,7 @@ impl Kind {
             Kind::Subscription => "subscription",
             Kind::Message => "message",
             Kind::Moderation => "moderation",
+            Kind::StaffAccess => "staff_access",
         }
     }
 
@@ -39,6 +43,7 @@ impl Kind {
             "subscription" => Kind::Subscription,
             "message" => Kind::Message,
             "moderation" => Kind::Moderation,
+            "staff_access" => Kind::StaffAccess,
             _ => return None,
         })
     }
@@ -49,7 +54,7 @@ impl Kind {
             Kind::Mention => "mentioned you in",
             Kind::Subscription => "posted in",
             Kind::Message => "sent you a message in",
-            Kind::Moderation => "",
+            Kind::Moderation | Kind::StaffAccess => "",
         }
     }
 }
@@ -74,6 +79,8 @@ pub struct NotificationRow {
     /// For a moderation notice about an action the member may contest,
     /// that action.
     pub mod_action_id: Option<i64>,
+    /// For a notice that a moderator broke glass, what on.
+    pub access: Option<super::access::About>,
 }
 
 pub struct NotificationList {
@@ -97,9 +104,13 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
         LEFT JOIN posts p ON p.id = n.post_id
         LEFT JOIN threads t ON t.id = p.thread_id
         WHERE n.user_id = $1
-          AND (n.post_id IS NULL
-               OR (p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
-                   AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))))
+          AND CASE
+              WHEN n.staff_access_id IS NOT NULL
+                  THEN staff_access_readable(n.staff_access_id, $2, $3, $4, $5)
+              WHEN n.post_id IS NULL THEN true
+              ELSE p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
+                   AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))
+              END
           AND NOT EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id
                           WHERE b.user_id = $1 AND b.blocked_user_id = n.actor_id AND bu.role = 'user')
         "#,
@@ -120,6 +131,7 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
     let rows = sqlx::query!(
         r#"
         SELECT n.id, n.kind, n.created_at, n.read_at IS NOT NULL AS "read!", n.message, n.mod_action_id,
+               n.staff_access_id,
                a.id AS "actor_id?", a.username AS "actor_username?", a.display_name AS "actor_name?",
                p.id AS "post_id?", p.seq AS "seq?", t.id AS "thread_id?", t.title AS "title?",
                t.slug AS "slug?", t.visibility = 'private' AS "private?"
@@ -128,9 +140,13 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
         LEFT JOIN posts p ON p.id = n.post_id
         LEFT JOIN threads t ON t.id = p.thread_id
         WHERE n.user_id = $1
-          AND (n.post_id IS NULL
-               OR (p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
-                   AND (thread_readable(t, $2, $3, $6, $7) OR dm_readable(t.id, t.visibility, $6))))
+          AND CASE
+              WHEN n.staff_access_id IS NOT NULL
+                  THEN staff_access_readable(n.staff_access_id, $2, $3, $6, $7)
+              WHEN n.post_id IS NULL THEN true
+              ELSE p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
+                   AND (thread_readable(t, $2, $3, $6, $7) OR dm_readable(t.id, t.visibility, $6))
+              END
           AND NOT EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id
                           WHERE b.user_id = $1 AND b.blocked_user_id = n.actor_id AND bu.role = 'user')
         ORDER BY n.created_at DESC, n.id DESC
@@ -146,11 +162,18 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
     )
     .fetch_all(db.pool())
     .await?;
+    let mut abouts = HashMap::new();
+    for id in rows.iter().filter_map(|row| row.staff_access_id) {
+        if let Some(about) = super::access::about(db, viewer, id).await? {
+            abouts.insert(id, about);
+        }
+    }
     Ok(NotificationList {
         total,
         rows: rows
             .into_iter()
             .map(|row| NotificationRow {
+                access: row.staff_access_id.and_then(|id| abouts.remove(&id)),
                 id: row.id,
                 kind: Kind::parse(&row.kind).unwrap_or(Kind::Moderation),
                 actor: user_ref(
@@ -217,18 +240,24 @@ pub async fn unread_count(db: &Db, viewer: &Viewer) -> sqlx::Result<i64> {
     .await
 }
 
+/// Where a notification leads.
+pub enum Leads {
+    /// To a post.
+    Post(i64, PostLocation),
+    /// To the page of what a moderator broke glass on.
+    Page(String),
+    /// Nowhere: a notice from the moderators is read where it is listed.
+    Nowhere,
+}
+
 /// Where one of the viewer's notifications leads, if they may still see
-/// it: the post, or for a moderation notice `None` inside `Some`.
-pub async fn target(
-    db: &Db,
-    viewer: &Viewer,
-    notification_id: i64,
-) -> sqlx::Result<Option<Option<(i64, PostLocation)>>> {
+/// it.
+pub async fn target(db: &Db, viewer: &Viewer, notification_id: i64) -> sqlx::Result<Option<Leads>> {
     let Some(user_id) = viewer.user_id() else {
         return Ok(None);
     };
     let Some(row) = sqlx::query!(
-        r#"SELECT post_id FROM notifications WHERE id = $1 AND user_id = $2"#,
+        r#"SELECT post_id, staff_access_id FROM notifications WHERE id = $1 AND user_id = $2"#,
         notification_id,
         user_id
     )
@@ -237,10 +266,13 @@ pub async fn target(
     else {
         return Ok(None);
     };
-    match row.post_id {
-        None => Ok(Some(None)),
-        Some(post_id) => Ok(post_location(db, viewer, post_id)
+    match (row.post_id, row.staff_access_id) {
+        (_, Some(access_id)) => Ok(super::access::about(db, viewer, access_id)
             .await?
-            .map(|location| Some((post_id, location)))),
+            .map(|about| Leads::Page(about.href))),
+        (Some(post_id), None) => Ok(post_location(db, viewer, post_id)
+            .await?
+            .map(|location| Leads::Post(post_id, location))),
+        (None, None) => Ok(Some(Leads::Nowhere)),
     }
 }

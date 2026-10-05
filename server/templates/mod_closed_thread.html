@@ -8,6 +8,7 @@
 {% call md::mod_nav("") %}{% endcall %}
 {% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
 <div class="notice" role="status"><p>You can’t read this thread, so its title and posts aren’t shown to you. Moderators and admins run every space, so you can still {% if thread.deleted %}restore it{% else %}lock, pin, rename, move or delete it{% endif %}; you read only what your own groups and lists let you, like everyone else.</p></div>
+{% if !thread.deleted %}<p class="form-note"><a class="button button-small button-quiet" href="/mod/break-glass?thread={{ thread.id }}">Read it…</a> Reading it means breaking glass: you say why, and everyone who can read it is told.</p>{% endif %}
 <p class="lede">Thread № {{ thread.id }} · started by <a href="/u/{{ thread.author.username }}">{{ thread.author.display_name }}</a> on <time datetime="{{ crate::format::iso(thread.created_at) }}">{{ crate::format::date(thread.created_at) }}</time> · {{ crate::format::plural(thread.last_seq, "post", "posts") }}{% if thread.locked %} · <span class="flag">Locked</span>{% endif %}{% if thread.pinned %} · <span class="flag">Pinned</span>{% endif %}{% if thread.deleted %} · <span class="flag">Deleted</span>{% endif %}</p>
 
 {% if thread.deleted %}

@@ -235,6 +235,40 @@ pub struct SitePages {
     pub privacy_html: String,
 }
 
+/// What the privacy page says until an admin writes their own, and what
+/// its form starts with: what Parlour does about staff reading private
+/// content, and what it can't do (DESIGN.md §8). The admin may change it.
+pub const DEFAULT_PRIVACY: &str = "\
+## Moderators and private content
+
+Moderators and admins read only what their own groups and lists let them read, like everyone else. \
+If one of them needs to read a private thread, space or conversation beyond that, to deal with a report \
+for instance, they have to say why. Everyone who can read it is told at once, by a notification and \
+an email, and its page says so from then on. The reason goes in a log that can't be changed, which \
+admins can read, and you can see every time it touched something you can read under \
+[Moderators who looked](/settings/access). How many times it has happened each month is shown on the \
+[moderation log](/moderation).
+
+## Whoever runs the server
+
+None of that covers whoever runs the server this forum is on. They can read its database, private \
+conversations included. Parlour keeps the moderators apart from that person, but it can't keep that \
+person out.
+";
+
+impl SitePages {
+    /// The pages as they are before an admin has saved any: no terms, and
+    /// the default privacy page.
+    pub fn starting() -> SitePages {
+        SitePages {
+            terms_md: String::new(),
+            terms_html: String::new(),
+            privacy_md: DEFAULT_PRIVACY.to_owned(),
+            privacy_html: crate::markdown::render(DEFAULT_PRIVACY),
+        }
+    }
+}
+
 pub async fn site_pages(db: &Db) -> sqlx::Result<SitePages> {
-    Ok(get(db, "pages").await?.unwrap_or_default())
+    Ok(get(db, "pages").await?.unwrap_or_else(SitePages::starting))
 }

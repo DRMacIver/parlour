@@ -1,3 +1,4 @@
+mod access_pages;
 mod account_pages;
 pub mod accounts;
 mod admin_forum;
@@ -14,6 +15,8 @@ pub mod diff;
 pub mod emails;
 mod error;
 pub mod format;
+pub mod glass;
+mod glass_pages;
 pub mod http_cache;
 mod invite_pages;
 pub mod islands;
@@ -393,6 +396,12 @@ pub fn app(state: AppState) -> Router {
         .route("/moderation", get(mod_pages::public_log))
         .route("/mod", get(mod_pages::mod_index))
         .route("/mod/queue", get(mod_pages::queue))
+        .route(
+            "/mod/break-glass",
+            get(glass_pages::page).post(glass_pages::confirm),
+        )
+        .route("/admin/access", get(access_pages::admin_log))
+        .route("/settings/access", get(access_pages::member_log))
         .route("/mod/log", get(mod_pages::staff_log))
         .route("/mod/users", get(mod_pages::users_page))
         .route("/mod/users/{username}", get(mod_pages::user_page))

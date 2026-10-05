@@ -1554,8 +1554,9 @@ impl Seeder<'_> {
     /// Nell and Otto, Iris and Jude, Rosa and Theo, Uma and Vic, and Wes
     /// and Xan: established members who keep to threads of their own (and
     /// so are free for the browser tests to log in as); Yara, an admin for
-    /// the same reason; and newer members and admins for the tests of the
-    /// layout editors.
+    /// the same reason; newer members and admins for the tests of the
+    /// layout editors; and six more pairs of members and six moderators for
+    /// the tests of breaking glass.
     async fn quiet_corner(&mut self, general: i64) -> sqlx::Result<()> {
         let nell = self.extra_member("nell", "Nell", "ana", 120).await?;
         let otto = self.extra_member("otto", "Otto", "nell", 110).await?;
@@ -1684,6 +1685,138 @@ impl Seeder<'_> {
         for (username, name) in [("gwen", "Gwen"), ("hal", "Hal")] {
             let id = self.extra_member(username, name, "yara", 400).await?;
             sqlx::query!("UPDATE users SET role = 'admin' WHERE id = $1", id)
+                .execute(&mut *self.db)
+                .await?;
+        }
+        // For the browser tests of breaking glass (DESIGN.md §8): for each
+        // project, a member who starts a thread only one other can read,
+        // that other, who reports it, and a moderator who can't read it,
+        // so that no other test's logins, posts or reports hold them up.
+        // Each pair has talked in General before, enough not to be new.
+        let pairs = [
+            (
+                ("ines", "Ines"),
+                ("omar", "Omar"),
+                "Sleeving cards: worth it?",
+                [
+                    "Is it worth sleeving a whole deck you play twice a year?",
+                    "If it has a shuffle in it, yes.",
+                    "Even the cheap ones?",
+                    "Especially the cheap ones. They mark first.",
+                    "Fine. Matte or gloss?",
+                    "Matte. Gloss glares under the café lights.",
+                    "I knew you’d say that.",
+                    "Then why ask?",
+                    "To have someone to blame.",
+                    "Fair. Blame me.",
+                ],
+            ),
+            (
+                ("jon", "Jon"),
+                ("pia", "Pia"),
+                "Two-player games for trains",
+                [
+                    "We have a long train ride coming. Two-player games that fit a tray table?",
+                    "Patchwork. Small, quick, no dice to roll away.",
+                    "Already have it. Something else?",
+                    "Jaipur, then. Cards only.",
+                    "Does it survive a bumpy carriage?",
+                    "Better than we did on the last trip.",
+                    "That’s a low bar.",
+                    "It is the only bar.",
+                    "Jaipur it is.",
+                    "Bring snacks for the loser.",
+                ],
+            ),
+            (
+                ("kara", "Kara"),
+                ("quinn", "Quinn"),
+                "Painting miniatures in winter",
+                [
+                    "Anyone else find paint dries oddly when the heating is on?",
+                    "Yes. Use a wet palette.",
+                    "A what?",
+                    "Baking paper over a damp sponge, in a tub.",
+                    "That sounds too simple to work.",
+                    "It is simple, and it works.",
+                    "Trying it tonight.",
+                    "Report back.",
+                    "It works. I owe you a coffee.",
+                    "I’ll take tea, as Jude would insist.",
+                ],
+            ),
+            (
+                ("lars", "Lars"),
+                ("reza", "Reza"),
+                "House rules that stuck",
+                [
+                    "What house rule did your group keep for good?",
+                    "Free mulligan in any deck game.",
+                    "Generous.",
+                    "Saves ten minutes of sulking.",
+                    "Ours: the rules explainer never goes first.",
+                    "That one is wise.",
+                    "Learned the hard way.",
+                    "Aren’t they all?",
+                    "Most of ours, anyway.",
+                    "Write them down for the newcomers.",
+                ],
+            ),
+            (
+                ("mina", "Mina"),
+                ("sana", "Sana"),
+                "Storage for big boxes",
+                [
+                    "Where does everyone keep the really big boxes?",
+                    "On their sides, like books.",
+                    "Doesn’t everything slide about?",
+                    "Not with organisers inside.",
+                    "Bought or homemade?",
+                    "Foam board and patience.",
+                    "I have one of those.",
+                    "The foam board?",
+                    "Neither, but I’m willing to learn.",
+                    "Bring a craft knife on Thursday.",
+                ],
+            ),
+            (
+                ("noor", "Noor"),
+                ("tam", "Tam"),
+                "Teaching games to grandparents",
+                [
+                    "My grandad wants to learn a modern game. Where to start?",
+                    "Ticket to Ride. Trains and maps.",
+                    "He likes trains.",
+                    "Then it’s settled.",
+                    "Does he need to read much?",
+                    "Hardly any text on the cards.",
+                    "Good, he lost his glasses again.",
+                    "Big print rules exist, I think.",
+                    "I’ll look for them.",
+                    "Tell us who wins.",
+                ],
+            ),
+        ];
+        for ((author, author_name), (reader, reader_name), title, lines) in pairs {
+            let author = self.extra_member(author, author_name, "sam", 200).await?;
+            let reader = self.extra_member(reader, reader_name, "sam", 200).await?;
+            let lines: Vec<(i64, &str)> = lines
+                .iter()
+                .enumerate()
+                .map(|(i, line)| (if i % 2 == 0 { author } else { reader }, *line))
+                .collect();
+            self.conversation_thread(general, title, 40, &lines).await?;
+        }
+        for (username, name) in [
+            ("ugo", "Ugo"),
+            ("vera", "Vera"),
+            ("wim", "Wim"),
+            ("xia", "Xia"),
+            ("yuri", "Yuri"),
+            ("zoe", "Zoe"),
+        ] {
+            let id = self.extra_member(username, name, "ruth", 300).await?;
+            sqlx::query!("UPDATE users SET role = 'moderator' WHERE id = $1", id)
                 .execute(&mut *self.db)
                 .await?;
         }

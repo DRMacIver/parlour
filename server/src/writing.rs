@@ -43,7 +43,14 @@ pub enum Refused {
     Invalid(Vec<String>),
     /// Too many writes recently.
     RateLimited,
+    /// It would let a member of staff read what they can't: breaking
+    /// glass, which they must confirm first (DESIGN.md §8).
+    BreaksGlass,
 }
+
+/// What a page that can't show the break-glass confirmation says to
+/// [`Refused::BreaksGlass`].
+pub const BREAKS_GLASS: &str = "That would let you read what you can’t now, which is breaking glass. Do it from the page that asks why.";
 
 pub type Outcome<T> = Result<Result<T, Refused>, AppError>;
 
@@ -595,6 +602,21 @@ pub async fn restrict_thread(
     thread_id: i64,
     restriction: &ThreadRestriction,
 ) -> Outcome<()> {
+    restrict_thread_breaking_glass(state, viewer, thread_id, restriction, None).await
+}
+
+/// [`restrict_thread`], for a member of staff who has confirmed, for
+/// `glass` (their reason), that it may let them read a thread they can't:
+/// breaking glass on it (DESIGN.md §8), which tells everyone who could
+/// read it before the change. Without a reason, a change that would let
+/// them in is refused with [`Refused::BreaksGlass`], for the page to ask.
+pub async fn restrict_thread_breaking_glass(
+    state: &AppState,
+    viewer: &Viewer,
+    thread_id: i64,
+    restriction: &ThreadRestriction,
+    glass: Option<&str>,
+) -> Outcome<()> {
     let Some(user) = viewer.user() else {
         return Ok(Err(Refused::LogIn));
     };
@@ -627,16 +649,16 @@ pub async fn restrict_thread(
     let before = target.audience();
     let after = restriction.audience(&target.space.rules);
     // Staff change who may read threads they can't, as they run every
-    // space, but letting themselves read one would be reading it by
-    // another way: breaking glass, which isn't done from here (DESIGN.md
-    // §3.1, §8). Those who run the space in their own right open its
-    // threads as any administrator may.
-    if viewer.is_staff()
+    // space, but letting themselves read one is reading it by another way:
+    // breaking glass, which they confirm, saying why (DESIGN.md §3.1, §8).
+    // Those who run the space in their own right open its threads as any
+    // administrator may.
+    let breaks_glass = viewer.is_staff()
         && !target.readable
         && !target.space.rules.runs_in_own_right(viewer)
-        && user_can_read(user, &after)
-    {
-        problems.push(OPENS_TO_STAFF.to_owned());
+        && user_can_read(user, &after);
+    if breaks_glass && let Some(problem) = glass.and_then(crate::glass::reason_problem) {
+        problems.push(problem);
     }
     if !problems.is_empty() {
         return Ok(Err(Refused::Invalid(problems)));
@@ -644,6 +666,23 @@ pub async fn restrict_thread(
     if restriction == target.restriction {
         return Ok(Ok(()));
     }
+    // Those to tell are those who could read it before the change.
+    let glass = match (breaks_glass, glass) {
+        (false, _) => None,
+        (true, None) => return Ok(Err(Refused::BreaksGlass)),
+        (true, Some(reason)) => {
+            let Some(closed) = content::access::closed(
+                state.db(),
+                viewer,
+                crate::staff_access::Scope::Thread(thread_id),
+            )
+            .await?
+            else {
+                return Ok(Err(Refused::NotFound));
+            };
+            Some((reason, crate::glass::readers(state, user, &[closed]).await?))
+        }
+    };
     match store::set_thread_restriction(state.db(), thread_id, &restriction).await {
         Ok(true) => {}
         Ok(false) => return Ok(Err(Refused::NotFound)),
@@ -681,12 +720,13 @@ pub async fn restrict_thread(
             previous_space_id: None,
         })
         .await?;
+    if let Some((reason, readers)) = glass {
+        crate::glass::record(state, user, &readers, reason, None).await?;
+    }
     Ok(Ok(()))
 }
 
 const CHOOSE_GROUPS: &str = "Choose groups and lists from those offered.";
-
-const OPENS_TO_STAFF: &str = "You can’t read this thread, and that would let you read it. Leave who can read it to someone who can, or choose people that still leave you out.";
 
 const NARROWED_TO_NAMES: &str = "A thread can only be narrowed to groups, lists and people.";
 

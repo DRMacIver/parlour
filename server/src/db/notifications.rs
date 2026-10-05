@@ -133,6 +133,31 @@ pub async fn insert_moderation<'c>(
     .await
 }
 
+/// Tells a member that a moderator broke glass on something they can
+/// read, unless they have been told about that grant already. Returns its
+/// id if it is new.
+pub async fn insert_staff_access<'c>(
+    db: impl Handle<'c>,
+    user_id: i64,
+    actor_id: i64,
+    access_id: i64,
+    thread_id: Option<i64>,
+) -> sqlx::Result<Option<i64>> {
+    let mut conn = db.open(KEY).acquire().await?;
+    sqlx::query_scalar!(
+        r#"INSERT INTO notifications (user_id, kind, actor_id, thread_id, staff_access_id)
+           VALUES ($1, 'staff_access', $2, $3, $4)
+           ON CONFLICT (user_id, staff_access_id) WHERE staff_access_id IS NOT NULL DO NOTHING
+           RETURNING id"#,
+        user_id,
+        actor_id,
+        thread_id,
+        access_id,
+    )
+    .fetch_optional(&mut *conn)
+    .await
+}
+
 /// Records that a member has been shown a thread up to post `seq`: their
 /// read marker advances (it never goes back), and their notifications about
 /// posts up to there are read. One statement, as this happens on every
@@ -249,6 +274,8 @@ pub struct Due {
     pub kind: Kind,
     pub post_id: Option<i64>,
     pub message: Option<String>,
+    /// For a notice that a moderator broke glass, the grant.
+    pub staff_access_id: Option<i64>,
     pub created_at: DateTime<Utc>,
     /// The member has since blocked whoever it is from, or (for a new post
     /// in a thread or a message) unsubscribed from where it happened, so it
@@ -257,8 +284,9 @@ pub struct Due {
 }
 
 /// Claims a member's unread notifications that haven't been emailed and
-/// were made no later than `due`, oldest first: the ones one email can
-/// cover. They are marked as dealt with by email, so call this in the
+/// were made no later than `due`, or that say a moderator broke glass
+/// (which are emailed at once, DESIGN.md §9), oldest first: the ones one
+/// email can cover. They are marked as dealt with by email, so call this in the
 /// transaction that queues the email (or that decides not to send one):
 /// a concurrent claim waits for that transaction and then finds nothing,
 /// so no two emails cover the same notification.
@@ -272,10 +300,11 @@ pub async fn claim_for_email<'c>(
         r#"
         WITH claimed AS (
             UPDATE notifications SET emailed_at = now()
-            WHERE user_id = $1 AND read_at IS NULL AND emailed_at IS NULL AND created_at <= $2
-            RETURNING id, kind, post_id, message, created_at, actor_id
+            WHERE user_id = $1 AND read_at IS NULL AND emailed_at IS NULL
+              AND (created_at <= $2 OR kind = 'staff_access')
+            RETURNING id, kind, post_id, message, staff_access_id, created_at, actor_id
         )
-        SELECT c.id, c.kind, c.post_id, c.message, c.created_at,
+        SELECT c.id, c.kind, c.post_id, c.message, c.staff_access_id, c.created_at,
                (EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id
                         WHERE b.user_id = $1 AND b.blocked_user_id = c.actor_id AND bu.role = 'user')
                 OR (c.kind IN ('subscription', 'message')
@@ -297,6 +326,7 @@ pub async fn claim_for_email<'c>(
             kind: Kind::parse(&row.kind).unwrap_or(Kind::Moderation),
             post_id: row.post_id,
             message: row.message,
+            staff_access_id: row.staff_access_id,
             created_at: row.created_at,
             quiet: row.quiet,
         })

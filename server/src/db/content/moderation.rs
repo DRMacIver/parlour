@@ -701,6 +701,13 @@ pub struct ClosedPost {
     pub author: UserRef,
     /// The space it is in, or `None` for a conversation.
     pub space: Option<SpaceRef>,
+    /// The thread or conversation it is in.
+    pub thread_id: i64,
+    /// Its number there.
+    pub seq: i64,
+    /// Whether a break-glass grant the viewer holds now covers it, so that
+    /// they may read it on its own page, and act on it (DESIGN.md §8).
+    pub granted: bool,
 }
 
 /// A live post in a live thread or conversation that the viewer, as
@@ -716,7 +723,8 @@ pub async fn closed_post(
     let filter = viewer.filter();
     let row = sqlx::query!(
         r#"SELECT p.id, a.id AS author_id, a.username::text AS "author_username!",
-                  a.display_name AS author_name,
+                  a.display_name AS author_name, p.thread_id, p.seq,
+                  thread_granted(t, $6, $7) AS "granted!",
                   c.id AS "space_id?", c.slug::text AS "space_slug?", c.name AS "space_name?"
            FROM posts p
            JOIN threads t ON t.id = p.thread_id
@@ -729,11 +737,16 @@ pub async fn closed_post(
         &filter.restricted_space_ids,
         filter.dm_viewer,
         &filter.group_ids,
+        &filter.granted_thread_ids,
+        &filter.granted_space_ids,
     )
     .fetch_optional(db.pool())
     .await?;
     Ok(row.map(|row| ClosedPost {
         post_id: row.id,
+        thread_id: row.thread_id,
+        seq: i64::from(row.seq),
+        granted: row.granted,
         author: UserRef {
             id: row.author_id,
             username: row.author_username,

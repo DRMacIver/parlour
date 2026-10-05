@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,\n               (SELECT tr.last_read_seq FROM thread_reads tr\n                WHERE tr.thread_id = t.id AND tr.user_id = $2) AS read_marker,\n               dm_readable(t.id, t.visibility, $2) AS \"readable!\"\n        FROM threads t\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.space_id IS NULL\n          AND (dm_readable(t.id, t.visibility, $2)\n               OR (t.visibility = 'private' AND thread_granted(t, $3, '{}')))\n        ",
+  "query": "\n        SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,\n               (SELECT tr.last_read_seq FROM thread_reads tr\n                WHERE tr.thread_id = t.id AND tr.user_id = $2) AS read_marker,\n               dm_readable(t.id, t.visibility, $2) AS \"readable!\",\n               EXISTS (SELECT 1 FROM staff_access sa WHERE sa.thread_id = t.id) AS \"noticed!\"\n        FROM threads t\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.space_id IS NULL\n          AND (dm_readable(t.id, t.visibility, $2)\n               OR (t.visibility = 'private' AND thread_granted(t, $3, '{}')))\n        ",
   "describe": {
     "columns": [
       {
@@ -69,6 +69,12 @@
         "name": "readable!",
         "type_info": "Bool",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "noticed!",
+        "type_info": "Bool",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -85,8 +91,9 @@
       false,
       false,
       null,
+      null,
       null
     ]
   },
-  "hash": "6178bdced8fe6919b9c1f6401f5fbce9df710d9fba5561a5e91250f98c153609"
+  "hash": "0108dacddd1a258e9859b131dea891c34fe00699f50610a7c5e1071fdc8fa76a"
 }

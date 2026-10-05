@@ -60,6 +60,7 @@ pub(crate) fn refused(refusal: Refused) -> Response {
             StatusCode::TOO_MANY_REQUESTS,
             "You’re doing that faster than this forum allows. Wait a minute, then try again.",
         ),
+        Refused::BreaksGlass => error(StatusCode::FORBIDDEN, crate::writing::BREAKS_GLASS),
     }
 }
 
@@ -224,14 +225,19 @@ pub async fn notifications(
         .iter()
         .take(MENU_ITEMS)
         .map(|n| {
-            let actor = n.actor.as_ref().map(|a| a.display_name.clone());
-            let (text, title, href) = match &n.about {
-                Some(about) => (
+            let actor = n
+                .actor
+                .as_ref()
+                .filter(|_| n.access.is_none())
+                .map(|a| a.display_name.clone());
+            let (text, title, href) = match (&n.access, &n.about) {
+                (Some(access), _) => (access.sentence(), None, format!("/notifications/{}", n.id)),
+                (None, Some(about)) => (
                     n.kind.verb().to_owned(),
                     Some(about.title.clone()),
                     format!("/notifications/{}", n.id),
                 ),
-                None => (
+                (None, None) => (
                     format!(
                         "From the moderators: {}",
                         n.message.as_deref().unwrap_or_default()

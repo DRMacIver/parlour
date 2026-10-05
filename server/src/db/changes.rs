@@ -42,6 +42,10 @@ pub enum Change {
     SiteChanged,
     /// A moderator's action was recorded in the moderation log.
     ModLogged,
+    /// A member of staff broke glass (DESIGN.md §8): the page of what it
+    /// opened names it to its readers from now on, and `/moderation`
+    /// counts it.
+    StaffAccessOpened { access_id: i64 },
 }
 
 /// The tags to clear for a change.
@@ -139,6 +143,19 @@ pub async fn tags_for(db: &Db, change: Change) -> sqlx::Result<Vec<Tag>> {
         Change::InviteChanged { invite_id } => tags.push(Tag::Invite(invite_id)),
         Change::SiteChanged => tags.push(Tag::Site),
         Change::ModLogged => tags.push(Tag::ModLog),
+        Change::StaffAccessOpened { access_id } => {
+            let access = sqlx::query!(
+                "SELECT thread_id, space_id FROM staff_access WHERE id = $1",
+                access_id
+            )
+            .fetch_optional(db.pool())
+            .await?;
+            if let Some(access) = access {
+                tags.extend(access.thread_id.map(Tag::Thread));
+                tags.extend(access.space_id.map(Tag::Space));
+            }
+            tags.push(Tag::ModLog);
+        }
     }
     Ok(tags)
 }

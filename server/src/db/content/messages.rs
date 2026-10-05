@@ -304,6 +304,9 @@ pub struct ConversationPage {
     pub posts: Vec<PostView>,
     /// How far the viewer had read before this page.
     pub read_marker: Option<i64>,
+    /// The break-glass grants on this conversation, which its page names to
+    /// everyone in it (DESIGN.md §3.9, §8).
+    pub notices: Vec<super::access::PageNotice>,
 }
 
 /// One page of a conversation the viewer is in, or `None`. A staff
@@ -325,7 +328,8 @@ pub async fn conversation_page(
         SELECT t.id, t.title, t.slug, t.created_at, t.last_seq,
                (SELECT tr.last_read_seq FROM thread_reads tr
                 WHERE tr.thread_id = t.id AND tr.user_id = $2) AS read_marker,
-               dm_readable(t.id, t.visibility, $2) AS "readable!"
+               dm_readable(t.id, t.visibility, $2) AS "readable!",
+               EXISTS (SELECT 1 FROM staff_access sa WHERE sa.thread_id = t.id) AS "noticed!"
         FROM threads t
         WHERE t.id = $1 AND t.deleted_at IS NULL AND t.space_id IS NULL
           AND (dm_readable(t.id, t.visibility, $2)
@@ -365,6 +369,11 @@ pub async fn conversation_page(
         last_seq: i64::from(row.last_seq),
         posts,
         read_marker: row.read_marker.map(i64::from),
+        notices: if row.noticed {
+            super::access::thread_notices(db, row.id, super::access::What::Conversation).await?
+        } else {
+            Vec::new()
+        },
     }))
 }
 

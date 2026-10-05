@@ -831,11 +831,37 @@ pub async fn moderate_post(
     action: PostAction,
     reason: &str,
     report: Option<i64>,
-) -> Outcome<PostTarget> {
+) -> Outcome<()> {
     let user = staff_or_refuse!(viewer);
-    let Some(post) = content::post_target(state.db(), viewer, post_id).await? else {
-        return Ok(Err(Refused::NotFound));
-    };
+    // What acting on it needs to know: who wrote it, where, its number,
+    // whether the log may show it to everyone, and how its author is told
+    // where it was. A post the moderator can't read they act on only under
+    // a break-glass grant on its thread or space (DESIGN.md §8), which
+    // shows them nothing here.
+    let (author_id, thread_id, seq, public, place) =
+        match content::post_target(state.db(), viewer, post_id).await? {
+            Some(post) => (
+                post.author.id,
+                post.thread.thread.id,
+                post.seq,
+                is_public(&post.thread.audience()),
+                place_name(&post.thread),
+            ),
+            None => match content::moderation::closed_post(state.db(), viewer, post_id).await? {
+                Some(post) if post.granted => (
+                    post.author.id,
+                    post.thread_id,
+                    post.seq,
+                    false,
+                    if post.space.is_some() {
+                        "a thread"
+                    } else {
+                        "a conversation"
+                    },
+                ),
+                _ => return Ok(Err(Refused::NotFound)),
+            },
+        };
     let reason = clean_line(reason);
     if let Some(refusal) = reason_problems(&reason) {
         return Ok(Err(refusal));
@@ -862,12 +888,12 @@ pub async fn moderate_post(
             action: action.key(),
             target_kind: "post",
             target_id: post_id,
-            user_id: Some(post.author.id),
-            thread_id: Some(post.thread.thread.id),
+            user_id: Some(author_id),
+            thread_id: Some(thread_id),
             post_id: Some(post_id),
             reason: &reason,
-            public: is_public(&post.thread.audience()),
-            details: json!({ "seq": post.seq }),
+            public,
+            details: json!({ "seq": seq }),
         },
     )
     .await?;
@@ -876,7 +902,7 @@ pub async fn moderate_post(
         _ => None,
     });
     settle_reports(state, user, which, action.key()).await?;
-    if post.author.id != user.id {
+    if author_id != user.id {
         let verb = match action {
             PostAction::Hide => "hid",
             PostAction::Unhide => "showed again",
@@ -886,12 +912,11 @@ pub async fn moderate_post(
         let contestable = matches!(action, PostAction::Hide | PostAction::Delete);
         tell(
             state,
-            post.author.id,
+            author_id,
             user,
             format!(
                 "A moderator {verb} your post № {} in {}. Reason: {reason}",
-                post.seq,
-                place_name(&post.thread)
+                seq, place
             ),
             contestable.then_some(action_id),
         )
@@ -899,7 +924,7 @@ pub async fn moderate_post(
     }
     state.changed(Change::PostRemoved { post_id }).await?;
     state.changed(Change::ModLogged).await?;
-    Ok(Ok(post))
+    Ok(Ok(()))
 }
 
 /// Records a staff member's edit of someone else's post (made by
@@ -1087,6 +1112,22 @@ pub async fn moderate_thread(
     action: ThreadAction,
     reason: &str,
 ) -> Outcome<i64> {
+    moderate_thread_breaking_glass(state, viewer, thread_id, action, reason, None).await
+}
+
+/// [`moderate_thread`], for a moderator who has confirmed, for `glass`
+/// (their reason), that moving a thread they can't read where they could
+/// is breaking glass on it (DESIGN.md §8), which tells everyone who could
+/// read it before the move. Without a reason, such a move is refused with
+/// [`Refused::BreaksGlass`], for the page to ask.
+pub async fn moderate_thread_breaking_glass(
+    state: &AppState,
+    viewer: &Viewer,
+    thread_id: i64,
+    action: ThreadAction,
+    reason: &str,
+    glass: Option<&str>,
+) -> Outcome<i64> {
     let user = staff_or_refuse!(viewer);
     let db = state.db();
     let reason = clean_line(reason);
@@ -1104,6 +1145,7 @@ pub async fn moderate_thread(
     let mut problems = Vec::new();
     check_reason(&reason, &mut problems);
     let mut destination = None;
+    let mut breaks_glass = false;
     match &action {
         ThreadAction::Rename(title) => {
             writing::check_title(&writing::clean_title(title), &mut problems)
@@ -1115,17 +1157,14 @@ pub async fn moderate_thread(
                 (Some(to), Some(t)) if to.space.id == t.space_id => {
                     problems.push("It is already in that space.".to_owned())
                 }
-                // Moving a thread they can't read where they could would
-                // be reading it by another way: breaking glass, which
-                // isn't done by moving things (DESIGN.md §3.1, §8).
+                // Moving a thread they can't read where they could is
+                // reading it by another way: breaking glass, which they
+                // confirm, saying why (DESIGN.md §3.1, §8).
                 (Some(to), Some(t))
-                    if !t.readable
-                        && user_can_read(user, &t.restriction.audience(&to.rules)) =>
+                    if !t.readable && user_can_read(user, &t.restriction.audience(&to.rules)) =>
                 {
-                    problems.push(
-                        "You can’t read this thread, and moving it there would let you. Choose a space you can’t read either, or leave the move to someone who can read it."
-                            .to_owned(),
-                    )
+                    breaks_glass = true;
+                    problems.extend(glass.and_then(crate::glass::reason_problem));
                 }
                 _ => {}
             }
@@ -1135,6 +1174,20 @@ pub async fn moderate_thread(
     if !problems.is_empty() {
         return Ok(Err(Refused::Invalid(problems)));
     }
+    // Those to tell are those who could read it before the move.
+    let glass = match (breaks_glass, glass) {
+        (false, _) => None,
+        (true, None) => return Ok(Err(Refused::BreaksGlass)),
+        (true, Some(why)) => {
+            let Some(closed) =
+                content::access::closed(db, viewer, crate::staff_access::Scope::Thread(thread_id))
+                    .await?
+            else {
+                return Ok(Err(Refused::NotFound));
+            };
+            Some((why, crate::glass::readers(state, user, &[closed]).await?))
+        }
+    };
     let audience = thread.as_ref().map(|t| t.audience.clone());
     let mut previous_space_id = None;
     let mut details = json!({});
@@ -1237,6 +1290,9 @@ pub async fn moderate_thread(
         })
         .await?;
     state.changed(Change::ModLogged).await?;
+    if let Some((why, readers)) = glass {
+        crate::glass::record(state, user, &readers, why, None).await?;
+    }
     Ok(Ok(thread_id))
 }
 

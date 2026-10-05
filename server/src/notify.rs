@@ -47,6 +47,7 @@ use crate::notifications::{self as stored, PostFacts};
 use crate::sessions;
 use crate::settings;
 use crate::social::{self, EmailTopic};
+use crate::staff_access;
 use crate::store;
 use crate::tokens;
 use crate::viewer::Viewer;
@@ -75,7 +76,7 @@ fn rank(kind: Kind) -> u8 {
         Kind::Message => 3,
         Kind::Mention => 2,
         Kind::Subscription => 1,
-        Kind::Moderation => 0,
+        Kind::Moderation | Kind::StaffAccess => 0,
     }
 }
 
@@ -181,6 +182,42 @@ async fn created(state: &AppState, user_id: i64, notification_id: i64) -> sqlx::
     Ok(())
 }
 
+/// Opens a break-glass grant and tells everyone in `readers`, those who
+/// can read what it opens, in the same transaction (DESIGN.md §8): a
+/// notification each, emailed at once (§9) under their email preferences
+/// for notes from the moderators. The notice names the moderator and the
+/// day, not why, and never who reported it. Returns the grant's id and the
+/// members told.
+pub async fn open_staff_access(
+    state: &AppState,
+    access: &staff_access::NewAccess<'_>,
+    readers: &[i64],
+) -> sqlx::Result<(i64, Vec<i64>)> {
+    let thread_id = match access.scope {
+        staff_access::Scope::Thread(id) => Some(id),
+        staff_access::Scope::Space(_) => None,
+    };
+    let mut tx = state.db().begin().await?;
+    let access_id = staff_access::open(&mut tx, access).await?;
+    let mut told = Vec::new();
+    for &user_id in readers {
+        let Some(id) =
+            stored::insert_staff_access(&mut tx, user_id, access.actor_id, access_id, thread_id)
+                .await?
+        else {
+            continue;
+        };
+        jobs::enqueue_at(&mut tx, EMAIL_JOB, &json!({ "notification_id": id }), None).await?;
+        told.push(user_id);
+    }
+    tx.commit().await?;
+    for &user_id in &told {
+        state.live().publish(Event::Counts { user_id });
+    }
+    state.jobs().wake();
+    Ok((access_id, told))
+}
+
 /// Tells a member something from the moderators, with no post attached.
 /// This is the hook moderation actions (M7) use.
 pub async fn moderation(
@@ -225,7 +262,7 @@ pub fn topic(kind: Kind) -> EmailTopic {
         Kind::Mention => EmailTopic::Mentions,
         Kind::Subscription => EmailTopic::Subscriptions,
         Kind::Message => EmailTopic::Messages,
-        Kind::Moderation => EmailTopic::Moderation,
+        Kind::Moderation | Kind::StaffAccess => EmailTopic::Moderation,
     }
 }
 
@@ -261,7 +298,9 @@ pub async fn email_if_away(state: &AppState, id: i64) -> anyhow::Result<bool> {
         .await?
         .email_delay_minutes;
     let cutoff = Utc::now() - Duration::minutes(i64::from(delay));
-    if pending.created_at > cutoff {
+    // A notice that a moderator broke glass is emailed at once (DESIGN.md
+    // §9); anything else waits for the delay.
+    if pending.created_at > cutoff && pending.kind != Kind::StaffAccess {
         // Not due yet (the delay was made longer since): try again then.
         jobs::enqueue_at(
             db,
@@ -295,21 +334,35 @@ pub async fn email_if_away(state: &AppState, id: i64) -> anyhow::Result<bool> {
             continue;
         }
         // Seen on the site since it was made: they have had the chance to
-        // see it there, so it isn't emailed.
-        if to.last_seen_at.is_some_and(|seen| seen > due.created_at) {
+        // see it there, so it isn't emailed. A notice that a moderator
+        // broke glass is emailed at once, whether or not they are about.
+        if due.kind != Kind::StaffAccess
+            && to.last_seen_at.is_some_and(|seen| seen > due.created_at)
+        {
             continue;
         }
         let topic = topic(due.kind);
         if !prefs.wants(topic) {
             continue;
         }
-        let item = match due.post_id {
-            None => EmailItem {
+        let item = match (due.staff_access_id, due.post_id) {
+            (Some(access_id), _) => {
+                // Only while they can read what it is about, which it names.
+                let Some(about) = content::access::about(db, &viewer, access_id).await? else {
+                    continue;
+                };
+                EmailItem {
+                    headline: format!("A moderator viewed {}", about.object()),
+                    text: about.sentence(),
+                    url: state.config().url(&about.href),
+                }
+            }
+            (None, None) => EmailItem {
                 headline: "A note from the moderators".to_owned(),
                 text: due.message.clone().unwrap_or_default(),
                 url: state.config().url("/notifications"),
             },
-            Some(post_id) => {
+            (None, Some(post_id)) => {
                 // Read as the member, through the access layer, now.
                 let Some(post) = content::post_target(db, &viewer, post_id).await? else {
                     continue;
@@ -427,6 +480,7 @@ mod tests {
             Kind::Subscription,
             Kind::Message,
             Kind::Moderation,
+            Kind::StaffAccess,
         ];
         for kind in kinds {
             assert_eq!(Kind::parse(kind.as_str()), Some(kind));

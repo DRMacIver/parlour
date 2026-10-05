@@ -180,6 +180,7 @@ enum Opened {
 }
 
 struct GrantModel {
+    id: i64,
     opened: Opened,
     /// Whether it is still running; some are made already run out.
     active: bool,
@@ -538,6 +539,31 @@ impl World {
             .fetch_one(self.db()),
         )
         .unwrap()
+    }
+
+    /// Whether the viewer reads what a grant opened, by their own
+    /// memberships.
+    fn opened_readable(&self, opened: Opened, who: Who) -> bool {
+        match opened {
+            Opened::Thread(t) => self.thread_readable(t, who),
+            Opened::Space(c) => self.space_readable(c, who),
+            Opened::Conversation(c) => self.conversation_readable(c, who),
+        }
+    }
+
+    /// Whether member `user` reads what a grant opened.
+    fn opened_readable_by(&self, opened: Opened, user: i64) -> bool {
+        match opened {
+            Opened::Thread(t) => self.thread_readable_by(t, user),
+            Opened::Space(c) => self.space_readable_by(c, user),
+            Opened::Conversation(c) => self.conversation_readable_by(c, user),
+        }
+    }
+
+    /// Whether a grant, running or not, was ever opened on this: its page
+    /// says so to its readers for good (DESIGN.md §8).
+    fn ever_opened(&self, opened: Opened) -> bool {
+        self.grants.iter().any(|grant| grant.opened == opened)
     }
 
     /// Whether a running grant opens this to the moderator viewer.
@@ -1125,6 +1151,13 @@ impl World {
     /// Tokens the member `user` may read now.
     fn tokens_for_user(&self, user: i64) -> BTreeSet<&str> {
         let mut tokens = BTreeSet::new();
+        // The names of the spaces they read, which a notice that a
+        // moderator broke glass on one gives.
+        for (i, c) in self.spaces.iter().enumerate() {
+            if self.space_readable_by(i, user) {
+                tokens.insert(c.token.as_str());
+            }
+        }
         for (i, t) in self.threads.iter().enumerate() {
             if self.thread_readable_by(i, user) {
                 tokens.insert(t.title_token.as_str());
@@ -1162,10 +1195,11 @@ impl World {
     /// those about posts they may read now, by the reference function.
     fn expected_unread(&self, who: Who) -> i64 {
         let user = self.viewer_id(who).unwrap();
-        let unread: Vec<Option<i64>> = self
+        let unread: Vec<(Option<i64>, Option<i64>)> = self
             .block(
-                sqlx::query_scalar(
-                    "SELECT post_id FROM notifications WHERE user_id = $1 AND read_at IS NULL",
+                sqlx::query_as(
+                    "SELECT post_id, staff_access_id FROM notifications
+                     WHERE user_id = $1 AND read_at IS NULL",
                 )
                 .bind(user)
                 .fetch_all(self.db()),
@@ -1173,7 +1207,17 @@ impl World {
             .unwrap();
         unread
             .into_iter()
-            .filter(|post_id| {
+            .filter(|(post_id, access_id)| {
+                // A notice that a moderator broke glass counts while the
+                // viewer can read what it opened.
+                if let Some(access_id) = access_id {
+                    let grant = self
+                        .grants
+                        .iter()
+                        .find(|g| g.id == *access_id)
+                        .expect("a notice about a grant the test made");
+                    return self.opened_readable(grant.opened, who);
+                }
                 let Some(post_id) = post_id else { return true };
                 if let Some(i) = self.posts.iter().position(|p| p.id == *post_id) {
                     return self.post_readable(i, who);
@@ -1463,6 +1507,10 @@ impl World {
                 // Lists, and the pages that name them to those who may
                 // see them.
                 "/settings/lists",
+                // The break-glass grants on what the viewer reads, and on
+                // everything for admins (DESIGN.md §8).
+                "/settings/access",
+                "/admin/access",
             ] {
                 paths.push(path.to_owned());
             }
@@ -1718,6 +1766,15 @@ impl World {
                 // for reading only.
                 assert_eq!(pages.recorded(&path), !readable, "{who:?} thread {i}");
                 self.check_toggle(who, t.id, readable, &response.body);
+                // Its readers are told for good that a moderator broke
+                // glass on it.
+                assert_eq!(
+                    response
+                        .body
+                        .contains("A moderator (Watcher) viewed this thread on"),
+                    self.ever_opened(Opened::Thread(i)),
+                    "{who:?}'s notice on thread {i}"
+                );
                 // A lock and its audience only for a thread narrower than
                 // its space (DESIGN.md §3.4): one whose restriction doesn't
                 // name every group its listed space names.
@@ -1805,6 +1862,15 @@ impl World {
             if !readable && granted {
                 assert!(pages.recorded(&path), "{who:?} space {i}");
             }
+            if expected == StatusCode::OK {
+                assert_eq!(
+                    response
+                        .body
+                        .contains("A moderator (Watcher) viewed this space on"),
+                    self.ever_opened(Opened::Space(i)),
+                    "{who:?}'s notice on space {i}"
+                );
+            }
             // Its audience page names a list to the people on it, and
             // visitors are asked to log in.
             let audience = pages.get(&format!("/c/{}/audience", c.slug));
@@ -1880,6 +1946,13 @@ impl World {
             if expected == StatusCode::OK {
                 assert!(response.body.contains(&c.title_token));
                 assert_eq!(pages.recorded(&path), !readable, "{who:?} conversation {i}");
+                assert_eq!(
+                    response
+                        .body
+                        .contains("A moderator (Watcher) viewed this conversation on"),
+                    self.ever_opened(Opened::Conversation(i)),
+                    "{who:?}'s notice on conversation {i}"
+                );
                 // Staff reading it under a grant aren't in it, and have
                 // nothing to subscribe to.
                 let participant = self
@@ -2568,17 +2641,44 @@ impl World {
             }
         };
         let active = tc.draw(gs::booleans());
-        let id = self
-            .block(parlour::staff_access::open(
+        // Everyone who can read it is told, by the access layer's own
+        // judgement, which must be the reference function's: every member
+        // but the moderator who reads it now (DESIGN.md §8).
+        let readers = self
+            .block(parlour::staff_access::readers(
                 self.db(),
+                scope,
+                self.staff_id,
+            ))
+            .unwrap();
+        let expected: Vec<i64> = {
+            let mut users: Vec<i64> = self
+                .users
+                .iter()
+                .copied()
+                .filter(|&user| self.opened_readable_by(opened, user))
+                .collect();
+            users.sort();
+            users
+        };
+        assert_eq!(readers, expected, "readers of {opened:?}");
+        let (id, told) = self
+            .block(parlour::notify::open_staff_access(
+                &self.cached.state,
                 &parlour::staff_access::NewAccess {
                     actor_id: self.staff_id,
                     scope,
                     report_id: None,
                     reason: "Checking",
                 },
+                &readers,
             ))
             .unwrap();
+        assert_eq!(told, expected, "told of {opened:?}");
+        self.block(
+            self.cached
+                .changed(Change::StaffAccessOpened { access_id: id }),
+        );
         if !active {
             // One that ran out long ago: the log can't be changed, so it is
             // backdated as the test's database owner, setting the
@@ -2590,7 +2690,34 @@ impl World {
                  ALTER TABLE staff_access ENABLE TRIGGER staff_access_append_only;"
             ));
         }
-        self.grants.push(GrantModel { opened, active });
+        self.grants.push(GrantModel { id, opened, active });
+        // The member viewer, if they read it, is told on its page at once,
+        // and from then on (the checks look again).
+        if self.opened_readable(opened, Who::Member) {
+            let (path, what) = match opened {
+                Opened::Thread(t) => (
+                    format!(
+                        "/t/{}/{}",
+                        self.threads[t].id,
+                        self.slug_of(&self.threads[t])
+                    ),
+                    "thread",
+                ),
+                Opened::Space(c) => (format!("/c/{}", self.spaces[c].slug), "space"),
+                Opened::Conversation(c) => (
+                    format!("/messages/{}", self.conversations[c].id),
+                    "conversation",
+                ),
+            };
+            let response = self.get_as(Who::Member, &path);
+            assert!(
+                response
+                    .body
+                    .contains(&format!("A moderator (Watcher) viewed this {what} on")),
+                "{path} doesn't tell the member viewer:\n{}",
+                response.body
+            );
+        }
     }
 
     /// A moderator silences or suspends the member viewer, or lifts it.

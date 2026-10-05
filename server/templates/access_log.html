@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{%- import "_admin_nav.html" as nav -%}
+{% block title %}{% if admin %}Break-glass log{% else %}Moderators who looked{% endif %} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+{% if admin %}
+<h1 class="page-title">Break-glass log</h1>
+{% call nav::admin_nav("access") %}{% endcall %}
+<p class="lede">Every time a moderator or admin read something their own groups and lists don’t let them read: what it was, who and why, and how many pages they opened. Everyone who could read it was told at once. The log can’t be changed, by anyone.</p>
+{% else %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/settings">Your account</a> › Moderators who looked</nav>
+<h1 class="page-title">Moderators who looked</h1>
+<p class="lede">Moderators and admins read only what their own groups and lists let them, like everyone else. When one needs to read a private thread, space or conversation to deal with a report or a problem, they say why, everyone who can read it is told, and it is listed here for each of them. These are the times that touched what you can read.</p>
+{% endif %}
+<section class="panel" aria-labelledby="access-heading">
+  <h2 class="panel-bar" id="access-heading">{% if entries.is_empty() %}None{% else %}{{ crate::format::plural(entries.len() as i64, "time", "times") }}{% if entries.len() as i64 == limit %}, the latest{% endif %}{% endif %}</h2>
+  {% if entries.is_empty() %}
+  <p class="empty">{% if admin %}Nobody has broken glass yet.{% else %}No moderator has needed to read anything you can read.{% endif %}</p>
+  {% else %}
+  <ol class="log-list access-log">
+    {% for entry in entries %}
+    <li class="log-entry">
+      <div><strong>{{ entry.moderator.display_name }}</strong> (@{{ entry.moderator.username }}) viewed {% match entry.what %}{% when crate::content::access::What::Thread %}the thread{% when crate::content::access::What::Conversation %}the conversation{% when crate::content::access::What::Space %}the space{% endmatch %} {% if let Some(href) = entry.href %}<a href="{{ href }}">{{ entry.label }}</a>{% else %}{{ entry.label }}{% endif %}{% if admin && entry.after_report %}, after a report{% endif %} <span class="log-reason">— {{ entry.reason }}</span></div>
+      <div class="row-meta"><time datetime="{{ crate::format::iso(entry.created_at) }}">{{ crate::format::datetime(entry.created_at) }}</time> · {% if entry.running() %}open until {{ crate::format::datetime(entry.expires_at) }}{% else %}closed {{ crate::format::datetime(entry.expires_at) }}{% endif %} · {{ crate::format::plural(entry.views, "page viewed", "pages viewed") }}</div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+</section>
+{% if !admin %}</div>{% endif %}
+{% endblock %}

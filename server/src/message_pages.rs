@@ -443,6 +443,9 @@ pub async fn start(
         }
         Err(Refused::LogIn) => Ok(web::login_first("/messages/new")),
         Err(Refused::NotFound) => web::not_found(&state, &viewer).await,
+        Err(Refused::BreaksGlass) => {
+            form(StatusCode::FORBIDDEN, vec![crate::writing::BREAKS_GLASS.to_owned()], None).await
+        }
     }
 }
 
@@ -478,6 +481,9 @@ pub async fn add_person(
             .await
         }
         Err(Refused::RateLimited) => web::rate_limited(&state, &viewer).await,
+        Err(Refused::BreaksGlass) => {
+            not_allowed(&state, &viewer, crate::writing::BREAKS_GLASS).await
+        }
     }
 }
 
@@ -534,6 +540,7 @@ async fn block_refused(
         Refused::NotAllowed(why) => not_allowed(state, viewer, why).await,
         Refused::NotAllowedBecause(why) => not_allowed(state, viewer, &why).await,
         Refused::RateLimited => web::rate_limited(state, viewer).await,
+        Refused::BreaksGlass => not_allowed(state, viewer, crate::writing::BREAKS_GLASS).await,
         Refused::NotFound | Refused::Invalid(_) => web::not_found(state, viewer).await,
     }
 }

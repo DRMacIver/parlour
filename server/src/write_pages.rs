@@ -401,6 +401,11 @@ async fn refused(
                     "Slow down",
                     vec![TOO_FAST.to_owned()],
                 ),
+                Refused::BreaksGlass => (
+                    StatusCode::FORBIDDEN,
+                    "Not allowed",
+                    vec![crate::writing::BREAKS_GLASS.to_owned()],
+                ),
             };
             return render(
                 status,
@@ -459,6 +464,7 @@ async fn refused(
             .await
         }
         (Refused::RateLimited, None) => web::rate_limited(state, viewer).await,
+        (Refused::BreaksGlass, _) => not_allowed(state, viewer, crate::writing::BREAKS_GLASS).await,
     }
 }
 

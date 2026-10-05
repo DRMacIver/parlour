@@ -393,10 +393,20 @@ async fn admins_edit_the_terms_and_privacy_pages(pool: PgPool) {
     let index = f.page("/").await;
     assert!(index.contains("href=\"/terms\""));
     assert!(index.contains("href=\"/privacy\""));
-    for path in ["/terms", "/privacy"] {
-        let page = f.page(path).await;
-        assert!(page.contains("hasn’t written"), "{path}");
-    }
+    let page = f.page("/terms").await;
+    assert!(page.contains("hasn’t written"), "{page}");
+    // The privacy page starts with what Parlour does about staff reading
+    // private content, and what it can't do (DESIGN.md §8), which the
+    // admin may change.
+    let page = f.page("/privacy").await;
+    assert!(page.contains("Whoever runs the server"), "{page}");
+    assert!(page.contains("They can read its database"), "{page}");
+    assert!(
+        page.contains("Moderators and admins read only what their own groups and lists let them"),
+        "{page}"
+    );
+    let form = f.page_as("/admin/pages", &admin).await;
+    assert!(form.contains("## Whoever runs the server"), "{form}");
     assert_eq!(
         f.get_as("/admin/pages", Some(&member)).await.status,
         StatusCode::FORBIDDEN

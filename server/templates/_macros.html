@@ -39,3 +39,9 @@
 
 {# A thread with its own read restriction, in a thread list: the same lock, with who it is for. #}
 {% macro restricted_flag(label) %}<span class="flag flag-access flag-restricted"><svg class="flag-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span class="visually-hidden">Only </span>{{ label }}</span>{% endmacro %}
+
+{# The lines a page shows its readers about moderators who broke glass on
+   it (DESIGN.md §8), for as long as the record exists. #}
+{% macro glass_notices(notices) %}
+{% if !notices.is_empty() %}<div class="notice glass-notice" role="note">{% for n in notices.iter() %}<p>{{ n.sentence() }}</p>{% endfor %}</div>{% endif %}
+{% endmacro %}

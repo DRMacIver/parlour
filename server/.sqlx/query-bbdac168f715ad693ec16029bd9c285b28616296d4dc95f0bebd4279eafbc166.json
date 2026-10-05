@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT m.month AS \"month!\", count(a.id) AS \"n!\"\n           FROM generate_series(date_trunc('month', now() AT TIME ZONE 'UTC')\n                                    - make_interval(months => $1 - 1),\n                                date_trunc('month', now() AT TIME ZONE 'UTC'),\n                                interval '1 month') AS m(month)\n           LEFT JOIN staff_access a\n             ON date_trunc('month', a.created_at AT TIME ZONE 'UTC') = m.month\n           GROUP BY m.month\n           ORDER BY m.month DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "month!",
+        "type_info": "Timestamp",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "bbdac168f715ad693ec16029bd9c285b28616296d4dc95f0bebd4279eafbc166"
+}

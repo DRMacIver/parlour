@@ -1,0 +1,87 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id, t.space_id, t.created_at, c.name AS \"space_name?\",\n                          a.display_name AS author_name,\n                          (SELECT count(*) FROM private_thread_participants p\n                           WHERE p.thread_id = t.id AND p.left_at IS NULL) AS \"people!\"\n                   FROM threads t\n                   JOIN users a ON a.id = t.author_id\n                   LEFT JOIN spaces c ON c.id = t.space_id\n                   WHERE t.id = $1 AND t.deleted_at IS NULL\n                     AND NOT (thread_readable(t, $2, $3, $4, $5)\n                              OR dm_readable(t.id, t.visibility, $4))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "space_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "space_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "space_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "spaces",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "author_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "people!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      false,
+      null
+    ]
+  },
+  "hash": "c84634998edf48798a9846e930ea1720f985663895cbf85f3211bb1d46c3d3db"
+}

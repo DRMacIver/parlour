@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, a.id AS author_id, a.username::text AS \"author_username!\",\n                  a.display_name AS author_name,\n                  c.id AS \"space_id?\", c.slug::text AS \"space_slug?\", c.name AS \"space_name?\"\n           FROM posts p\n           JOIN threads t ON t.id = p.thread_id\n           JOIN users a ON a.id = p.author_id\n           LEFT JOIN spaces c ON c.id = t.space_id\n           WHERE p.id = $1 AND p.deleted_at IS NULL AND t.deleted_at IS NULL\n             AND NOT (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))",
+  "query": "SELECT p.id, a.id AS author_id, a.username::text AS \"author_username!\",\n                  a.display_name AS author_name, p.thread_id, p.seq,\n                  thread_granted(t, $6, $7) AS \"granted!\",\n                  c.id AS \"space_id?\", c.slug::text AS \"space_slug?\", c.name AS \"space_name?\"\n           FROM posts p\n           JOIN threads t ON t.id = p.thread_id\n           JOIN users a ON a.id = p.author_id\n           LEFT JOIN spaces c ON c.id = t.space_id\n           WHERE p.id = $1 AND p.deleted_at IS NULL AND t.deleted_at IS NULL\n             AND NOT (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))",
   "describe": {
     "columns": [
       {
@@ -44,6 +44,34 @@
       },
       {
         "ordinal": 4,
+        "name": "thread_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "seq",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "granted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
         "name": "space_id?",
         "type_info": "Int8",
         "origin": {
@@ -54,7 +82,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 8,
         "name": "space_slug?",
         "type_info": "Text",
         "origin": {
@@ -65,7 +93,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 9,
         "name": "space_name?",
         "type_info": "Text",
         "origin": {
@@ -82,6 +110,8 @@
         "TextArray",
         "Int8Array",
         "Int8",
+        "Int8Array",
+        "Int8Array",
         "Int8Array"
       ]
     },
@@ -90,10 +120,13 @@
       false,
       null,
       false,
+      false,
+      false,
+      null,
       true,
       true,
       true
     ]
   },
-  "hash": "20ceab9752de996f027b7c0db51de6dff1b57516885b1d907d8d28208ad9ddb6"
+  "hash": "648a26b630383ab7f5ddb57a4109bb2389c5864c3835662afeb86a5a738e4dd4"
 }

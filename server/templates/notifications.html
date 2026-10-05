@@ -18,12 +18,16 @@
       {% if let Some(actor) = n.actor %}{% call m::avatar(actor, "avatar-tiny") %}{% endcall %}{% endif %}
       <span class="notification-text">
         {% if !n.read %}<span class="visually-hidden">Unread: </span>{% endif %}
+        {% if let Some(access) = n.access %}
+        A moderator (<strong>{{ access.moderator.display_name }}</strong>) viewed <a href="/notifications/{{ n.id }}">{{ access.object() }}</a> on {{ crate::format::date(access.created_at) }}.
+        {% else %}
         {% match n.about %}
         {% when Some(about) %}
         {% if let Some(actor) = n.actor %}<strong>{{ actor.display_name }}</strong> {% endif %}{{ n.kind.phrase() }} <a href="/notifications/{{ n.id }}">{{ about.title }}</a>
         {% when None %}
         <strong>From the moderators:</strong> {% if let Some(message) = n.message %}{{ message }}{% endif %}{% if let Some(action) = n.mod_action_id %} <a href="/appeal/{{ action }}">Contest this</a>{% endif %}{% if !n.read %} <a href="/notifications/{{ n.id }}">Mark read</a>{% endif %}
         {% endmatch %}
+        {% endif %}
         <span class="row-meta">{% call m::time(n.created_at) %}{% endcall %}</span>
       </span>
     </li>

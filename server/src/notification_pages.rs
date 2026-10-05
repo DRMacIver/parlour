@@ -23,7 +23,7 @@ use axum::response::Response;
 use serde::Deserialize;
 
 use crate::AppState;
-use crate::content::notifications::{Kind, NOTIFICATIONS_PER_PAGE, NotificationList};
+use crate::content::notifications::{Kind, Leads, NOTIFICATIONS_PER_PAGE, NotificationList};
 use crate::content::{self, page_count};
 use crate::emails;
 use crate::error::AppError;
@@ -116,8 +116,9 @@ pub async fn open(
         notify::counts_changed(&state, user.id);
     }
     Ok(see_other(&match target {
-        Some((post_id, location)) => location.href(post_id),
-        None => "/notifications".to_owned(),
+        Leads::Post(post_id, location) => location.href(post_id),
+        Leads::Page(href) => href,
+        Leads::Nowhere => "/notifications".to_owned(),
     }))
 }
 

@@ -479,6 +479,11 @@ img.avatar { object-fit: cover; background: var(--rule); filter: none; }
 .notice ul { padding-left: 1.2em; }
 .notice-error { border-color: var(--accent); color: var(--accent); }
 .notice-success { border-color: var(--ink); }
+/* The break-glass confirmation's list, and /moderation's counts (DESIGN.md §8). */
+.glass-opens { margin: 0 0 16px; padding-left: 1.2em; }
+.glass-counts { border-collapse: collapse; margin: 0 14px 12px; }
+.glass-counts th, .glass-counts td { padding: 2px 16px 2px 0; text-align: left; font-variant-numeric: tabular-nums; }
+.glass-counts th { font-variant-caps: all-small-caps; letter-spacing: 0.04em; font-weight: normal; }
 
 .form { display: grid; gap: 14px; padding: 14px; }
 .form-note { margin: 0; color: var(--ink-muted); font-style: italic; font-size: 15px; }

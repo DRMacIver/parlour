@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id FROM threads t\n           WHERE t.deleted_at IS NULL AND t.space_id IS NOT NULL\n             AND NOT (t.space_id = ANY ($6))\n             AND NOT thread_readable(t, $1, $2, $3, $4)\n             AND thread_readable(t, $1, $5, $3, $7)\n           ORDER BY t.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2cd9be2f85ecc19a455fe62f3016cde63934d1b2b0c1847477a302fc7320e423"
+}

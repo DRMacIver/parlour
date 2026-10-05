@@ -26,6 +26,7 @@
 <h1 class="page-title">{{ space.space.name }}: settings</h1>
 {% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
 {% call f::errors(errors) %}{% endcall %}
+{% if closed %}<div class="notice" role="status"><p>You can’t read this space. Moderators and admins run every space, so you can change its settings, but they read only what their own groups and lists let them. <a href="/mod/break-glass?space={{ space.space.slug }}">Read it…</a> Reading it means breaking glass: you say why, and everyone who can read it is told.</p></div>{% endif %}
 <form class="panel" method="post" action="/c/{{ space.space.slug }}/settings">
   <h2 class="panel-bar">The space</h2>
   <div class="form">

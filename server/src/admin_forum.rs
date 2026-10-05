@@ -386,7 +386,7 @@ pub async fn delete_group(
 
 #[derive(Deserialize, Default)]
 #[serde(default)]
-pub struct MemberForm {
+struct MemberForm {
     username: String,
 }
 
@@ -394,10 +394,17 @@ pub async fn add_member(
     State(state): State<AppState>,
     viewer: Viewer,
     Path(id): Path<String>,
-    Form(form): Form<MemberForm>,
+    Form(fields): Form<Vec<(String, String)>>,
 ) -> Result<Response, AppError> {
     let Some(user) = admin(&viewer) else {
         return not_admin(&state, &viewer, "/admin/groups").await;
+    };
+    let form = MemberForm {
+        username: fields
+            .iter()
+            .find(|(key, _)| key == "username")
+            .map(|(_, value)| value.clone())
+            .unwrap_or_default(),
     };
     let added_by = user.id;
     let detail = match find_group(&state, &viewer, &id).await? {
@@ -408,7 +415,44 @@ pub async fn add_member(
     let username = form.username.trim().trim_start_matches('@');
     match users::id_by_username(state.db(), username).await? {
         Some(user_id) => {
+            // Joining a group that lets them read what they can't now is
+            // breaking glass on each thing it opens (DESIGN.md §8), which
+            // they confirm, saying why; those told are those who could
+            // read each before.
+            let mut glass = None;
+            if user_id == user.id {
+                let opens = content::access::opened_by_joining(state.db(), &viewer, id).await?;
+                if !opens.is_empty() {
+                    let action = format!("/admin/groups/{id}/members");
+                    match crate::glass_pages::ask_change(
+                        &state,
+                        &viewer,
+                        opens.clone(),
+                        crate::glass_pages::Change {
+                            action: &action,
+                            fields: &fields,
+                            says: format!(
+                                "Joining {} would let you read what you can’t now.",
+                                detail.group.name
+                            ),
+                            button: "Break glass and join",
+                            back: &format!("/admin/groups/{id}"),
+                        },
+                    )
+                    .await?
+                    {
+                        crate::glass_pages::Confirmation::Ask(response) => return Ok(response),
+                        crate::glass_pages::Confirmation::Given(reason) => {
+                            glass =
+                                Some((reason, crate::glass::readers(&state, user, &opens).await?));
+                        }
+                    }
+                }
+            }
             groups::add_member(state.db(), id, user_id, Some(added_by)).await?;
+            if let Some((reason, readers)) = glass {
+                crate::glass::record(&state, user, &readers, &reason, None).await?;
+            }
             Ok(see_other(&format!("/admin/groups/{id}?done=added")))
         }
         None => {
