@@ -402,6 +402,7 @@ pub async fn save(
                 says: "You can’t read this thread, and saving this would let you.".to_owned(),
                 button: "Break glass and save",
                 back: &action,
+                by_change: true,
             },
         )
         .await?

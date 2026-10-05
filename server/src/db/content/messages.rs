@@ -357,7 +357,7 @@ pub async fn conversation_page(
     }
     deps.add(Tag::Thread(row.id));
     let conversation = conversation_target(db, row.id).await?;
-    let posts = posts_on_page(db, viewer, row.id, page, deps).await?;
+    let posts = posts_on_page(db, viewer, row.id, page, viewer.is_staff(), deps).await?;
     Ok(Some(ConversationPage {
         thread: ThreadRef {
             id: row.id,

@@ -437,6 +437,7 @@ pub async fn add_member(
                             ),
                             button: "Break glass and join",
                             back: &format!("/admin/groups/{id}"),
+                            by_change: true,
                         },
                     )
                     .await?
@@ -455,7 +456,7 @@ pub async fn add_member(
             groups::add_member(&mut tx, id, user_id, Some(added_by)).await?;
             let recorded = match glass {
                 Some((reason, readers)) => {
-                    Some(crate::glass::record(&mut tx, user, &readers, &reason, None).await?)
+                    Some(crate::glass::record(&mut tx, user, &readers, &reason, None, true).await?)
                 }
                 None => None,
             };

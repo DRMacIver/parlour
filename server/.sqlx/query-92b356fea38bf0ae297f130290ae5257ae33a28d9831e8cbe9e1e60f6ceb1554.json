@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM posts p\n               JOIN users u ON u.id = CASE WHEN p.deleted_at IS NOT NULL THEN p.deleted_by\n                                           ELSE p.hidden_by END\n               WHERE p.id = $1 AND u.role IN ('moderator', 'admin')\n           ) AS \"staff!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "staff!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "92b356fea38bf0ae297f130290ae5257ae33a28d9831e8cbe9e1e60f6ceb1554"
+}

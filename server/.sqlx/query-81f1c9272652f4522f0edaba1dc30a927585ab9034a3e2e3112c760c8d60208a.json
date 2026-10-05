@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH shown_in AS (\n            -- The posts that show the image now, or showed it in an\n            -- earlier version that hasn't been redacted (redacting empties\n            -- a version, and so its references).\n            SELECT pu.post_id FROM post_uploads pu WHERE pu.sha256 = $1\n            UNION\n            SELECT r.post_id FROM revision_uploads ru JOIN post_revisions r ON r.id = ru.revision_id\n            WHERE ru.sha256 = $1\n        )\n        SELECT\n            EXISTS (SELECT 1 FROM uploads u WHERE u.sha256 = $1 AND u.ext = $2) AS \"exists!\",\n            EXISTS (SELECT 1 FROM uploads u JOIN users a ON a.avatar_upload_id = u.id\n                    WHERE u.sha256 = $1 AND a.deleted_at IS NULL) AS \"avatar!\",\n            EXISTS (SELECT 1 FROM shown_in s\n                    JOIN posts p ON p.id = s.post_id JOIN threads t ON t.id = p.thread_id\n                    WHERE p.deleted_at IS NULL AND p.hidden_at IS NULL\n                      AND t.deleted_at IS NULL\n                      AND thread_readable(t, $3, $4, NULL, NULL)) AS \"public!\",\n            EXISTS (SELECT 1 FROM shown_in s\n                    JOIN posts p ON p.id = s.post_id JOIN threads t ON t.id = p.thread_id\n                    WHERE p.deleted_at IS NULL\n                      AND (p.hidden_at IS NULL OR $8 OR space_run_by(t.space_id, $7, $10))\n                      AND t.deleted_at IS NULL\n                      AND (thread_readable(t, $5, $6, $7, $10)\n                           OR dm_readable(t.id, t.visibility, $7))) AS \"readable!\",\n            $8 AND EXISTS (SELECT 1 FROM held_post_uploads hu\n                           JOIN held_posts h ON h.id = hu.held_post_id\n                           WHERE hu.sha256 = $1\n                             AND held_readable(h, $5, $6, $7, $10)) AS \"held!\",\n            EXISTS (SELECT 1 FROM uploads u WHERE u.sha256 = $1 AND u.user_id = $9) AS \"mine!\",\n            (SELECT t.id FROM shown_in s\n             JOIN posts p ON p.id = s.post_id JOIN threads t ON t.id = p.thread_id\n             WHERE p.deleted_at IS NULL AND t.deleted_at IS NULL\n               AND thread_granted(t, $11, $12)\n             ORDER BY t.id LIMIT 1) AS \"granted_thread?\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "avatar!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "public!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "readable!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "held!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "mine!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "granted_thread?",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "TextArray",
+        "Int8Array",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Bool",
+        "Int8",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "81f1c9272652f4522f0edaba1dc30a927585ab9034a3e2e3112c760c8d60208a"
+}

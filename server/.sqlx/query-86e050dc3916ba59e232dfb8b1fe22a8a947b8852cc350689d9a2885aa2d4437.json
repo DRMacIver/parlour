@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT a.id, a.reason, a.report_id IS NOT NULL AS \"after_report!\", a.created_at,\n                  a.expires_at, u.id AS actor_id, u.username::text AS \"actor_username!\",\n                  u.display_name AS actor_name,\n                  t.id AS \"thread_id?\", t.title AS \"title?\", t.slug AS \"slug?\",\n                  t.space_id IS NULL AS \"conversation?\",\n                  (t.deleted_at IS NULL\n                   AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4)))\n                      AS \"thread_readable?\",\n                  tc.name AS \"thread_space?\",\n                  space_readable(tc.visibility, tc.id, $2, $3) AS \"thread_space_readable?\",\n                  (SELECT count(*) FROM private_thread_participants p\n                   WHERE p.thread_id = t.id AND p.left_at IS NULL) AS \"people!\",\n                  c.slug::text AS \"space_slug?\", c.name AS \"space_name?\",\n                  space_readable(c.visibility, c.id, $2, $3) AS \"space_readable?\",\n                  (SELECT count(*) FROM staff_access_views v WHERE v.access_id = a.id) AS \"views!\"\n           FROM staff_access a\n           JOIN users u ON u.id = a.actor_id\n           LEFT JOIN threads t ON t.id = a.thread_id\n           LEFT JOIN spaces tc ON tc.id = t.space_id\n           LEFT JOIN spaces c ON c.id = a.space_id\n           WHERE $1 OR EXISTS (SELECT 1 FROM notifications n\n                               WHERE n.staff_access_id = a.id AND n.user_id = $7)\n           ORDER BY a.id DESC\n           LIMIT $6",
+  "query": "SELECT a.id, a.reason, a.report_id IS NOT NULL AS \"after_report!\", a.created_at,\n                  a.expires_at, a.by_change, u.id AS actor_id, u.username::text AS \"actor_username!\",\n                  u.display_name AS actor_name,\n                  t.id AS \"thread_id?\", t.title AS \"title?\", t.slug AS \"slug?\",\n                  t.space_id IS NULL AS \"conversation?\",\n                  (t.deleted_at IS NULL\n                   AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4)))\n                      AS \"thread_readable?\",\n                  tc.name AS \"thread_space?\",\n                  space_readable(tc.visibility, tc.id, $2, $3) AS \"thread_space_readable?\",\n                  (SELECT count(*) FROM private_thread_participants p\n                   WHERE p.thread_id = t.id AND p.left_at IS NULL) AS \"people!\",\n                  c.slug::text AS \"space_slug?\", c.name AS \"space_name?\",\n                  space_readable(c.visibility, c.id, $2, $3) AS \"space_readable?\",\n                  (SELECT count(*) FROM staff_access_views v WHERE v.access_id = a.id) AS \"views!\"\n           FROM staff_access a\n           JOIN users u ON u.id = a.actor_id\n           LEFT JOIN threads t ON t.id = a.thread_id\n           LEFT JOIN spaces tc ON tc.id = t.space_id\n           LEFT JOIN spaces c ON c.id = a.space_id\n           WHERE $1 OR EXISTS (SELECT 1 FROM notifications n\n                               WHERE n.staff_access_id = a.id AND n.user_id = $7)\n           ORDER BY a.id DESC\n           LIMIT $6 OFFSET $8",
   "describe": {
     "columns": [
       {
@@ -55,6 +55,17 @@
       },
       {
         "ordinal": 5,
+        "name": "by_change",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "staff_access",
+            "name": "by_change"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
         "name": "actor_id",
         "type_info": "Int8",
         "origin": {
@@ -65,13 +76,13 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "actor_username!",
         "type_info": "Text",
         "origin": "Expression"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "actor_name",
         "type_info": "Text",
         "origin": {
@@ -82,7 +93,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "thread_id?",
         "type_info": "Int8",
         "origin": {
@@ -93,7 +104,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "title?",
         "type_info": "Text",
         "origin": {
@@ -104,7 +115,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "slug?",
         "type_info": "Text",
         "origin": {
@@ -115,19 +126,19 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "conversation?",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "thread_readable?",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "thread_space?",
         "type_info": "Text",
         "origin": {
@@ -138,19 +149,19 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "thread_space_readable?",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "people!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "space_slug?",
         "type_info": "Text",
         "origin": {
@@ -161,7 +172,7 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "space_name?",
         "type_info": "Text",
         "origin": {
@@ -172,13 +183,13 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "space_readable?",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 19,
+        "ordinal": 20,
         "name": "views!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -192,6 +203,7 @@
         "Int8",
         "Int8Array",
         "Int8",
+        "Int8",
         "Int8"
       ]
     },
@@ -199,6 +211,7 @@
       false,
       false,
       null,
+      false,
       false,
       false,
       false,
@@ -218,5 +231,5 @@
       null
     ]
   },
-  "hash": "89c54c09a8a071ba1822fab8bb30c3e3dc1284a2f98ae21f88c1918d1e668160"
+  "hash": "86e050dc3916ba59e232dfb8b1fe22a8a947b8852cc350689d9a2885aa2d4437"
 }

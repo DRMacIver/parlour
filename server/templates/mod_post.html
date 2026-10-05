@@ -6,8 +6,8 @@
 <div class="narrow">
 {% call m::post_crumbs(post.thread) %}{% endcall %}
 <h1 class="page-title">Moderate № {{ post.seq }}</h1>
-{% call md::mod_nav("") %}{% endcall %}
-<p class="lede">By <a href="/mod/users/{{ post.author.username }}">{{ post.author.display_name }}</a> · {% call m::time(post.created_at) %}{% endcall %}{% if deleted %} · <span class="flag">Deleted</span>{% else if post.hidden %} · <span class="flag flag-hidden">Hidden from members</span>{% endif %}</p>
+{% if staff %}{% call md::mod_nav("") %}{% endcall %}{% endif %}
+<p class="lede">By <a href="{% if staff %}/mod/users/{{ post.author.username }}{% else %}/u/{{ post.author.username }}{% endif %}">{{ post.author.display_name }}</a> · {% call m::time(post.created_at) %}{% endcall %}{% if deleted %} · <span class="flag">Deleted</span>{% else if post.hidden %} · <span class="flag flag-hidden">Hidden from members</span>{% endif %}</p>
 {% if let Some(text) = post.body %}
 <section class="panel"><div class="post-body">{{ text.html|safe }}</div></section>
 {% endif %}
@@ -30,7 +30,7 @@
     </div>
   </div>
 </form>
-{% if !deleted %}
+{% if !deleted && staff %}
 <section class="panel">
   <h2 class="panel-bar">More</h2>
   <ul class="mod-links">
@@ -41,6 +41,8 @@
     {% for url in images %}<li><a href="/mod{{ url }}">Image {{ loop.index }}</a> in the post: see where else it is shown, or remove it everywhere</li>{% endfor %}
   </ul>
 </section>
+{% else if !staff %}
+<p class="form-note">You moderate this post because you run the space it is in. What you do here goes in the moderation log, and its author is told. Editing someone else’s post, and acting on members, are for the site’s moderators{% if post.thread.space().is_some() %}; you can also <a href="/mod/t/{{ post.thread.thread.id }}">moderate the thread</a>{% endif %}.</p>
 {% endif %}
 </div>
 {% endblock %}

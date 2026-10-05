@@ -2,8 +2,13 @@
 //! queue; and what moderators do, each recorded in the moderation log with
 //! a reason.
 //!
-//! Every action here checks that the viewer is staff (a moderator or admin
-//! who isn't suspended), finds what it is about through
+//! Every action here checks that the viewer may take it: staff (a
+//! moderator or admin who isn't suspended) for everything, and for what
+//! DESIGN.md §3.1 lets a space's administrators do in it (pin, lock,
+//! rename and delete threads, hide and delete posts, move threads out to
+//! another space they run), those who run the space, a feed's owner
+//! included, in threads they can read ([`moderator`]). Each finds what it
+//! is about through
 //! [`crate::content`] as that viewer, makes the change with
 //! [`crate::mod_records`] and [`crate::store`], records it, settles the
 //! reports it answers, tells the member it affects (with a link to contest
@@ -32,7 +37,9 @@ use crate::mod_records::{
     ReportAbout, Restriction, Settles,
 };
 use crate::notify;
-use crate::permissions::{Audience, Grant, ThreadRestriction, at_most_as_visible, user_can_read};
+use crate::permissions::{
+    Audience, Grant, SpaceRules, ThreadRestriction, at_most_as_visible, user_can_read,
+};
 use crate::ratelimit::{Action, Scope};
 use crate::sessions;
 use crate::social;
@@ -76,6 +83,33 @@ pub fn staff(viewer: &Viewer) -> Result<&UserCtx, Refused> {
         None => Err(Refused::LogIn),
         Some(user) if user.is_staff() => Ok(user),
         Some(_) => Err(Refused::NotFound),
+    }
+}
+
+/// The viewer, if they may moderate in a space with these rules (`None`
+/// for a conversation): staff anywhere, and those who run the space
+/// (DESIGN.md §3.1, §3.2). Visitors are asked to log in, and anyone else is
+/// told there's nothing here, as on every moderation page.
+pub fn moderator<'v>(
+    viewer: &'v Viewer,
+    space: Option<&SpaceRules>,
+) -> Result<&'v UserCtx, Refused> {
+    match viewer.user() {
+        None => Err(Refused::LogIn),
+        Some(user) if user.is_staff() => Ok(user),
+        Some(user) if space.is_some_and(|rules| rules.may_administer(viewer)) => Ok(user),
+        Some(_) => Err(Refused::NotFound),
+    }
+}
+
+/// Who did something, as a notice to the member it affects says: "A
+/// moderator", or for someone who runs the space and isn't staff, their
+/// name and why it was theirs to do.
+fn who_did(user: &UserCtx) -> String {
+    if user.is_staff() {
+        "A moderator".to_owned()
+    } else {
+        format!("{}, who runs the space it is in,", user.display_name)
     }
 }
 
@@ -810,17 +844,29 @@ impl PostAction {
     }
 }
 
-/// A post as staff see it, deleted or not, for moderating.
-pub async fn post_for_staff(
+/// A post as those who moderate it see it, deleted or not, for moderating:
+/// staff, and those who run its space ([`moderator`]).
+pub async fn post_for_moderating(
     state: &AppState,
     viewer: &Viewer,
     post_id: i64,
 ) -> Outcome<PostTarget> {
-    staff_or_refuse!(viewer);
-    match content::post_target(state.db(), viewer, post_id).await? {
-        Some(post) => Ok(Ok(post)),
-        None => Ok(Err(Refused::NotFound)),
+    if viewer.user().is_none() {
+        return Ok(Err(Refused::LogIn));
     }
+    Ok(
+        match content::post_target(state.db(), viewer, post_id).await? {
+            Some(post) => {
+                moderator(viewer, post.thread.space().map(|space| &space.rules)).map(|_| post)
+            }
+            // A post a grant of theirs opens, which records the page (DESIGN.md
+            // §8); grants are staff's alone.
+            None if viewer.is_staff() => content::post_target_granted(state.db(), viewer, post_id)
+                .await?
+                .ok_or(Refused::NotFound),
+            None => Err(Refused::NotFound),
+        },
+    )
 }
 
 /// Hides, shows, deletes or restores a post.
@@ -832,13 +878,16 @@ pub async fn moderate_post(
     reason: &str,
     report: Option<i64>,
 ) -> Outcome<()> {
-    let user = staff_or_refuse!(viewer);
+    if viewer.user().is_none() {
+        return Ok(Err(Refused::LogIn));
+    }
     // What acting on it needs to know: who wrote it, where, its number,
-    // whether the log may show it to everyone, and how its author is told
-    // where it was. A post the moderator can't read they act on only under
-    // a break-glass grant on its thread or space (DESIGN.md §8), which
-    // shows them nothing here.
-    let (author_id, thread_id, seq, public, place) =
+    // whether the log may show it to everyone, how its author is told
+    // where it was, and who may act on it there. A post the moderator
+    // can't read they act on only under a break-glass grant on its thread
+    // or space (DESIGN.md §8), which shows them nothing here; those who run
+    // a space and aren't staff act only on posts they can read.
+    let (author_id, thread_id, seq, public, place, rules) =
         match content::post_target(state.db(), viewer, post_id).await? {
             Some(post) => (
                 post.author.id,
@@ -846,6 +895,7 @@ pub async fn moderate_post(
                 post.seq,
                 is_public(&post.thread.audience()),
                 place_name(&post.thread),
+                post.thread.space().map(|space| space.rules.clone()),
             ),
             None => match content::moderation::closed_post(state.db(), viewer, post_id).await? {
                 Some(post) if post.granted => (
@@ -858,15 +908,32 @@ pub async fn moderate_post(
                     } else {
                         "a conversation"
                     },
+                    None,
                 ),
                 _ => return Ok(Err(Refused::NotFound)),
             },
         };
+    let user = match moderator(viewer, rules.as_ref()) {
+        Ok(user) => user,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
     let reason = clean_line(reason);
     if let Some(refusal) = reason_problems(&reason) {
         return Ok(Err(refusal));
     }
     let db = state.db();
+    // Those who run a space don't undo what staff did in it.
+    if !user.is_staff()
+        && matches!(action, PostAction::Unhide | PostAction::Restore)
+        && mod_records::removed_by_staff(db, post_id).await?
+    {
+        return Ok(Err(Refused::NotAllowed(match action {
+            PostAction::Unhide => {
+                "A moderator hid this post, so only a moderator can show it again."
+            }
+            _ => "A moderator deleted this post, so only a moderator can restore it.",
+        })));
+    }
     let changed = match action {
         PostAction::Hide => mod_records::set_hidden(db, post_id, Some(user.id)).await?,
         PostAction::Unhide => mod_records::set_hidden(db, post_id, None).await?,
@@ -897,11 +964,15 @@ pub async fn moderate_post(
         },
     )
     .await?;
-    let which = answering(state, report).await?.or(match action {
-        PostAction::Hide | PostAction::Delete => Some(Settles::Post(post_id)),
-        _ => None,
-    });
-    settle_reports(state, user, which, action.key()).await?;
+    // Reports are for staff to settle: someone who runs the space acting on
+    // a reported post leaves them in the queue.
+    if user.is_staff() {
+        let which = answering(state, report).await?.or(match action {
+            PostAction::Hide | PostAction::Delete => Some(Settles::Post(post_id)),
+            _ => None,
+        });
+        settle_reports(state, user, which, action.key()).await?;
+    }
     if author_id != user.id {
         let verb = match action {
             PostAction::Hide => "hid",
@@ -915,8 +986,10 @@ pub async fn moderate_post(
             author_id,
             user,
             format!(
-                "A moderator {verb} your post № {} in {}. Reason: {reason}",
-                seq, place
+                "{} {verb} your post № {} in {}. Reason: {reason}",
+                who_did(user),
+                seq,
+                place
             ),
             contestable.then_some(action_id),
         )
@@ -1128,13 +1201,16 @@ pub async fn moderate_thread_breaking_glass(
     reason: &str,
     glass: Option<&str>,
 ) -> Outcome<i64> {
-    let user = staff_or_refuse!(viewer);
+    if viewer.user().is_none() {
+        return Ok(Err(Refused::LogIn));
+    }
     let db = state.db();
     let reason = clean_line(reason);
-    // A deleted thread can only be restored, from its page in the
+    // A deleted thread can only be restored, by staff, from its page in the
     // moderation pages, which the log links to. Staff run every space, so
     // they act on threads they can't read too, knowing only where they are
-    // and who may read them (DESIGN.md §3.1).
+    // and who may read them (DESIGN.md §3.1). Those who run the space
+    // otherwise act on the threads in it they can read.
     let thread = match &action {
         ThreadAction::Restore => None,
         _ => match moderated_thread(db, viewer, thread_id).await? {
@@ -1142,29 +1218,51 @@ pub async fn moderate_thread_breaking_glass(
             _ => return Ok(Err(Refused::NotFound)),
         },
     };
+    let user = match moderator(viewer, thread.as_ref().map(|t| &t.rules)) {
+        Ok(user) => user,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    let staff = user.is_staff();
     let mut problems = Vec::new();
     check_reason(&reason, &mut problems);
     let mut destination = None;
     let mut breaks_glass = false;
+    // Whether the move itself would let them read it, rather than only
+    // take it from some of its readers.
+    let mut move_opens = false;
     match &action {
         ThreadAction::Rename(title) => {
             writing::check_title(&writing::clean_title(title), &mut problems)
         }
         ThreadAction::Move(slug) => {
-            destination = content::administered_space(db, viewer, slug).await?;
+            // Those who run a space move threads out of it only to another
+            // space they run.
+            destination = content::administered_space(db, viewer, slug)
+                .await?
+                .filter(|to| staff || to.rules.may_administer(viewer));
             match (&destination, &thread) {
-                (None, _) => problems.push("Choose a space to move it to.".to_owned()),
+                (None, _) => problems.push(if staff {
+                    "Choose a space to move it to.".to_owned()
+                } else {
+                    "Choose a space you run to move it to.".to_owned()
+                }),
                 (Some(to), Some(t)) if to.space.id == t.space_id => {
                     problems.push("It is already in that space.".to_owned())
                 }
                 // Moving a thread they can't read where they could is
-                // reading it by another way: breaking glass, which they
-                // confirm, saying why (DESIGN.md §3.1, §8).
-                (Some(to), Some(t))
-                    if !t.readable && user_can_read(user, &t.restriction.audience(&to.rules)) =>
-                {
-                    breaks_glass = true;
-                    problems.extend(glass.and_then(crate::glass::reason_problem));
+                // reading it by another way, and moving it where some of
+                // those who read it now couldn't is a first step to reading
+                // it by another way (making that space theirs): both break
+                // glass, which they confirm, saying why, and which tells
+                // those who read it now (DESIGN.md §3.1, §8). A thread
+                // keeps its restriction where it goes, naming a feed's
+                // owner there too.
+                (Some(to), Some(t)) if !t.readable => {
+                    if let Some(kind) = move_glass(user, t, to) {
+                        breaks_glass = true;
+                        move_opens = kind == MoveGlass::Opens;
+                        problems.extend(glass.and_then(crate::glass::reason_problem));
+                    }
                 }
                 _ => {}
             }
@@ -1226,7 +1324,9 @@ pub async fn moderate_thread_breaking_glass(
             if previous_space_id.is_some()
                 && let Some((why, readers)) = &glass
             {
-                recorded = Some(crate::glass::record(&mut tx, user, readers, why, None).await?);
+                recorded = Some(
+                    crate::glass::record(&mut tx, user, readers, why, None, move_opens).await?,
+                );
             }
             tx.commit().await?;
             details = json!({ "from_space_id": previous_space_id, "to_space_id": to.space.id });
@@ -1288,7 +1388,10 @@ pub async fn moderate_thread_breaking_glass(
             state,
             author_id,
             user,
-            format!("A moderator {verb} one of your threads. Reason: {reason}"),
+            format!(
+                "{} {verb} one of your threads. Reason: {reason}",
+                who_did(user)
+            ),
             Some(action_id),
         )
         .await?;
@@ -1306,10 +1409,62 @@ pub async fn moderate_thread_breaking_glass(
     Ok(Ok(thread_id))
 }
 
+/// How moving a thread a member of staff can't read breaks glass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoveGlass {
+    /// The move would let them read it.
+    Opens,
+    /// It would take it from some of those who read it now, which is a
+    /// first step to reading it (moving it somewhere theirs to open).
+    Narrows,
+}
+
+/// Whether moving thread `t`, which `user` can't read, to `to` breaks
+/// glass, and how. A thread keeps its restriction where it goes, naming
+/// a feed's owner there too (DESIGN.md §3.2, §3.4).
+fn move_glass(user: &UserCtx, t: &ModeratedThread, to: &content::SpaceTarget) -> Option<MoveGlass> {
+    let after =
+        crate::writing::named_in(t.restriction.clone(), t.author_id, to).audience(&to.rules);
+    if user_can_read(user, &after) {
+        Some(MoveGlass::Opens)
+    } else if !at_most_as_visible(&after, &t.audience) {
+        Some(MoveGlass::Narrows)
+    } else {
+        None
+    }
+}
+
+/// How moving a thread to the space at `slug` would break glass for the
+/// viewer, if it would, for the confirmation page to say.
+pub async fn move_breaks_glass(
+    state: &AppState,
+    viewer: &Viewer,
+    thread_id: i64,
+    slug: &str,
+) -> Result<Option<MoveGlass>, AppError> {
+    let (Ok(user), db) = (staff(viewer), state.db()) else {
+        return Ok(None);
+    };
+    let (Some(t), Some(to)) = (
+        moderated_thread(db, viewer, thread_id).await?,
+        content::administered_space(db, viewer, slug).await?,
+    ) else {
+        return Ok(None);
+    };
+    Ok(if t.readable || t.deleted {
+        None
+    } else {
+        move_glass(user, &t, &to)
+    })
+}
+
 /// A thread in a space as a moderator acts on it: whether or not they
 /// can read it, where it is and who can.
 struct ModeratedThread {
     space_id: i64,
+    /// Its space's rules, which say who runs it.
+    rules: SpaceRules,
+    author_id: i64,
     deleted: bool,
     readable: bool,
     restriction: ThreadRestriction,
@@ -1326,8 +1481,13 @@ async fn moderated_thread(
     if let Some(t) = content::thread_target(db, viewer, thread_id).await?
         && let Some(space) = t.space()
     {
+        let author_id = content::moderation::thread_author(db, thread_id)
+            .await?
+            .unwrap_or_default();
         return Ok(Some(ModeratedThread {
             space_id: space.space.id,
+            rules: space.rules.clone(),
+            author_id,
             deleted: false,
             readable: true,
             audience: t.audience(),
@@ -1340,6 +1500,8 @@ async fn moderated_thread(
         .await?
         .map(|t| ModeratedThread {
             space_id: t.space.space.id,
+            rules: t.space.rules.clone(),
+            author_id: t.author.id,
             deleted: t.deleted,
             readable: false,
             audience: t.audience(),

@@ -3,9 +3,12 @@
 //! shows it, or showed it in an earlier version that hasn't been redacted
 //! (anyone who may read a post may read its edit history), as decided by
 //! the shared visibility condition. A post that is deleted shows nothing,
-//! and a hidden one shows its images only to staff, as with its text.
+//! and a hidden one shows its images only to those who moderate where it
+//! is, staff and its space's administrators, as with its text.
 //! Staff may also fetch the images in posts held for approval, which they
-//! review, where they could read the post once it is up (DESIGN.md §8).
+//! review, where they could read the post once it is up (DESIGN.md §8),
+//! and the images in what a break-glass grant of theirs opens, each fetch
+//! recorded as a page shown under it.
 
 use crate::content::UserRef;
 use crate::db::Db;
@@ -52,7 +55,8 @@ pub async fn upload_access(
                       AND thread_readable(t, $3, $4, NULL, NULL)) AS "public!",
             EXISTS (SELECT 1 FROM shown_in s
                     JOIN posts p ON p.id = s.post_id JOIN threads t ON t.id = p.thread_id
-                    WHERE p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $8)
+                    WHERE p.deleted_at IS NULL
+                      AND (p.hidden_at IS NULL OR $8 OR space_run_by(t.space_id, $7, $10))
                       AND t.deleted_at IS NULL
                       AND (thread_readable(t, $5, $6, $7, $10)
                            OR dm_readable(t.id, t.visibility, $7))) AS "readable!",
@@ -60,7 +64,12 @@ pub async fn upload_access(
                            JOIN held_posts h ON h.id = hu.held_post_id
                            WHERE hu.sha256 = $1
                              AND held_readable(h, $5, $6, $7, $10)) AS "held!",
-            EXISTS (SELECT 1 FROM uploads u WHERE u.sha256 = $1 AND u.user_id = $9) AS "mine!"
+            EXISTS (SELECT 1 FROM uploads u WHERE u.sha256 = $1 AND u.user_id = $9) AS "mine!",
+            (SELECT t.id FROM shown_in s
+             JOIN posts p ON p.id = s.post_id JOIN threads t ON t.id = p.thread_id
+             WHERE p.deleted_at IS NULL AND t.deleted_at IS NULL
+               AND thread_granted(t, $11, $12)
+             ORDER BY t.id LIMIT 1) AS "granted_thread?"
         "#,
         sha256,
         ext,
@@ -72,6 +81,8 @@ pub async fn upload_access(
         viewer.is_staff(),
         viewer.user_id(),
         &filter.group_ids,
+        &filter.granted_thread_ids,
+        &filter.granted_space_ids,
     )
     .fetch_one(db.pool())
     .await?;
@@ -80,6 +91,21 @@ pub async fn upload_access(
     } else if row.avatar || row.public {
         Some(UploadAccess::Public)
     } else if row.readable || row.held || row.mine {
+        Some(UploadAccess::Private)
+    } else if let Some(thread_id) = row.granted_thread {
+        // Under a grant: the image is a page shown, recorded before it is.
+        let space_id = sqlx::query_scalar!("SELECT space_id FROM threads WHERE id = $1", thread_id)
+            .fetch_one(db.pool())
+            .await?;
+        super::record_granted_view(
+            db,
+            viewer,
+            super::Granted::Thread {
+                thread_id,
+                space_id,
+            },
+        )
+        .await?;
         Some(UploadAccess::Private)
     } else {
         None

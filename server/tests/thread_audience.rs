@@ -262,6 +262,7 @@ async fn a_lock_shows_only_where_a_thread_is_narrower_than_its_space(pool: PgPoo
             scope: parlour::staff_access::Scope::Thread(thread),
             report_id: None,
             reason: "Checking",
+            by_change: false,
         },
     )
     .await

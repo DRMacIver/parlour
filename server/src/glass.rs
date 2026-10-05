@@ -187,7 +187,7 @@ pub async fn break_glass(
     if staff_access::covered(&mut tx, user.id, closed.scope).await? {
         return Ok(Ok(closed.href));
     }
-    let recorded = record(&mut tx, user, &readers, reason, report_id).await?;
+    let recorded = record(&mut tx, user, &readers, reason, report_id, false).await?;
     tx.commit().await?;
     recorded.announce(state).await?;
     Ok(Ok(closed.href))
@@ -236,14 +236,17 @@ impl Recorded {
 /// Opens a grant on each scope, for `reason`, telling its readers, in
 /// `tx`: the transaction that also makes the change opening them, if a
 /// change does, so that the change is never made without its grants and
-/// their notices (DESIGN.md §8). [`Recorded::announce`] them once it is
-/// committed.
+/// their notices (DESIGN.md §8). `by_change` says that the change itself
+/// makes the member of staff a reader, so that the logs say they read it
+/// for as long as the change stands. [`Recorded::announce`] them once it
+/// is committed.
 pub async fn record(
     tx: &mut Tx,
     user: &UserCtx,
     opens: &[(Scope, Vec<i64>)],
     reason: &str,
     report_id: Option<i64>,
+    by_change: bool,
 ) -> Result<Recorded, AppError> {
     let reason = clean_line(reason);
     let mut recorded = Recorded {
@@ -258,6 +261,7 @@ pub async fn record(
                 scope: *scope,
                 report_id,
                 reason: &reason,
+                by_change,
             },
             readers,
         )

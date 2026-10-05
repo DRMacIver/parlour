@@ -1059,8 +1059,6 @@ pub async fn thread_page(
         None => None,
     };
 
-    let posts = posts_on_page(db, viewer, thread.id, page, deps).await?;
-
     let rules = SpaceRules {
         read: Grant::from_parts(
             &thread.read_level,
@@ -1084,6 +1082,17 @@ pub async fn thread_page(
         ),
         archived: thread.archived_at.is_some(),
     };
+    // Those who moderate here, staff and the space's administrators, see
+    // hidden posts, marked as hidden (DESIGN.md §3.1, §8).
+    let posts = posts_on_page(
+        db,
+        viewer,
+        thread.id,
+        page,
+        rules.may_administer(viewer),
+        deps,
+    )
+    .await?;
     let restriction = ThreadRestriction::from_parts(
         thread.thread_read_group_ids.as_deref(),
         thread.thread_read_user_ids.as_deref(),
@@ -1164,12 +1173,15 @@ pub async fn thread_page(
 }
 
 /// The posts on one page of a thread the caller has checked the viewer can
-/// read: a space thread or a conversation.
+/// read: a space thread or a conversation. Hidden posts are shown, marked
+/// as hidden, to those who moderate there (`moderates`: staff, and a
+/// space's administrators); nobody reads deleted ones.
 pub(super) async fn posts_on_page(
     db: &Db,
     viewer: &Viewer,
     thread_id: i64,
     page: i64,
+    moderates: bool,
     deps: &mut Deps,
 ) -> sqlx::Result<Vec<PostView>> {
     // Post numbers are 32-bit, so a page whose numbers don't fit is empty.
@@ -1177,8 +1189,7 @@ pub(super) async fn posts_on_page(
         .and_then(|offset| Some((offset.checked_add(1)?, offset.checked_add(POSTS_PER_PAGE)?)))
         .and_then(|(first, last)| Some((i32::try_from(first).ok()?, i32::try_from(last).ok()?)));
     let (first, last) = seq_range.unwrap_or((1, 0));
-    // Staff read hidden posts, marked as hidden; nobody reads deleted ones.
-    let staff = viewer.is_staff();
+    let staff = moderates;
     let rows = sqlx::query!(
         r#"
         SELECT p.id, p.seq, p.created_at, p.edited_at,
@@ -1618,22 +1629,66 @@ pub async fn post_location(
     viewer: &Viewer,
     post_id: i64,
 ) -> sqlx::Result<Option<PostLocation>> {
+    post_location_of(db, viewer, post_id, false).await
+}
+
+/// [`post_location`], or under a break-glass grant the viewer holds, for
+/// a post's permalink: the address it leads to names the thread, so that
+/// is a page shown, and recorded before it is returned (DESIGN.md §8).
+pub async fn post_location_granted(
+    db: &Db,
+    viewer: &Viewer,
+    post_id: i64,
+) -> sqlx::Result<Option<PostLocation>> {
+    post_location_of(db, viewer, post_id, true).await
+}
+
+async fn post_location_of(
+    db: &Db,
+    viewer: &Viewer,
+    post_id: i64,
+    granted: bool,
+) -> sqlx::Result<Option<PostLocation>> {
     let filter = viewer.filter();
+    let (granted_threads, granted_spaces) = if granted {
+        (
+            filter.granted_thread_ids.clone(),
+            filter.granted_space_ids.clone(),
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
     let row = sqlx::query!(
         r#"
-        SELECT t.id, t.slug, p.seq, t.visibility = 'private' AS "private!"
+        SELECT t.id, t.slug, p.seq, t.visibility = 'private' AS "private!", t.space_id,
+               (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))
+                   AS "readable!"
         FROM posts p JOIN threads t ON t.id = p.thread_id
         WHERE p.id = $1 AND t.deleted_at IS NULL
-          AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))
+          AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4)
+               OR thread_granted(t, $6, $7))
         "#,
         post_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
         &filter.group_ids,
+        &granted_threads,
+        &granted_spaces,
     )
     .fetch_optional(db.pool())
     .await?;
+    if let Some(row) = row.as_ref().filter(|row| !row.readable) {
+        record_granted_view(
+            db,
+            viewer,
+            Granted::Thread {
+                thread_id: row.id,
+                space_id: row.space_id,
+            },
+        )
+        .await?;
+    }
     Ok(row.map(|row| PostLocation {
         thread_id: row.id,
         thread_slug: row.slug,
@@ -2552,7 +2607,7 @@ pub struct PostTarget {
     /// Whether a moderator hid it.
     pub hidden: bool,
     /// The text, as Markdown and as HTML, unless the post was deleted, or
-    /// hidden and the viewer isn't staff.
+    /// hidden and the viewer doesn’t moderate where it is (staff, and its space’s administrators, do).
     pub body: Option<PostText>,
 }
 
@@ -2579,20 +2634,19 @@ pub async fn post_target(
     let Some(row) = sqlx::query!(
         r#"
         SELECT p.id, p.seq, p.thread_id, p.created_at, p.edited_at, p.hidden_at IS NOT NULL AS "hidden!",
-               CASE WHEN p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $5) THEN p.body_md END AS body_md,
-               CASE WHEN p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $5) THEN p.body_html END AS body_html,
+               CASE WHEN p.deleted_at IS NULL THEN p.body_md END AS body_md,
+               CASE WHEN p.deleted_at IS NULL THEN p.body_html END AS body_html,
                u.id AS author_id, u.username, u.display_name
         FROM posts p
         JOIN threads t ON t.id = p.thread_id
         JOIN users u ON u.id = p.author_id
         WHERE p.id = $1 AND t.deleted_at IS NULL
-          AND (thread_readable(t, $2, $3, $4, $6) OR dm_readable(t.id, t.visibility, $4))
+          AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))
         "#,
         post_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
-        viewer.is_staff(),
         &filter.group_ids,
     )
     .fetch_optional(db.pool())
@@ -2602,6 +2656,17 @@ pub async fn post_target(
     };
     let Some(thread) = thread_target(db, viewer, row.thread_id).await? else {
         return Ok(None);
+    };
+    // Those who moderate where it is, staff and the space's administrators,
+    // read a hidden post; nobody reads a deleted one.
+    let moderates = viewer.is_staff()
+        || thread
+            .space()
+            .is_some_and(|space| space.rules.may_administer(viewer));
+    let (body_md, body_html) = if row.hidden && !moderates {
+        (None, None)
+    } else {
+        (row.body_md, row.body_html)
     };
     Ok(Some(PostTarget {
         post_id: row.id,
@@ -2615,7 +2680,7 @@ pub async fn post_target(
         created_at: row.created_at,
         edited_at: row.edited_at,
         hidden: row.hidden,
-        body: match (row.body_md, row.body_html) {
+        body: match (body_md, body_html) {
             (Some(markdown), Some(html)) => Some(PostText { markdown, html }),
             _ => None,
         },
@@ -2680,6 +2745,103 @@ pub async fn post_target_or_own(
         created_at: row.created_at,
         edited_at: row.edited_at,
         hidden: false,
+        body: Some(PostText {
+            markdown: row.body_md,
+            html: row.body_html,
+        }),
+    }))
+}
+
+/// A post the viewer can't read but a break-glass grant they hold now
+/// opens (DESIGN.md §8): a live post in a live thread or conversation that
+/// the grant covers. Like every read under a grant, it records the page
+/// being shown before returning anything, and fails if it can't. Hidden
+/// posts are given whole, as to staff, who alone hold grants. This is for
+/// the post's own pages beyond its thread's: its history, its permalink
+/// and its moderation page.
+pub async fn post_target_granted(
+    db: &Db,
+    viewer: &Viewer,
+    post_id: i64,
+) -> sqlx::Result<Option<PostTarget>> {
+    let filter = viewer.filter();
+    if filter.granted_thread_ids.is_empty() && filter.granted_space_ids.is_empty() {
+        return Ok(None);
+    }
+    let Some(row) = sqlx::query!(
+        r#"
+        SELECT p.id, p.seq, p.created_at, p.edited_at, p.hidden_at IS NOT NULL AS "hidden!",
+               p.body_md, p.body_html, u.id AS author_id, u.username, u.display_name,
+               t.id AS thread_id, t.title, t.slug, t.space_id, t.locked, t.last_seq,
+               t.read_group_ids, t.read_user_ids, t.reply_group_ids, t.reply_user_ids
+        FROM posts p
+        JOIN threads t ON t.id = p.thread_id
+        JOIN users u ON u.id = p.author_id
+        WHERE p.id = $1 AND p.deleted_at IS NULL AND t.deleted_at IS NULL
+          AND thread_granted(t, $6, $7)
+          AND NOT (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))
+        "#,
+        post_id,
+        &filter.visibilities,
+        &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
+        &filter.granted_thread_ids,
+        &filter.granted_space_ids,
+    )
+    .fetch_optional(db.pool())
+    .await?
+    else {
+        return Ok(None);
+    };
+    let place = match row.space_id {
+        Some(space_id) => match administered_space_by_id(db, viewer, space_id).await? {
+            Some(space) => Place::Space(Box::new(space)),
+            None => return Ok(None),
+        },
+        None => Place::Conversation(messages::conversation_target(db, row.thread_id).await?),
+    };
+    record_granted_view(
+        db,
+        viewer,
+        Granted::Thread {
+            thread_id: row.thread_id,
+            space_id: row.space_id,
+        },
+    )
+    .await?;
+    let name = match &place {
+        Place::Conversation(c) => c.name(&row.title, viewer.user_id()),
+        Place::Space(_) | Place::Unreadable => row.title.clone(),
+    };
+    Ok(Some(PostTarget {
+        post_id: row.id,
+        seq: i64::from(row.seq),
+        thread: ThreadTarget {
+            thread: ThreadRef {
+                id: row.thread_id,
+                title: row.title,
+                slug: row.slug,
+            },
+            name,
+            place,
+            restriction: ThreadRestriction::from_parts(
+                row.read_group_ids.as_deref(),
+                row.read_user_ids.as_deref(),
+                row.reply_group_ids.as_deref(),
+                row.reply_user_ids.as_deref(),
+            ),
+            locked: row.locked,
+            last_seq: i64::from(row.last_seq),
+        },
+        author: UserRef {
+            id: row.author_id,
+            username: row.username.to_string(),
+            display_name: row.display_name,
+        },
+        created_at: row.created_at,
+        edited_at: row.edited_at,
+        hidden: row.hidden,
         body: Some(PostText {
             markdown: row.body_md,
             html: row.body_html,
@@ -2780,19 +2942,28 @@ pub struct PostHistory {
     pub post: PostTarget,
     /// Oldest first; the last is the current version.
     pub versions: Vec<Version>,
+    /// Whether the viewer reads it only under a break-glass grant, which
+    /// recorded the page (DESIGN.md §8).
+    pub granted: bool,
 }
 
 /// The versions of a live post the viewer can see, or of their own post in
-/// a thread they can no longer read ([`post_target_or_own`]). A deleted or
-/// hidden post's history is hidden with it.
+/// a thread they can no longer read ([`post_target_or_own`]), or of one a
+/// break-glass grant they hold opens, which records the page
+/// ([`post_target_granted`]). A deleted or hidden post's history is hidden
+/// with it, from all but those who moderate where it is.
 pub async fn post_history(
     db: &Db,
     viewer: &Viewer,
     post_id: i64,
     deps: &mut Deps,
 ) -> sqlx::Result<Option<PostHistory>> {
-    let Some(post) = post_target_or_own(db, viewer, post_id).await? else {
-        return Ok(None);
+    let (post, granted) = match post_target_or_own(db, viewer, post_id).await? {
+        Some(post) => (post, false),
+        None => match post_target_granted(db, viewer, post_id).await? {
+            Some(post) => (post, true),
+            None => return Ok(None),
+        },
     };
     deps.add(Tag::Thread(post.thread.thread.id));
     let Some(text) = &post.body else {
@@ -2844,7 +3015,11 @@ pub async fn post_history(
         },
         markdown: Some(text.markdown.clone()),
     });
-    Ok(Some(PostHistory { post, versions }))
+    Ok(Some(PostHistory {
+        post,
+        versions,
+        granted,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -3023,7 +3198,11 @@ pub enum Granted {
 /// read under a grant on a page, and a grant's row can't be removed, so
 /// this always records something; if it somehow didn't, the read fails
 /// rather than show what nobody would know was seen.
-async fn record_granted_view(db: &Db, viewer: &Viewer, granted: Granted) -> sqlx::Result<()> {
+pub(super) async fn record_granted_view(
+    db: &Db,
+    viewer: &Viewer,
+    granted: Granted,
+) -> sqlx::Result<()> {
     let (Some(user), Some(page)) = (viewer.user(), viewer.page()) else {
         return Err(sqlx::Error::RowNotFound);
     };

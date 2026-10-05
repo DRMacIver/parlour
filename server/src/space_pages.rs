@@ -827,7 +827,7 @@ async fn log_staff_action(
     space: &SpaceTarget,
     action: &str,
 ) -> Result<(), AppError> {
-    if !viewer.is_staff() || space.rules.administers_by_grant(viewer) {
+    if !viewer.is_staff() || space.rules.runs_in_own_right(viewer) {
         return Ok(());
     }
     let Some(user) = viewer.user() else {
@@ -919,6 +919,7 @@ pub async fn save_settings(
                 ),
                 button: "Break glass and save",
                 back: &action,
+                by_change: true,
             },
         )
         .await?
@@ -964,7 +965,7 @@ pub async fn save_settings(
     let saved = store::update_space(&mut tx, space.space.id, &settings).await?;
     let recorded = match (&saved, viewer.user(), &glass) {
         (Ok(true), Some(user), Some((reason, readers))) => {
-            Some(crate::glass::record(&mut tx, user, readers, reason, None).await?)
+            Some(crate::glass::record(&mut tx, user, readers, reason, None, true).await?)
         }
         _ => None,
     };

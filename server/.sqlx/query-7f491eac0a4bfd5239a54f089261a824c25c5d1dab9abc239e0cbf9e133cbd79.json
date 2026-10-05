@@ -1,0 +1,262 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT p.id, p.seq, p.created_at, p.edited_at, p.hidden_at IS NOT NULL AS \"hidden!\",\n               p.body_md, p.body_html, u.id AS author_id, u.username, u.display_name,\n               t.id AS thread_id, t.title, t.slug, t.space_id, t.locked, t.last_seq,\n               t.read_group_ids, t.read_user_ids, t.reply_group_ids, t.reply_user_ids\n        FROM posts p\n        JOIN threads t ON t.id = p.thread_id\n        JOIN users u ON u.id = p.author_id\n        WHERE p.id = $1 AND p.deleted_at IS NULL AND t.deleted_at IS NULL\n          AND thread_granted(t, $6, $7)\n          AND NOT (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "seq",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "edited_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "edited_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "hidden!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "body_md",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "body_md"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "body_html",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "posts",
+            "name": "body_html"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "author_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "username",
+        "type_info": {
+          "Custom": {
+            "name": "citext",
+            "kind": "Simple"
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "thread_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "space_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "space_id"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "locked",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "locked"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "last_seq",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "last_seq"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "read_group_ids",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "read_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "read_user_ids",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "read_user_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "reply_group_ids",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "reply_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "reply_user_ids",
+        "type_info": "Int8Array",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "reply_user_ids"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "7f491eac0a4bfd5239a54f089261a824c25c5d1dab9abc239e0cbf9e133cbd79"
+}

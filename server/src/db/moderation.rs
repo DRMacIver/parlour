@@ -1130,6 +1130,23 @@ pub async fn set_hidden<'c>(
     Ok(done.rows_affected() == 1)
 }
 
+/// Whether whoever hid a post, or deleted it if it is deleted, is staff:
+/// those who run a space don't undo what staff did there.
+pub async fn removed_by_staff<'c>(db: impl Handle<'c>, post_id: i64) -> sqlx::Result<bool> {
+    let mut conn = db.open(KEY).acquire().await?;
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM posts p
+               JOIN users u ON u.id = CASE WHEN p.deleted_at IS NOT NULL THEN p.deleted_by
+                                           ELSE p.hidden_by END
+               WHERE p.id = $1 AND u.role IN ('moderator', 'admin')
+           ) AS "staff!""#,
+        post_id
+    )
+    .fetch_one(&mut *conn)
+    .await
+}
+
 /// Deletes a post as a moderator, or (with `restore`) undoes a moderator's
 /// deletion. Returns whether it changed.
 pub async fn set_deleted<'c>(

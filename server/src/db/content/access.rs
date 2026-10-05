@@ -274,6 +274,10 @@ pub struct Logged {
     pub expires_at: DateTime<Utc>,
     /// How many pages were shown under it.
     pub views: i64,
+    /// Whether a change of who may read what it opened opened it, so that
+    /// its maker reads it as one of its readers for as long as the change
+    /// stands, and no page is recorded under it (migration 0036).
+    pub by_change: bool,
 }
 
 impl Logged {
@@ -283,36 +287,63 @@ impl Logged {
     }
 }
 
-/// The most grants the log lists.
-pub const LOG_LIMIT: i64 = 500;
+/// How many grants a page of either log lists.
+pub const LOG_PER_PAGE: i64 = 50;
 
-/// Every grant, newest first, for admins (`/admin/access`); nothing for
-/// anyone else.
-pub async fn log(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<Logged>> {
-    if !viewer.is_admin() {
-        return Ok(Vec::new());
-    }
-    logged(db, viewer, true).await
+/// One page of a log, and how many grants it has in all.
+pub struct LogPage {
+    pub total: i64,
+    pub entries: Vec<Logged>,
 }
 
-/// The grants the viewer was told about, newest first
+/// Every grant, newest first, a page at a time, for admins
+/// (`/admin/access`); nothing for anyone else.
+pub async fn log(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<LogPage> {
+    if !viewer.is_admin() {
+        return Ok(LogPage {
+            total: 0,
+            entries: Vec::new(),
+        });
+    }
+    logged(db, viewer, true, page).await
+}
+
+/// The grants the viewer was told about, newest first, a page at a time
 /// (`/settings/access`): each time a moderator looked at what they could
 /// read then, whether or not they can read it now (DESIGN.md §8).
-pub async fn affecting(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<Logged>> {
+pub async fn affecting(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<LogPage> {
     if viewer.user().is_none() {
-        return Ok(Vec::new());
+        return Ok(LogPage {
+            total: 0,
+            entries: Vec::new(),
+        });
     }
-    logged(db, viewer, false).await
+    logged(db, viewer, false, page).await
 }
 
-async fn logged(db: &Db, viewer: &Viewer, everything: bool) -> sqlx::Result<Vec<Logged>> {
+async fn logged(db: &Db, viewer: &Viewer, everything: bool, page: i64) -> sqlx::Result<LogPage> {
+    let Some(offset) = super::page_offset(page, LOG_PER_PAGE) else {
+        return Ok(LogPage {
+            total: 0,
+            entries: Vec::new(),
+        });
+    };
+    let total = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM staff_access a
+           WHERE $1 OR EXISTS (SELECT 1 FROM notifications n
+                               WHERE n.staff_access_id = a.id AND n.user_id = $2)"#,
+        everything,
+        viewer.user_id(),
+    )
+    .fetch_one(db.pool())
+    .await?;
     let filter = viewer.filter();
     // Staff run every space, so know every space's name and the staff
     // pages about each thread; anyone else only those they read.
     let staff = viewer.is_staff();
     let rows = sqlx::query!(
         r#"SELECT a.id, a.reason, a.report_id IS NOT NULL AS "after_report!", a.created_at,
-                  a.expires_at, u.id AS actor_id, u.username::text AS "actor_username!",
+                  a.expires_at, a.by_change, u.id AS actor_id, u.username::text AS "actor_username!",
                   u.display_name AS actor_name,
                   t.id AS "thread_id?", t.title AS "title?", t.slug AS "slug?",
                   t.space_id IS NULL AS "conversation?",
@@ -334,18 +365,19 @@ async fn logged(db: &Db, viewer: &Viewer, everything: bool) -> sqlx::Result<Vec<
            WHERE $1 OR EXISTS (SELECT 1 FROM notifications n
                                WHERE n.staff_access_id = a.id AND n.user_id = $7)
            ORDER BY a.id DESC
-           LIMIT $6"#,
+           LIMIT $6 OFFSET $8"#,
         everything,
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
         &filter.group_ids,
-        LOG_LIMIT,
+        LOG_PER_PAGE,
         viewer.user_id(),
+        offset,
     )
     .fetch_all(db.pool())
     .await?;
-    Ok(rows
+    let entries = rows
         .into_iter()
         .map(|row| {
             let thread_readable = row.thread_readable == Some(true);
@@ -420,9 +452,11 @@ async fn logged(db: &Db, viewer: &Viewer, everything: bool) -> sqlx::Result<Vec<
                 created_at: row.created_at,
                 expires_at: row.expires_at,
                 views: row.views,
+                by_change: row.by_change,
             }
         })
-        .collect())
+        .collect();
+    Ok(LogPage { total, entries })
 }
 
 // ---------------------------------------------------------------------------

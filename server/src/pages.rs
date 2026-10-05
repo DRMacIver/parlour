@@ -413,21 +413,22 @@ struct ThreadTemplate {
     viewer_id: Option<i64>,
     reply_box: ReplyBox,
     /// Whether the viewer may edit their own posts here (the thread isn't
-    /// locked, or they are staff).
+    /// locked, or they moderate here).
     can_edit: bool,
     /// The reactions a member can add.
     reaction_types: Vec<ReactionType>,
     /// Whether the viewer may react here: they are logged in and not
-    /// silenced or suspended, and the thread isn't locked unless they are
-    /// staff.
+    /// silenced or suspended, and the thread isn't locked unless they
+    /// moderate here.
     can_react: bool,
     /// The post the "new since your last visit" divider goes before.
     divider_before: Option<i64>,
     /// Whether a logged-in viewer is subscribed to the thread (`None` for
     /// visitors, who have no toggle).
     subscribed: Option<bool>,
-    /// Whether the viewer is staff, who see moderation links.
-    staff: bool,
+    /// Whether the viewer moderates here, staff or one of those who run the
+    /// space, who see moderation links (DESIGN.md §3.1).
+    moderates: bool,
     /// Whether the viewer may change who can read and reply in the
     /// thread: its author, and those who run its space (DESIGN.md §3.4).
     may_restrict: bool,
@@ -513,6 +514,7 @@ pub async fn thread(
         return web::not_found(&state, &viewer).await;
     }
     let base = format::thread_href(&id, &thread.thread.slug);
+    let moderates = thread.space.rules.may_administer(&viewer);
     let (reply_box, can_edit, reaction_types, divider_before, subscribed) = match viewer.user() {
         None => (ReplyBox::LogIn, false, Vec::new(), None, None),
         // Under a break-glass grant the page is for reading: nothing to
@@ -541,7 +543,7 @@ pub async fn thread(
             }
             (
                 reply_box,
-                !thread.locked || viewer.is_staff(),
+                !thread.locked || moderates,
                 content::reaction_types(&state.db, true).await?,
                 divider_before,
                 Some(thread.subscribed),
@@ -553,7 +555,7 @@ pub async fn thread(
     });
     let can_react = !thread.granted
         && viewer.user().is_some_and(|user| {
-            writing::restriction(user).is_none() && (!thread.locked || viewer.is_staff())
+            writing::restriction(user).is_none() && (!thread.locked || moderates)
         });
     cacheable(
         &ThreadTemplate {
@@ -567,7 +569,7 @@ pub async fn thread(
             can_react,
             divider_before,
             subscribed,
-            staff: viewer.is_staff(),
+            moderates,
             may_restrict,
         },
         &deps,
@@ -651,7 +653,7 @@ pub async fn permalink(
     let Some(id) = parse_id(&id) else {
         return web::not_found(&state, &viewer).await;
     };
-    match content::post_location(&state.db, &viewer, id).await? {
+    match content::post_location_granted(&state.db, &viewer, id).await? {
         Some(location) => Ok(Redirect::temporary(&location.href(id)).into_response()),
         // An author's post in a thread they can no longer read: to what
         // they can still see of it (DESIGN.md §3.3).

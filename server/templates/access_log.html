@@ -1,11 +1,12 @@
 {% extends "base.html" %}
 {%- import "_admin_nav.html" as nav -%}
+{%- import "_macros.html" as m -%}
 {% block title %}{% if admin %}Break-glass log{% else %}Moderators who looked{% endif %} · {{ layout.site_name }}{% endblock %}
 {% block content %}
 {% if admin %}
 <h1 class="page-title">Break-glass log</h1>
 {% call nav::admin_nav("access") %}{% endcall %}
-<p class="lede">Every time a moderator or admin read something their own groups and lists don’t let them read: what it was, who and why, and how many pages they opened. Everyone who could read it was told at once. The log can’t be changed, by anyone.</p>
+<p class="lede">Every time a moderator or admin read something their own groups and lists don’t let them read: what it was, who and why, and how many pages they opened. Everyone who could read it was told at once. Nothing in Parlour changes or removes an entry here, and the database refuses to; only whoever runs the server could get round that, as they could read everything anyway.</p>
 {% else %}
 <div class="narrow">
 <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/settings">Your account</a> › Moderators who looked</nav>
@@ -13,7 +14,7 @@
 <p class="lede">Moderators and admins read only what their own groups and lists let them, like everyone else. When one needs to read a private thread, space or conversation to deal with a report or a problem, they say why, everyone who can read it is told, and it is listed here for each of them. These are the times that touched what you could read, whether or not you still can.</p>
 {% endif %}
 <section class="panel" aria-labelledby="access-heading">
-  <h2 class="panel-bar" id="access-heading">{% if entries.is_empty() %}None{% else %}{{ crate::format::plural(entries.len() as i64, "time", "times") }}{% if entries.len() as i64 == limit %}, the latest{% endif %}{% endif %}</h2>
+  <h2 class="panel-bar" id="access-heading">{% if total == 0 %}None{% else %}{{ crate::format::plural(total, "time", "times") }}{% if pagination.is_multi_page() %}, newest first{% endif %}{% endif %}</h2>
   {% if entries.is_empty() %}
   <p class="empty">{% if admin %}Nobody has broken glass yet.{% else %}No moderator has needed to read anything you could read.{% endif %}</p>
   {% else %}
@@ -21,11 +22,12 @@
     {% for entry in entries %}
     <li class="log-entry">
       <div><strong>{{ entry.moderator.display_name }}</strong> (@{{ entry.moderator.username }}) viewed {% if let Some(href) = entry.href %}<a href="{{ href }}">{{ entry.object }}</a>{% else %}{{ entry.object }}{% endif %}{% if admin && entry.after_report %}, after a report{% endif %} <span class="log-reason">— {{ entry.reason }}</span></div>
-      <div class="row-meta"><time datetime="{{ crate::format::iso(entry.created_at) }}">{{ crate::format::datetime(entry.created_at) }}</time> · {% if entry.running() %}open until {{ crate::format::datetime(entry.expires_at) }}{% else %}closed {{ crate::format::datetime(entry.expires_at) }}{% endif %} · {{ crate::format::plural(entry.views, "page viewed", "pages viewed") }}</div>
+      <div class="row-meta"><time datetime="{{ crate::format::iso(entry.created_at) }}">{{ crate::format::datetime(entry.created_at) }}</time> · {% if entry.by_change %}by a change of who may read it: {{ entry.moderator.display_name }} reads it as one of its readers for as long as the change stands, so the pages they open aren’t recorded one by one{% else %}{% if entry.running() %}open until {{ crate::format::datetime(entry.expires_at) }}{% else %}closed {{ crate::format::datetime(entry.expires_at) }}{% endif %} · {{ crate::format::plural(entry.views, "page viewed", "pages viewed") }}{% endif %}</div>
     </li>
     {% endfor %}
   </ol>
   {% endif %}
 </section>
+{% call m::pagination(pagination, "Pages of the log") %}{% endcall %}
 {% if !admin %}</div>{% endif %}
 {% endblock %}

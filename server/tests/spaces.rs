@@ -604,3 +604,52 @@ async fn the_audience_page_says_who_may_do_what(pool: PgPool) {
         "{page}"
     );
 }
+
+/// Staff run every space, and whatever they do to one they don't run in
+/// their own right is in the moderation log (DESIGN.md §3.1, §8): a space
+/// whose administer grant is "staff", like Announcements and General from
+/// setup and every space from before spaces had administrators, is run by
+/// their role, so their changes there are logged. One whose grant names
+/// them, and which they read, is theirs, and isn't.
+#[sqlx::test]
+async fn staff_changing_a_space_run_by_staff_are_logged(pool: PgPool) {
+    let s = setup(pool).await;
+    s.f.space("general", "members", None, 0).await;
+    let logged = |action: &'static str| {
+        let f = &s.f;
+        async move {
+            count(
+                f,
+                &format!("SELECT count(*) FROM mod_actions WHERE action = '{action}'"),
+            )
+            .await
+        }
+    };
+    let response =
+        s.f.submit(
+            "/c/general/settings",
+            &settings_fields("General", "general", &[("read", "public")]),
+            Some(&s.staff_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(logged("edit_space").await, 1);
+    for path in ["/c/general/archive", "/c/general/unarchive"] {
+        let response = s.f.submit(path, &[], Some(&s.staff_cookie)).await;
+        assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    }
+    assert_eq!(logged("archive_space").await, 1);
+    assert_eq!(logged("unarchive_space").await, 1);
+
+    // A space whose grant names the moderator, and which they read, is
+    // theirs: archiving it is no moderation.
+    let mine = s.f.space("mine", "members", None, 1).await;
+    let sam = s.f.user_id("sam").await;
+    s.f.set_grant(mine, "administer", Grant::listed([], [sam]))
+        .await;
+    let response =
+        s.f.submit("/c/mine/archive", &[], Some(&s.staff_cookie))
+            .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(logged("archive_space").await, 1);
+}

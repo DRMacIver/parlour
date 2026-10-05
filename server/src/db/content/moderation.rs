@@ -1,11 +1,16 @@
 //! The moderation log (DESIGN.md §8), as a viewer may see it.
 //!
 //! Everyone sees the public entries, which are about public content and
-//! about members; staff see every entry. Each entry names the thread it is
-//! about only if the viewer can read that thread now (by the same shared
-//! condition as everything else), so a thread that has since moved
-//! somewhere more private, and anything said about it such as its old
-//! title, stays hidden from those who can't read it.
+//! about members, and the entries about what was done to content that
+//! isn't public, which name the account and the action but carry no
+//! content (DESIGN.md §8): no reason, and the thread or space only for a
+//! viewer who can read it. Staff business (dismissed reports, notes,
+//! appeals, posts not approved) is for staff, who see every entry in the
+//! full log. Each entry names the thread it is about only if the viewer
+//! can read that thread now (by the same shared condition as everything
+//! else), so a thread that has since moved somewhere more private, and
+//! anything said about it such as its old title, stays hidden from those
+//! who can't read it.
 
 use serde_json::Value;
 
@@ -47,6 +52,36 @@ impl LogEntry {
         text
     }
 }
+
+/// The actions on content whose entries everyone sees, those about
+/// content that isn't public without what it says (DESIGN.md §8).
+const CONTENT_ACTIONS: &[&str] = &[
+    "hide_post",
+    "unhide_post",
+    "delete_post",
+    "restore_post",
+    "edit_post",
+    "redact_revision",
+    "lock_thread",
+    "unlock_thread",
+    "pin_thread",
+    "unpin_thread",
+    "delete_thread",
+    "restore_thread",
+    "rename_thread",
+    "restrict_thread",
+    "move_thread",
+    "move_posts",
+    "approve_post",
+    "edit_space",
+    "archive_space",
+    "unarchive_space",
+    "delete_space",
+    "mark_space_essential",
+    "unmark_space_essential",
+    "hand_space",
+    "remove_image",
+];
 
 pub struct LogPage {
     pub total: i64,
@@ -94,6 +129,8 @@ struct Row {
     from_space_slug: Option<String>,
     to_space: Option<String>,
     to_space_slug: Option<String>,
+    /// For an entry about a space, whether the viewer can read it.
+    space_readable: Option<bool>,
 }
 
 async fn rows(
@@ -110,13 +147,15 @@ async fn rows(
         Scope::Member(id) => Some(id),
         _ => None,
     };
+    let content_actions: Vec<String> = CONTENT_ACTIONS.iter().map(|a| (*a).to_owned()).collect();
     let total = sqlx::query_scalar!(
         r#"SELECT count(*) AS "n!" FROM mod_actions a
-           WHERE ($1 OR a.public) AND ($2::bigint IS NULL OR a.user_id = $2)
+           WHERE ($1 OR a.public OR a.action = ANY($4)) AND ($2::bigint IS NULL OR a.user_id = $2)
              AND ($3::bigint IS NULL OR a.id = $3)"#,
         everything,
         member,
         only,
+        &content_actions,
     )
     .fetch_one(db.pool())
     .await?;
@@ -138,7 +177,8 @@ async fn rows(
                CASE WHEN space_readable(c1.visibility, c1.id, $4, $5) THEN c1.name END AS "from_space?",
                CASE WHEN space_readable(c1.visibility, c1.id, $4, $5) THEN c1.slug END AS "from_space_slug?",
                CASE WHEN space_readable(c2.visibility, c2.id, $4, $5) THEN c2.name END AS "to_space?",
-               CASE WHEN space_readable(c2.visibility, c2.id, $4, $5) THEN c2.slug END AS "to_space_slug?"
+               CASE WHEN space_readable(c2.visibility, c2.id, $4, $5) THEN c2.slug END AS "to_space_slug?",
+               space_readable(c3.visibility, c3.id, $4, $5) AS "space_readable?"
         FROM mod_actions a
         JOIN users actor ON actor.id = a.actor_id
         LEFT JOIN users u ON u.id = a.user_id
@@ -146,7 +186,8 @@ async fn rows(
         LEFT JOIN threads t2 ON t2.id = (a.details->>'to_thread_id')::bigint
         LEFT JOIN spaces c1 ON c1.id = (a.details->>'from_space_id')::bigint
         LEFT JOIN spaces c2 ON c2.id = (a.details->>'to_space_id')::bigint
-        WHERE ($1 OR a.public) AND ($2::bigint IS NULL OR a.user_id = $2)
+        LEFT JOIN spaces c3 ON a.target_kind = 'space' AND c3.id = a.target_id
+        WHERE ($1 OR a.public OR a.action = ANY($10)) AND ($2::bigint IS NULL OR a.user_id = $2)
           AND ($3::bigint IS NULL OR a.id = $3)
         ORDER BY a.created_at DESC, a.id DESC
         LIMIT $7 OFFSET $8
@@ -160,6 +201,7 @@ async fn rows(
         limit,
         offset,
         &filter.group_ids,
+        &content_actions,
     )
     .fetch_all(db.pool())
     .await?;
@@ -188,7 +230,11 @@ pub async fn log(
             for thread in [row.thread_id, row.to_thread_id].into_iter().flatten() {
                 deps.add(Tag::Thread(thread));
             }
-            describe(row, viewer.is_staff())
+            describe(
+                row,
+                viewer.is_staff(),
+                !(viewer.is_staff() && scope != Scope::Public),
+            )
         })
         .collect();
     Ok(LogPage { total, entries })
@@ -200,7 +246,7 @@ pub async fn entry(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result<Option<Log
     Ok(rows
         .into_iter()
         .next()
-        .map(|row| describe(row, viewer.is_staff())))
+        .map(|row| describe(row, viewer.is_staff(), !viewer.is_staff())))
 }
 
 /// The entries about one member that they may see, for contesting.
@@ -240,7 +286,8 @@ pub async fn entry_for_member(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result
                NULL::bigint AS "to_thread_id?", NULL::text AS "to_title?", NULL::text AS "to_slug?",
                NULL::boolean AS "to_live?", NULL::boolean AS "to_readable?",
                NULL::text AS "from_space?", NULL::text AS "from_space_slug?",
-               NULL::text AS "to_space?", NULL::text AS "to_space_slug?"
+               NULL::text AS "to_space?", NULL::text AS "to_space_slug?",
+               NULL::boolean AS "space_readable?"
         FROM mod_actions a
         JOIN users actor ON actor.id = a.actor_id
         LEFT JOIN users u ON u.id = a.user_id
@@ -255,10 +302,11 @@ pub async fn entry_for_member(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Result
     )
     .fetch_all(db.pool())
     .await?;
+    // Their own entry is theirs to read in full.
     Ok(rows
         .into_iter()
         .next()
-        .map(|row| describe(row, viewer.is_staff())))
+        .map(|row| describe(row, viewer.is_staff(), false)))
 }
 
 fn text(s: impl Into<String>) -> Bit {
@@ -306,7 +354,12 @@ fn space_bit(name: Option<String>, slug: Option<String>) -> Bit {
     }
 }
 
-fn describe(row: Row, staff: bool) -> LogEntry {
+/// An entry as the viewer is shown it. With `bare`, an entry that isn't
+/// public names the account and the action and carries no content
+/// (DESIGN.md §8): its reason is left out, and so is a space it is about
+/// that the viewer can't read.
+fn describe(row: Row, staff: bool, bare: bool) -> LogEntry {
+    let bare = bare && !row.public;
     let user = match (row.user_id, row.username, row.user_name) {
         (Some(id), Some(username), Some(display_name)) => Some(UserRef {
             id,
@@ -481,6 +534,7 @@ fn describe(row: Row, staff: bool) -> LogEntry {
             };
             let name = row.details["name"].as_str().unwrap_or("a space").to_owned();
             let space = match row.details["slug"].as_str() {
+                _ if bare && row.space_readable != Some(true) => text("a space you can’t see"),
                 Some(slug) if row.action != "delete_space" => Bit::Link {
                     href: format!("/c/{slug}"),
                     text: name,
@@ -523,7 +577,7 @@ fn describe(row: Row, staff: bool) -> LogEntry {
         action: row.action,
         user,
         bits,
-        reason: row.reason,
+        reason: if bare { String::new() } else { row.reason },
         public: row.public,
         created_at: row.created_at,
     }

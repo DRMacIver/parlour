@@ -37,6 +37,9 @@ struct GlassTemplate {
     hidden: Fields,
     /// For a change: what saving it would do, and the button's words.
     change: Option<String>,
+    /// Whether the change makes the member of staff a reader of what it
+    /// opens, rather than leading to a grant to read it for a while.
+    by_change: bool,
     button: &'static str,
     reason: String,
     problems: Vec<String>,
@@ -95,6 +98,7 @@ async fn show(
             action: page.action,
             hidden: page.hidden,
             change: page.change,
+            by_change: page.by_change,
             button: page.button,
             reason: page.reason,
             problems: page.problems,
@@ -108,6 +112,7 @@ struct GlassPage {
     action: String,
     hidden: Fields,
     change: Option<String>,
+    by_change: bool,
     button: &'static str,
     reason: String,
     problems: Vec<String>,
@@ -157,6 +162,7 @@ pub async fn page(
                     action: "/mod/break-glass".to_owned(),
                     hidden: fields_of(&ask),
                     change: None,
+                    by_change: false,
                     button: "Break glass and read it",
                     reason: String::new(),
                     problems: Vec::new(),
@@ -196,6 +202,7 @@ pub async fn confirm(
                         action: "/mod/break-glass".to_owned(),
                         hidden: fields_of(&ask),
                         change: None,
+                        by_change: false,
                         button: "Break glass and read it",
                         reason,
                         problems,
@@ -234,6 +241,10 @@ pub struct Change<'a> {
     pub button: &'static str,
     /// Where cancelling goes.
     pub back: &'a str,
+    /// Whether the change itself lets them read it, for as long as it
+    /// stands; otherwise (a move that only takes a thread from some of its
+    /// readers) they read it under a grant for a while, page by page.
+    pub by_change: bool,
 }
 
 /// The reason a form carries for breaking glass, if it carries one and it
@@ -251,6 +262,7 @@ pub async fn ask_change(
         says,
         button,
         back,
+        by_change,
     } = change;
     let reason = fields
         .iter()
@@ -286,6 +298,7 @@ pub async fn ask_change(
                 action: action.to_owned(),
                 hidden,
                 change: Some(says),
+                by_change,
                 button,
                 reason: reason.unwrap_or_default(),
                 problems,

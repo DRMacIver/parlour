@@ -58,6 +58,16 @@ fn report_field(fields: &Fields) -> Option<i64> {
     parse_id(field(fields, "report"))
 }
 
+/// Where a moderation page is in the navigation: under Moderation for
+/// staff, and nowhere for those who moderate only the spaces they run.
+fn mod_nav(viewer: &Viewer) -> Nav {
+    if viewer.is_staff() {
+        Nav::Moderation
+    } else {
+        Nav::None
+    }
+}
+
 /// Shows a refusal from a one-click form: there is no form to show again,
 /// so problems are listed with a link back.
 pub(crate) async fn refused(
@@ -914,6 +924,9 @@ pub async fn reject(
 #[template(path = "mod_post.html")]
 struct ModPostTemplate {
     layout: Layout,
+    /// Whether the viewer is staff, or only runs the post's space, which
+    /// leaves out what is for staff alone (DESIGN.md §3.1).
+    staff: bool,
     post: PostTarget,
     deleted: bool,
     /// Earlier versions that can still be redacted.
@@ -931,7 +944,7 @@ pub async fn post_page(
     let Some(post_id) = parse_id(&id) else {
         return web::not_found(&state, &viewer).await;
     };
-    let post = match moderation::post_for_staff(&state, &viewer, post_id).await? {
+    let post = match moderation::post_for_moderating(&state, &viewer, post_id).await? {
         Ok(post) => post,
         Err(refusal) => return refused(&state, &viewer, refusal, &back).await,
     };
@@ -943,7 +956,8 @@ pub async fn post_page(
     render(
         StatusCode::OK,
         &ModPostTemplate {
-            layout: Layout::load(&state, &viewer, Nav::Moderation).await?,
+            layout: Layout::load(&state, &viewer, mod_nav(&viewer)).await?,
+            staff: viewer.is_staff(),
             deleted: post.body.is_none(),
             images: if post.body.is_some() {
                 crate::upload_records::in_post(state.db(), post_id).await?
@@ -1016,6 +1030,9 @@ pub async fn redact(
 #[template(path = "mod_thread.html")]
 struct ModThreadTemplate {
     layout: Layout,
+    /// Whether the viewer is staff, or only runs the thread's space, which
+    /// leaves out moving posts and the staff's pages (DESIGN.md §3.1).
+    staff: bool,
     thread: ThreadTarget,
     pinned: bool,
     spaces: Vec<SpaceTarget>,
@@ -1055,12 +1072,13 @@ pub async fn thread_page(
     uri: Uri,
 ) -> Result<Response, AppError> {
     let back = format!("/mod/t/{id}");
-    if let Err(refusal) = moderation::staff(&viewer) {
-        return refused(&state, &viewer, refusal, &back).await;
+    if viewer.user().is_none() {
+        return Ok(web::login_first(&back));
     }
     let Some(thread_id) = parse_id(&id) else {
         return web::not_found(&state, &viewer).await;
     };
+    let staff = viewer.is_staff();
     let notice = params_of(&uri)
         .iter()
         .any(|(k, _)| k == "done")
@@ -1069,6 +1087,11 @@ pub async fn thread_page(
         .await?
         .filter(|t| t.space().is_some())
     else {
+        // The rest is for staff: those who run a space moderate the threads
+        // in it they can read.
+        if !staff {
+            return web::not_found(&state, &viewer).await;
+        }
         // A deleted thread can be restored from here.
         if let Some(thread) =
             content::moderation::deleted_thread(state.db(), &viewer, thread_id).await?
@@ -1103,15 +1126,25 @@ pub async fn thread_page(
             None => web::not_found(&state, &viewer).await,
         };
     };
+    if let Err(refusal) = moderation::moderator(&viewer, thread.space().map(|c| &c.rules)) {
+        return refused(&state, &viewer, refusal, &back).await;
+    }
     let mut deps = Deps::new();
     let pinned = content::thread_page(state.db(), &viewer, thread_id, 1, &mut deps)
         .await?
         .is_some_and(|t| t.pinned);
+    // Those who run a space move threads only to spaces they run too.
+    let spaces = content::readable_spaces(state.db(), &viewer)
+        .await?
+        .into_iter()
+        .filter(|c| staff || c.rules.may_administer(&viewer))
+        .collect();
     render(
         StatusCode::OK,
         &ModThreadTemplate {
-            layout: Layout::load(&state, &viewer, Nav::Moderation).await?,
-            spaces: content::readable_spaces(state.db(), &viewer).await?,
+            layout: Layout::load(&state, &viewer, mod_nav(&viewer)).await?,
+            staff,
+            spaces,
             pinned,
             thread,
             notice,
@@ -1176,6 +1209,10 @@ pub async fn moderate_thread(
         .into_iter()
         .collect();
         let action_path = format!("/mod/t/{thread_id}");
+        let opening =
+            moderation::move_breaks_glass(&state, &viewer, thread_id, field(&fields, "space"))
+                .await?
+                != Some(moderation::MoveGlass::Narrows);
         match crate::glass_pages::ask_change(
             &state,
             &viewer,
@@ -1183,9 +1220,14 @@ pub async fn moderate_thread(
             crate::glass_pages::Change {
                 action: &action_path,
                 fields: &fields,
-                says: "You can’t read this thread, and moving it there would let you.".to_owned(),
+                says: if opening {
+                    "You can’t read this thread, and moving it there would let you.".to_owned()
+                } else {
+                    "You can’t read this thread, and moving it there would take it away from some of the people who read it now, which could be a first step to reading it yourself.".to_owned()
+                },
                 button: "Break glass and move it",
                 back: &action_path,
+                by_change: opening,
             },
         )
         .await?

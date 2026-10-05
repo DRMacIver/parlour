@@ -332,18 +332,20 @@ impl SpaceRules {
     }
 
     /// Whether the viewer may add posts to a thread here: the reply grant
-    /// lets them, and it isn't locked (staff can still post in locked
-    /// threads).
+    /// lets them, and it isn't locked (those who moderate here, staff and
+    /// the space's administrators, can still post in locked threads).
     pub fn may_reply(&self, viewer: &Viewer, locked: bool) -> bool {
         self.writer(viewer)
-            .is_some_and(|user| self.reply.allows(user) && (!locked || user.is_staff()))
+            .is_some_and(|user| self.reply.allows(user) && (!locked || self.may_administer(viewer)))
     }
 
     /// Whether the viewer may change the space's settings and moderate
-    /// within it. Staff administer every space, whether or not they can
-    /// read it (DESIGN.md §3.1: they act on what they can't read without
-    /// being shown it); the administer grant names the rest, who must be
-    /// able to read it. Archiving doesn't close this.
+    /// within it: pin, lock, rename and delete its threads, hide and delete
+    /// posts in it, and move threads out of it (DESIGN.md §3.1, §3.2).
+    /// Staff administer every space, whether or not they can read it
+    /// (DESIGN.md §3.1: they act on what they can't read without being
+    /// shown it); the administer grant names the rest, who must be able to
+    /// read it. Archiving doesn't close this.
     pub fn may_administer(&self, viewer: &Viewer) -> bool {
         viewer.user().is_some_and(|user| {
             user.may_act()
@@ -355,8 +357,8 @@ impl SpaceRules {
     /// Whether the viewer runs the space as anyone else the administer
     /// grant names would: it names them (by more than their role, since a
     /// grant to "staff" is the role again), and they can read the space.
-    /// Staff who don't may still administer it, but not open what they
-    /// can't read by changing who may (DESIGN.md §3.1, §8).
+    /// Staff who don't still administer it, and every such action of
+    /// theirs is recorded in the moderation log (DESIGN.md §3.1, §8).
     pub fn runs_in_own_right(&self, viewer: &Viewer) -> bool {
         viewer.user().is_some_and(|user| {
             user.may_act()
@@ -364,14 +366,6 @@ impl SpaceRules {
                 && self.administer.allows(user)
                 && user_can_read(user, &self.read.audience())
         })
-    }
-
-    /// Whether the viewer administers the space in their own right, and
-    /// not only as staff. Staff acting on other people's spaces is logged.
-    pub fn administers_by_grant(&self, viewer: &Viewer) -> bool {
-        viewer
-            .user()
-            .is_some_and(|user| user.may_act() && self.administer.allows(user))
     }
 }
 
@@ -926,7 +920,9 @@ mod tests {
             rules.may_reply(&viewer, locked),
             may_write
                 && model_allows(&rules.reply, &person)
-                && (!locked || (role.is_staff() && restriction != 2)),
+                && (!locked
+                    || role.is_staff()
+                    || (reads && model_allows(&rules.administer, &person))),
             "reply: {role:?} {member_groups:?} {restriction} {locked} {rules:?}"
         );
         assert_eq!(

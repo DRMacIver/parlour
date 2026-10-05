@@ -346,6 +346,7 @@ async fn a_reported_conversation_stays_closed_to_staff(pool: PgPool) {
             scope: parlour::staff_access::Scope::Thread(reported),
             report_id: None,
             reason: "The report",
+            by_change: false,
         },
     )
     .await
@@ -1832,7 +1833,7 @@ async fn staff_keep_notes_and_see_shared_addresses(pool: PgPool) {
 // The public log
 
 #[sqlx::test]
-async fn the_public_log_shows_only_public_content(pool: PgPool) {
+async fn the_public_log_shows_private_content_only_by_who_and_what(pool: PgPool) {
     let s = setup(pool).await;
     let public = s.f.thread(s.games, s.jonah, "Open thread", "x").await;
     let private =
@@ -1854,16 +1855,34 @@ async fn the_public_log_shows_only_public_content(pool: PgPool) {
         )
         .await;
     }
+    // DESIGN.md §8: the entry about public content is there in full; the
+    // one about members-only content names the account and the action,
+    // and nothing of the content or why.
     let log = s.f.page("/moderation").await;
     assert!(log.contains("Open thread"), "{log}");
     assert!(log.contains(&format!("reason for {}", public.thread_id)));
     assert!(!log.contains("Lounge secret title"), "{log}");
     assert!(!log.contains(&format!("reason for {}", private.thread_id)));
-    // Members see the same public log; staff see both in theirs.
+    assert_eq!(log.matches("mo</strong> hid").count(), 2, "{log}");
+    assert!(log.contains("a thread you can’t see"), "{log}");
+    // Members see the thread they can read named, but not why.
     let log = s.f.page_as("/moderation", &s.ruth_cookie).await;
-    assert!(!log.contains("Lounge secret title"));
+    assert!(log.contains("Lounge secret title"), "{log}");
+    assert!(!log.contains(&format!("reason for {}", private.thread_id)));
+    // Staff see both, with why, in theirs.
     let staff = s.f.page_as("/mod/log", &s.mo_cookie).await;
     assert!(staff.contains("Lounge secret title"), "{staff}");
+    assert!(staff.contains(&format!("reason for {}", private.thread_id)));
+    // Staff business stays out of the public log.
+    ok(
+        &s.f,
+        "/mod/users/jonah/notes",
+        &[("body", "Watch this one")],
+        &s.mo_cookie,
+    )
+    .await;
+    let log = s.f.page("/moderation").await;
+    assert!(!log.contains("staff note"), "{log}");
     // Footer links to it from every page.
     assert!(s.f.page("/").await.contains("href=\"/moderation\""));
 }
@@ -2529,6 +2548,7 @@ async fn staff_dont_react_in_conversations_they_read_under_a_grant(pool: PgPool)
             scope: parlour::staff_access::Scope::Thread(conversation.parse().unwrap()),
             report_id: None,
             reason: "The report",
+            by_change: false,
         },
     )
     .await

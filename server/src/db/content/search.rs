@@ -6,8 +6,9 @@
 //! found is decided in the same query, by the shared visibility condition:
 //! `thread_readable` for space threads and, for conversations,
 //! `dm_searchable`, which only their current participants pass. Deleted
-//! posts and threads are never found, and hidden posts only by staff, as
-//! with reading them where they are. Spaces the viewer has muted are left
+//! posts and threads are never found, and hidden posts only by those who
+//! moderate where they are (staff, and the space's administrators,
+//! `space_run_by`), as with reading them where they are. Spaces the viewer has muted are left
 //! out (DESIGN.md §3.5), unless the search is within one space.
 
 use chrono::{DateTime, Utc};
@@ -57,7 +58,8 @@ pub struct SearchHit {
     pub place: HitPlace,
     pub author: UserRef,
     pub created_at: DateTime<Utc>,
-    /// Whether a moderator hid it (only staff find hidden posts).
+    /// Whether a moderator hid it (only those who moderate where it is
+    /// find hidden posts).
     pub hidden: bool,
     /// Part of the post's text with the words found marked: HTML, escaped
     /// here, with `<mark>` around each match.
@@ -119,7 +121,8 @@ pub async fn search(
             LEFT JOIN spaces c ON c.id = t.space_id
             JOIN users a ON a.id = p.author_id
             CROSS JOIN q
-            WHERE p.deleted_at IS NULL AND (p.hidden_at IS NULL OR $5)
+            WHERE p.deleted_at IS NULL
+              AND (p.hidden_at IS NULL OR $5 OR space_run_by(t.space_id, $4, $12))
               AND t.deleted_at IS NULL
               AND (thread_readable(t, $2, $3, $4, $12)
                    OR dm_searchable(t.id, t.visibility, $4))

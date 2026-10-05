@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"n!\" FROM mod_actions a\n           WHERE ($1 OR a.public OR a.action = ANY($4)) AND ($2::bigint IS NULL OR a.user_id = $2)\n             AND ($3::bigint IS NULL OR a.id = $3)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Int8",
+        "Int8",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "df3253af2a1476700e97246d92813b67d9b749c1d8d367c0a991082602f88676"
+}

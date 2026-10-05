@@ -30,6 +30,10 @@ pub struct NewAccess<'a> {
     /// The report that led to it, if one did.
     pub report_id: Option<i64>,
     pub reason: &'a str,
+    /// Whether a change of who may read what it opens is what opens it, so
+    /// that its maker reads it as one of its readers for as long as the
+    /// change stands, rather than page by page (migration 0036).
+    pub by_change: bool,
 }
 
 /// Opens a grant for [`HOURS`] hours from now, returning its id.
@@ -40,8 +44,9 @@ pub async fn open<'c>(db: impl Handle<'c>, access: &NewAccess<'_>) -> sqlx::Resu
         Scope::Space(id) => ("space", None, Some(id)),
     };
     sqlx::query_scalar!(
-        r#"INSERT INTO staff_access (actor_id, scope, thread_id, space_id, report_id, reason, expires_at)
-           VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(hours => $7))
+        r#"INSERT INTO staff_access (actor_id, scope, thread_id, space_id, report_id, reason, expires_at,
+                                     by_change)
+           VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(hours => $7), $8)
            RETURNING id"#,
         access.actor_id,
         scope,
@@ -50,6 +55,7 @@ pub async fn open<'c>(db: impl Handle<'c>, access: &NewAccess<'_>) -> sqlx::Resu
         access.report_id,
         access.reason,
         HOURS as i32,
+        access.by_change,
     )
     .fetch_one(&mut *conn)
     .await
@@ -109,9 +115,12 @@ pub async fn views<'c>(db: impl Handle<'c>, access_id: i64) -> sqlx::Result<Vec<
 /// The members who can read what a grant on `scope` would open, now, as
 /// the access layer decides for each of them (`Viewer::filter`: members
 /// read public and members-only spaces, and what a grant or restriction
-/// names them in; suspended members read only what visitors read), apart
-/// from `except`, the member of staff opening it. They are the people told
-/// about it (DESIGN.md §8).
+/// names them in), apart from `except`, the member of staff opening it.
+/// They are the people told about it (DESIGN.md §8). A suspended member,
+/// who reads only what visitors read while the suspension lasts, is
+/// counted by the memberships they will read with again: it is their
+/// conversation or thread that was read, and they are often the one a
+/// report was about (`docs/v02-decisions.md` #147).
 pub async fn readers<'c>(db: impl Handle<'c>, scope: Scope, except: i64) -> sqlx::Result<Vec<i64>> {
     let mut conn = db.open(KEY).acquire().await?;
     let (thread_id, space_id) = match scope {
@@ -120,14 +129,9 @@ pub async fn readers<'c>(db: impl Handle<'c>, scope: Scope, except: i64) -> sqlx
     };
     sqlx::query_scalar!(
         r#"WITH viewers AS (
-               SELECT m.id,
-                      CASE WHEN s.suspended THEN ARRAY['public'] ELSE ARRAY['public', 'members'] END
-                          AS vis,
-                      CASE WHEN s.suspended THEN '{}' ELSE m.restricted_space_ids END AS restricted,
-                      CASE WHEN s.suspended THEN NULL ELSE m.id END AS reader,
-                      CASE WHEN s.suspended THEN '{}' ELSE m.group_ids END AS groups
-               FROM member_contexts m,
-                    LATERAL (SELECT coalesce(m.suspended_until > now(), false) AS suspended) s
+               SELECT m.id, ARRAY['public', 'members'] AS vis, m.restricted_space_ids AS restricted,
+                      m.id AS reader, m.group_ids AS groups
+               FROM member_contexts m
                WHERE m.id <> $3
            )
            SELECT v.id AS "id!" FROM viewers v

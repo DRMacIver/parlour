@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH viewers AS (\n               SELECT m.id, ARRAY['public', 'members'] AS vis, m.restricted_space_ids AS restricted,\n                      m.id AS reader, m.group_ids AS groups\n               FROM member_contexts m\n               WHERE m.id <> $3\n           )\n           SELECT v.id AS \"id!\" FROM viewers v\n           LEFT JOIN threads t ON t.id = $1\n           LEFT JOIN spaces c ON c.id = $2\n           WHERE (t.id IS NOT NULL AND t.deleted_at IS NULL\n                  AND (thread_readable(t, v.vis, v.restricted, v.reader, v.groups)\n                       OR dm_readable(t.id, t.visibility, v.reader)))\n              OR (c.id IS NOT NULL AND space_readable(c.visibility, c.id, v.vis, v.restricted))\n           ORDER BY v.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "member_contexts",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "c81240830630a0f260f2689ddc1922714826cdddccdd756c2f7b6b1e5ce8b2f8"
+}

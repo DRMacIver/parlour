@@ -19,7 +19,7 @@
   {% if self.can_reply() %}<a class="button" href="#reply">Post reply</a>{% endif %}
   {% if self.logged_in() %}<a href="/t/{{ thread.thread.id }}/unread">First unread</a>{% endif %}
   {% if may_restrict %}<a href="/t/{{ thread.thread.id }}/audience">Who can take part</a>{% endif %}
-  {% if staff %}<a href="/mod/t/{{ thread.thread.id }}">Moderate thread</a>{% endif %}
+  {% if moderates %}<a href="/mod/t/{{ thread.thread.id }}">Moderate thread</a>{% endif %}
   {% if let Some(subscribed) = subscribed %}{% call m::subscription_toggle(thread.thread.id, subscribed) %}{% endcall %}{% endif %}
   <span class="spacer"></span>
   {% call m::pagination(pagination, "Pages") %}{% endcall %}
@@ -86,7 +86,7 @@
           {%- if self.can_reply() && !*hidden %}<a href="/t/{{ thread.thread.id }}/reply?to={{ post.id }}" data-reply-to="{{ post.id }}">reply</a> · <a href="/t/{{ thread.thread.id }}/reply?quote={{ post.id }}" data-quote="{{ post.id }}">quote</a> · {% endif -%}
           {%- if !*hidden %}<a href="/p/{{ post.id }}/fork" data-fork="{{ post.id }}">Quote in new thread</a>{% endif -%}
           {%- if self.is_mine(author.user.id) %}{% if can_edit && !*hidden %} · <a href="/p/{{ post.id }}/edit">edit</a>{% endif %} · <a href="/p/{{ post.id }}/delete">delete</a>{% else %} · <a href="/p/{{ post.id }}/report">report</a>{% endif -%}
-          {%- if staff %} · <a href="/mod/p/{{ post.id }}">moderate</a>{% endif -%}
+          {%- if moderates %} · <a href="/mod/p/{{ post.id }}">moderate</a>{% endif -%}
         </span>
         {% else %}
         <span class="post-actions"><a href="/contact?post={{ post.id }}" rel="nofollow">report</a></span>
@@ -134,7 +134,7 @@
     <a class="post-number" href="#p{{ post.id }}">№ {{ post.seq }}</a>
     <span>{% if *by_moderator %}Post deleted by a moderator{% else %}Post deleted by its author{% endif %}</span>
     {% call m::time(post.created_at) %}{% endcall %}
-    {% if staff %}<span class="post-actions"><a href="/mod/p/{{ post.id }}">moderate</a></span>{% endif %}
+    {% if moderates %}<span class="post-actions"><a href="/mod/p/{{ post.id }}">moderate</a></span>{% endif %}
   </article>
   {% when PostBody::Moved { to } %}
   {% if self.moved_back(to) %}

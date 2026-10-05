@@ -5,7 +5,7 @@
 {% block content %}
 <h1 class="page-title">Moderation log</h1>
 {% if staff %}{% if staff_view %}{% call md::mod_nav("log") %}{% endcall %}{% else %}{% call md::mod_nav("public") %}{% endcall %}{% endif %}{% endif %}
-<p class="lede">{% if staff_view %}Everything the moderators have done. Entries marked “Staff only” are about members-only, group or private content, or are staff business, and don’t appear in the public log.{% else %}What the moderators have done about public content and members, and why. Actions in members-only and private areas aren’t listed here.{% endif %}</p>
+<p class="lede">{% if staff_view %}Everything the moderators, and those who run each space, have done. Entries marked “Staff only” are about members-only, group or private content, which the public log shows without the reason or anything the reader can’t see, or are staff business, which it leaves out.{% else %}What the moderators, and those who run each space, have done, and why. For something that isn’t public, the log says who did what, but not why, nor anything you can’t read yourself.{% endif %}</p>
 <section class="panel" aria-labelledby="log-heading">
   <h2 class="panel-bar" id="log-heading">{% if staff_view %}All actions{% else %}Public actions{% endif %}</h2>
   {% if entries.is_empty() %}

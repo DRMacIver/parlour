@@ -6,7 +6,7 @@
 <div class="narrow">
 {% call m::post_crumbs(thread) %}{% endcall %}
 <h1 class="page-title">Moderate the thread</h1>
-{% call md::mod_nav("") %}{% endcall %}
+{% if staff %}{% call md::mod_nav("") %}{% endcall %}{% endif %}
 {% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
 <p class="lede"><a href="{{ thread.href() }}">{{ thread.thread.title }}</a> · {{ crate::format::plural(thread.last_seq, "post", "posts") }}{% if thread.locked %} · <span class="flag">Locked</span>{% endif %}{% if pinned %} · <span class="flag">Pinned</span>{% endif %}</p>
 
@@ -36,10 +36,11 @@
       <button class="button" type="submit" name="action" value="rename">Rename</button>
       <button class="button button-quiet" type="submit" name="action" value="move">Move to that space</button>
     </div>
-    <p class="form-note">Moving a thread somewhere more public shows it to everyone who can read there.</p>
+    <p class="form-note">Moving a thread somewhere more public shows it to everyone who can read there.{% if !staff %} You can move it only to another space you run.{% endif %}</p>
   </div>
 </form>
 
+{% if staff %}
 <form class="panel" method="post" action="/mod/t/{{ thread.thread.id }}/move-posts">
   <h2 class="panel-bar">Move posts</h2>
   <div class="form">
@@ -54,5 +55,8 @@
     <div class="form-actions"><button class="button" type="submit">Move posts</button></div>
   </div>
 </form>
+{% else %}
+<p class="form-note">You moderate this thread because you run {% if let Some(c) = thread.space() %}{{ c.space.name }}{% else %}its space{% endif %}. What you do here goes in the moderation log, and the thread’s author is told if you lock or delete it. Moving posts between threads, and acting on members, are for the site’s moderators.</p>
+{% endif %}
 </div>
 {% endblock %}

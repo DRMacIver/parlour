@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT a.id AS \"id!\", a.action AS \"action!\", a.reason AS \"reason!\", a.public AS \"public!\",\n               a.details AS \"details!\", a.created_at AS \"created_at!\", a.post_id AS \"post_id?\",\n               actor.id AS \"actor_id!\", actor.username AS \"actor_username!: String\",\n               actor.display_name AS \"actor_name!\",\n               u.id AS \"user_id?\", u.username AS \"username?: String\", u.display_name AS \"user_name?\",\n               t.id AS \"thread_id?\", t.title AS \"thread_title?\", t.slug AS \"thread_slug?\",\n               t.space_id IS NULL AS \"thread_private?\", t.deleted_at IS NULL AS \"thread_live?\",\n               (thread_readable(t, $4, $5, $6, $9)\n                OR dm_readable(t.id, t.visibility, $6)) AS \"thread_readable?\",\n               t2.id AS \"to_thread_id?\", t2.title AS \"to_title?\", t2.slug AS \"to_slug?\",\n               t2.deleted_at IS NULL AS \"to_live?\",\n               thread_readable(t2, $4, $5, $6, $9) AS \"to_readable?\",\n               CASE WHEN space_readable(c1.visibility, c1.id, $4, $5) THEN c1.name END AS \"from_space?\",\n               CASE WHEN space_readable(c1.visibility, c1.id, $4, $5) THEN c1.slug END AS \"from_space_slug?\",\n               CASE WHEN space_readable(c2.visibility, c2.id, $4, $5) THEN c2.name END AS \"to_space?\",\n               CASE WHEN space_readable(c2.visibility, c2.id, $4, $5) THEN c2.slug END AS \"to_space_slug?\"\n        FROM mod_actions a\n        JOIN users actor ON actor.id = a.actor_id\n        LEFT JOIN users u ON u.id = a.user_id\n        LEFT JOIN threads t ON t.id = a.thread_id\n        LEFT JOIN threads t2 ON t2.id = (a.details->>'to_thread_id')::bigint\n        LEFT JOIN spaces c1 ON c1.id = (a.details->>'from_space_id')::bigint\n        LEFT JOIN spaces c2 ON c2.id = (a.details->>'to_space_id')::bigint\n        WHERE ($1 OR a.public) AND ($2::bigint IS NULL OR a.user_id = $2)\n          AND ($3::bigint IS NULL OR a.id = $3)\n        ORDER BY a.created_at DESC, a.id DESC\n        LIMIT $7 OFFSET $8\n        ",
+  "query": "\n        SELECT a.id AS \"id!\", a.action AS \"action!\", a.reason AS \"reason!\", a.public AS \"public!\",\n               a.details AS \"details!\", a.created_at AS \"created_at!\", a.post_id AS \"post_id?\",\n               actor.id AS \"actor_id!\", actor.username AS \"actor_username!: String\",\n               actor.display_name AS \"actor_name!\",\n               u.id AS \"user_id?\", u.username AS \"username?: String\", u.display_name AS \"user_name?\",\n               t.id AS \"thread_id?\", t.title AS \"thread_title?\", t.slug AS \"thread_slug?\",\n               t.space_id IS NULL AS \"thread_private?\", t.deleted_at IS NULL AS \"thread_live?\",\n               (thread_readable(t, $2, $3, $4, $5)\n                OR dm_readable(t.id, t.visibility, $4)) AS \"thread_readable?\",\n               NULL::bigint AS \"to_thread_id?\", NULL::text AS \"to_title?\", NULL::text AS \"to_slug?\",\n               NULL::boolean AS \"to_live?\", NULL::boolean AS \"to_readable?\",\n               NULL::text AS \"from_space?\", NULL::text AS \"from_space_slug?\",\n               NULL::text AS \"to_space?\", NULL::text AS \"to_space_slug?\",\n               NULL::boolean AS \"space_readable?\"\n        FROM mod_actions a\n        JOIN users actor ON actor.id = a.actor_id\n        LEFT JOIN users u ON u.id = a.user_id\n        LEFT JOIN threads t ON t.id = a.thread_id\n        WHERE a.id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -211,34 +211,19 @@
         "ordinal": 19,
         "name": "to_thread_id?",
         "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "threads",
-            "name": "id"
-          }
-        }
+        "origin": "Expression"
       },
       {
         "ordinal": 20,
         "name": "to_title?",
         "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "threads",
-            "name": "title"
-          }
-        }
+        "origin": "Expression"
       },
       {
         "ordinal": 21,
         "name": "to_slug?",
         "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "threads",
-            "name": "slug"
-          }
-        }
+        "origin": "Expression"
       },
       {
         "ordinal": 22,
@@ -275,17 +260,19 @@
         "name": "to_space_slug?",
         "type_info": "Text",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 28,
+        "name": "space_readable?",
+        "type_info": "Bool",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
-        "Bool",
-        "Int8",
         "Int8",
         "TextArray",
         "Int8Array",
-        "Int8",
-        "Int8",
         "Int8",
         "Int8Array"
       ]
@@ -301,18 +288,19 @@
       false,
       false,
       false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
       null,
       null,
       null,
-      false,
-      false,
-      false,
+      null,
+      null,
+      null,
+      null,
       null,
       null,
       null,
@@ -321,5 +309,5 @@
       null
     ]
   },
-  "hash": "8dfb2f39979225fba2fff2b25b17fe70391c79f0269aacf90f64d95d7dd7e4da"
+  "hash": "5f7337a766c7bf7e54d614c6ea148156834274a13a5eeac5ec9d0e0f6b4600e7"
 }

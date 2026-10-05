@@ -534,6 +534,7 @@ async fn the_access_log_is_append_only(pool: PgPool) {
             scope: Scope::Thread(c.quiet),
             report_id: None,
             reason: "Checking a complaint",
+            by_change: false,
         },
     )
     .await
@@ -590,6 +591,7 @@ async fn the_access_log_is_append_only(pool: PgPool) {
             scope: Scope::Space(empty),
             report_id: None,
             reason: "Looking",
+            by_change: false,
         },
     )
     .await
@@ -615,6 +617,7 @@ async fn pages_shown_under_a_grant_are_recorded(pool: PgPool) {
                     scope,
                     report_id: None,
                     reason: "A complaint",
+                    by_change: false,
                 },
             )
             .await
@@ -782,6 +785,7 @@ async fn every_page_showing_granted_text_is_recorded(pool: PgPool) {
                 scope,
                 report_id: None,
                 reason: "A complaint",
+                by_change: false,
             },
         )
         .await
@@ -1014,20 +1018,200 @@ async fn staff_cant_let_themselves_read_by_changing_who_may(pool: PgPool) {
         StatusCode::NOT_FOUND,
     );
 
-    // Someone who runs a space in their own right, and reads it, may open
-    // a thread in it as any administrator may, staff or not.
+    // Even running a space in their own right, a member of staff who opens
+    // a thread in it they can't read is breaking glass (DESIGN.md §3.1:
+    // any staff action that would let them read what they can't), however
+    // they came to be named there.
     f.set_grant(c.general, "administer", Grant::listed([], [c.sam]))
         .await;
+    let response = f
+        .submit(
+            &audience,
+            &[("read", "space"), ("reply", "space")],
+            Some(cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::OK);
+    assert!(
+        response
+            .body
+            .contains("You can’t read this thread, and saving this would let you."),
+        "{}",
+        response.body
+    );
+    assert_status(&f.get_as(&quiet, Some(cookie)).await, StatusCode::NOT_FOUND);
+}
+
+/// A moderator who names themselves among those who run a space they read,
+/// from its settings, and then lifts the restriction of a thread in it
+/// that leaves them out, breaks glass doing it, and everyone who could
+/// read the thread is told (DESIGN.md §3.1, §8).
+#[sqlx::test]
+async fn naming_themselves_to_run_a_space_opens_none_of_its_threads(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    let cookie = &c.sam_cookie;
     ok(
         f,
-        &audience,
-        &[("read", "space"), ("reply", "space")],
+        "/c/general/settings",
+        &[
+            ("name", "General"),
+            ("slug", "general"),
+            ("description", ""),
+            ("read_level", "members"),
+            ("reply_level", "members"),
+            ("start_level", "members"),
+            ("administer_level", "listed"),
+            ("administer_users", "sam"),
+            ("section", ""),
+        ],
         cookie,
     )
     .await;
-    let page = f.page_as(&quiet, cookie).await;
-    assert!(page.contains("Quietwordbody"), "{page}");
-    assert_eq!(count(f, "SELECT count(*) FROM staff_access_views").await, 0);
+    let audience = format!("/t/{}/audience", c.quiet);
+    let response = f
+        .submit(
+            &audience,
+            &[("read", "space"), ("reply", "space")],
+            Some(cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::OK);
+    assert!(response.body.contains("Break glass"), "{}", response.body);
+    let quiet = thread_path(f, c.quiet).await;
+    assert_status(&f.get_as(&quiet, Some(cookie)).await, StatusCode::NOT_FOUND);
+    // Confirmed, it is a grant, and Ruth and Jonah are told.
+    ok(
+        f,
+        &audience,
+        &[
+            ("read", "space"),
+            ("reply", "space"),
+            ("glass_reason", "Settling a dispute"),
+        ],
+        cookie,
+    )
+    .await;
+    let jonah = f.id("SELECT id FROM users WHERE username = 'jonah'").await;
+    let mut expected = vec![c.ruth, jonah];
+    expected.sort();
+    assert_eq!(told(f).await, expected);
+    assert_eq!(
+        count(
+            f,
+            &format!(
+                "SELECT count(*) FROM staff_access WHERE thread_id = {} AND by_change",
+                c.quiet
+            )
+        )
+        .await,
+        1
+    );
+}
+
+/// Moving a thread a moderator can't read somewhere some of its readers
+/// couldn't follow is breaking glass on it, telling them, as a first step
+/// to reading it: the moderator could make that space theirs next
+/// (DESIGN.md §3.1, §8). So is moving it into their own feed, where the
+/// thread's restriction would name them. Moving it where everyone who
+/// reads it still can is not.
+#[sqlx::test]
+async fn moving_a_thread_from_its_readers_breaks_glass(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    let cookie = &c.sam_cookie;
+    // A space nobody reads yet.
+    let empty = f.unlisted_space("empty", "listed").await;
+    let mod_path = format!("/mod/t/{}", c.secret);
+    let fields = [("action", "move"), ("space", "empty"), ("reason", "Tidy")];
+    let page = f.submit(&mod_path, &fields, Some(cookie)).await;
+    assert_status(&page, StatusCode::OK);
+    assert!(
+        page.body
+            .contains("moving it there would take it away from some of the people who read it now"),
+        "{}",
+        page.body
+    );
+    assert!(page.body.contains("72 hours"), "{}", page.body);
+    assert!(page.body.contains("(1 person)"), "{}", page.body);
+    shows_none(&mod_path, &page.body, &CLOSED);
+    assert_eq!(
+        count(
+            f,
+            &format!("SELECT space_id FROM threads WHERE id = {}", c.secret)
+        )
+        .await,
+        c.circle
+    );
+    let mut confirmed = fields.to_vec();
+    confirmed.push(("glass_reason", "Quarantine"));
+    ok(f, &mod_path, &confirmed, cookie).await;
+    assert_eq!(
+        count(
+            f,
+            &format!("SELECT space_id FROM threads WHERE id = {}", c.secret)
+        )
+        .await,
+        empty
+    );
+    // Kit, who read it in the Circle, was told; the grant is one to read it
+    // for a while, the move not having made the moderator a reader.
+    assert_eq!(told(f).await, vec![c.kit]);
+    assert_eq!(
+        count(
+            f,
+            &format!(
+                "SELECT count(*) FROM staff_access WHERE thread_id = {} AND NOT by_change",
+                c.secret
+            )
+        )
+        .await,
+        1
+    );
+
+    // Into the moderator's own feed, a restricted thread would name them.
+    let quiet_move = format!("/mod/t/{}", c.quiet);
+    let page = f
+        .submit(
+            &quiet_move,
+            &[("action", "move"), ("space", "sam"), ("reason", "Mine")],
+            Some(cookie),
+        )
+        .await;
+    assert_status(&page, StatusCode::OK);
+    assert!(
+        page.body
+            .contains("You can’t read this thread, and moving it there would let you."),
+        "{}",
+        page.body
+    );
+    assert_eq!(
+        count(
+            f,
+            &format!("SELECT space_id FROM threads WHERE id = {}", c.quiet)
+        )
+        .await,
+        c.general
+    );
+
+    // Between two spaces the same people read, nothing is asked.
+    let other = f
+        .thread(c.circle, c.kit, "Othertitle", "Otherbody")
+        .await
+        .thread_id;
+    let before = count(f, "SELECT count(*) FROM staff_access").await;
+    ok(
+        f,
+        &format!("/mod/t/{other}"),
+        &[
+            ("action", "move"),
+            ("space", "circle-two"),
+            ("reason", "Tidy"),
+        ],
+        cookie,
+    )
+    .await;
+    assert_eq!(count(f, "SELECT count(*) FROM staff_access").await, before);
 }
 
 /// A post held for approval is shown to a moderator only where they could
@@ -1819,9 +2003,11 @@ async fn confirmed_changes_that_let_staff_read_break_glass(pool: PgPool) {
     assert_eq!(count(f, "SELECT count(*) FROM staff_access_views").await, 0);
 }
 
-/// Those told are those who can read it, as the access layer has it: a
-/// suspended member reads only what visitors read, so is told of nothing
-/// private, but is one of the readers of something public.
+/// Those told are those who can read it, as the access layer has it, with
+/// a suspended member counted by the memberships they will read with
+/// again: their conversation, or a thread they are in, was read whether or
+/// not they could read it that week, and they are often the person a
+/// report is about (DESIGN.md §8 step 4).
 #[sqlx::test]
 async fn the_readers_told_are_those_the_access_layer_lets_read(pool: PgPool) {
     let c = club(pool).await;
@@ -1835,9 +2021,12 @@ async fn the_readers_told_are_those_the_access_layer_lets_read(pool: PgPool) {
         let db = f.db.clone();
         async move { staff_access::readers(&db, scope, c.ada).await.unwrap() }
     };
-    // The thread only Ruth and Jonah read, and their conversation: Ruth.
-    assert_eq!(readers(Scope::Thread(c.quiet)).await, vec![c.ruth]);
-    assert_eq!(readers(Scope::Thread(c.dm)).await, vec![c.ruth]);
+    // The thread only Ruth and Jonah read, and their conversation: both,
+    // Jonah though suspended.
+    let mut both = vec![c.ruth, jonah];
+    both.sort();
+    assert_eq!(readers(Scope::Thread(c.quiet)).await, both);
+    assert_eq!(readers(Scope::Thread(c.dm)).await, both);
     // A public space: everyone but the one opening it, Jonah included.
     let open = f.space("open", "public", None, 8).await;
     let everyone: Vec<i64> = sqlx::query_scalar(
@@ -1849,10 +2038,28 @@ async fn the_readers_told_are_those_the_access_layer_lets_read(pool: PgPool) {
     .unwrap();
     assert!(everyone.contains(&jonah));
     assert_eq!(readers(Scope::Space(open)).await, everyone);
-    // A members-only one: not Jonah.
-    let mut members = everyone.clone();
-    members.retain(|&id| id != jonah);
-    assert_eq!(readers(Scope::Space(c.general)).await, members);
+    // A members-only one: Jonah too.
+    assert_eq!(readers(Scope::Space(c.general)).await, everyone);
+    // Breaking glass on the conversation tells him, and his log has it
+    // once the suspension is over.
+    let page = f
+        .submit(
+            "/mod/break-glass",
+            &[
+                ("thread", &c.dm.to_string()),
+                ("glass_reason", "Reading the reported message"),
+            ],
+            Some(&c.sam_cookie),
+        )
+        .await;
+    assert_status(&page, StatusCode::SEE_OTHER);
+    assert_eq!(told(f).await, both);
+    f.exec(&format!(
+        "UPDATE users SET suspended_until = NULL WHERE id = {jonah}"
+    ))
+    .await;
+    let log = f.page_as("/settings/access", &c.jonah_cookie).await;
+    assert!(log.contains("Reading the reported message"), "{log}");
 }
 
 /// A change that breaks glass tells those who could read it before
@@ -2256,5 +2463,181 @@ async fn the_page_for_a_change_says_what_it_does(pool: PgPool) {
     assert!(
         page.contains("Every page of it you open is recorded"),
         "{page}"
+    );
+}
+
+/// Both access logs list every grant, a page at a time, newest first
+/// (DESIGN.md §8: the log is visible to all admins and to each affected
+/// person, and being append-only it keeps everything).
+#[sqlx::test]
+async fn the_access_logs_are_paged(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    let mut tx = f.state.db().begin().await.unwrap();
+    for n in 1..=120 {
+        parlour::notify::open_staff_access(
+            &mut tx,
+            &NewAccess {
+                actor_id: c.sam,
+                scope: Scope::Thread(c.quiet),
+                report_id: None,
+                reason: &format!("Reason number {n:03}"),
+                by_change: false,
+            },
+            &[c.ruth],
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    for (path, cookie) in [
+        ("/admin/access", &c.ada_cookie),
+        ("/settings/access", &c.ruth_cookie),
+    ] {
+        let first = f.page_as(path, cookie).await;
+        assert!(first.contains("Reason number 120"), "{first}");
+        assert!(first.contains("Reason number 071"), "{first}");
+        assert!(!first.contains("Reason number 070"), "{first}");
+        assert!(
+            first.contains(&format!("href=\"{path}?page=3\"")),
+            "{first}"
+        );
+        let last = f.page_as(&format!("{path}?page=3"), cookie).await;
+        assert!(last.contains("Reason number 001"), "{last}");
+        assert!(last.contains("Reason number 020"), "{last}");
+        assert!(!last.contains("Reason number 021"), "{last}");
+        assert_status(
+            &f.get_as(&format!("{path}?page=4"), Some(cookie)).await,
+            StatusCode::NOT_FOUND,
+        );
+        let response = f.get_as(&format!("{path}?page=1"), Some(cookie)).await;
+        assert!(response.status.is_redirection(), "{}", response.body);
+        assert_eq!(response.location(), path);
+    }
+}
+
+/// A grant opened by a change of who may read is shown in both logs as
+/// lasting for as long as the change stands, without a closing time or a
+/// count of pages, which aren't recorded for it (DESIGN.md §8).
+#[sqlx::test]
+async fn a_grant_by_a_change_lasts_while_the_change_stands(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    ok(
+        f,
+        &format!("/t/{}/audience", c.quiet),
+        &[
+            ("read", "space"),
+            ("reply", "space"),
+            ("glass_reason", "Opening it up after a dispute"),
+        ],
+        &c.sam_cookie,
+    )
+    .await;
+    for (path, cookie) in [
+        ("/admin/access", &c.ada_cookie),
+        ("/settings/access", &c.ruth_cookie),
+    ] {
+        let page = f.page_as(path, cookie).await;
+        assert!(
+            page.contains("reads it as one of its readers for as long as the change stands"),
+            "{page}"
+        );
+        assert!(!page.contains("pages viewed"), "{page}");
+        assert!(!page.contains("open until"), "{page}");
+        assert!(!page.contains("closed"), "{page}");
+    }
+}
+
+/// A grant opens what a moderator needs to see of what it opens beyond
+/// its page (DESIGN.md §8): the images in it, each post's edit history, a
+/// post's permalink and its moderation page, each recorded against the
+/// address asked for. Without a grant, all of them stay closed.
+#[sqlx::test]
+async fn a_grant_opens_the_images_and_histories_in_what_it_opens(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    // An image shown only in the Circle, and an edit to its post.
+    let sha = "cd".repeat(32);
+    f.exec(&format!(
+        "INSERT INTO uploads (sha256, ext, mime, bytes, width, height)
+         VALUES ('{sha}', 'png', 'image/png', 1, 1, 1)"
+    ))
+    .await;
+    let image = format!("/uploads/{sha}.png");
+    let post = f
+        .post(c.secret, c.kit, &format!("Circlepicture ![]({image})"))
+        .await;
+    let kit_cookie = f.session(c.kit).await;
+    ok(
+        f,
+        &format!("/p/{post}/edit"),
+        &[("body", &format!("Circlepicture edited ![]({image})"))],
+        &kit_cookie,
+    )
+    .await;
+    f.exec(&format!(
+        "UPDATE post_revisions SET created_at = created_at - interval '1 hour' WHERE post_id = {post};
+         UPDATE posts SET created_at = created_at - interval '1 hour' WHERE id = {post}"
+    ))
+    .await;
+    let paths = [
+        format!("/p/{post}/revisions"),
+        format!("/p/{post}"),
+        format!("/mod/p/{post}"),
+    ];
+    assert_eq!(
+        image_status(f, &image, &c.sam_cookie).await,
+        StatusCode::NOT_FOUND
+    );
+    for path in &paths {
+        assert_status(
+            &f.get_as(path, Some(&c.sam_cookie)).await,
+            StatusCode::NOT_FOUND,
+        );
+    }
+    assert!(views(f).await.is_empty());
+    ok(
+        f,
+        "/mod/break-glass",
+        &[
+            ("thread", &c.secret.to_string()),
+            ("glass_reason", "A report about a picture"),
+        ],
+        &c.sam_cookie,
+    )
+    .await;
+    let access = count(f, "SELECT max(id) FROM staff_access").await;
+    assert_eq!(
+        image_status(f, &image, &c.sam_cookie).await,
+        StatusCode::NOT_MODIFIED
+    );
+    assert_eq!(views(f).await, vec![(access, image.clone())]);
+    let history = f.page_as(&paths[0], &c.sam_cookie).await;
+    assert!(history.contains("Circlepicture"), "{history}");
+    assert!(history.contains("because you broke glass"), "{history}");
+    let permalink = f.get_as(&paths[1], Some(&c.sam_cookie)).await;
+    assert!(permalink.status.is_redirection(), "{}", permalink.body);
+    assert!(
+        permalink
+            .location()
+            .starts_with(&format!("/t/{}/", c.secret))
+    );
+    let moderate = f.page_as(&paths[2], &c.sam_cookie).await;
+    assert!(moderate.contains("Circlepicture"), "{moderate}");
+    let recorded: Vec<String> = views(f).await.into_iter().map(|(_, path)| path).collect();
+    assert_eq!(
+        recorded,
+        vec![
+            image.clone(),
+            paths[0].clone(),
+            paths[1].clone(),
+            paths[2].clone()
+        ]
+    );
+    // Ruth, who isn't in the Circle, still can't fetch the image.
+    assert_eq!(
+        image_status(f, &image, &c.ruth_cookie).await,
+        StatusCode::NOT_FOUND
     );
 }

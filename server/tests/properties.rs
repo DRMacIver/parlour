@@ -133,6 +133,9 @@ struct SpaceModel {
     /// For a feed, its owner, who holds all of its permissions: a grant
     /// that names people names them too.
     owner: Option<i64>,
+    /// Whether its administer grant names the member viewer, who then runs
+    /// it, and moderates in it, while they can read it (DESIGN.md §3.1).
+    member_runs: bool,
 }
 
 struct ConversationModel {
@@ -208,6 +211,9 @@ struct PostModel {
     mentions: bool,
     deleted: bool,
     hidden: bool,
+    /// Whether whoever hid it last is staff, as `posts.hidden_by` says:
+    /// those who run a space don't show again what staff hid there.
+    hidden_by_staff: bool,
     /// Tokens of earlier versions kept in the post's history.
     history: Vec<String>,
     /// Whether the grace period for edits is over (or an edit was kept).
@@ -638,6 +644,7 @@ impl World {
             token,
             feed: false,
             owner: None,
+            member_runs: false,
         });
     }
 
@@ -687,6 +694,7 @@ impl World {
             mentions: false,
             deleted: false,
             hidden: false,
+            hidden_by_staff: false,
             history: Vec::new(),
             settled: false,
         });
@@ -732,6 +740,7 @@ impl World {
             token,
             feed: true,
             owner: Some(owner),
+            member_runs: false,
         });
     }
 
@@ -801,11 +810,12 @@ impl World {
             read: Grant::from_parts(space.read_level, &group_ids, &[]),
             reply: Grant::members(),
             start: Grant::members(),
-            // A feed's owner always runs it; the store names them.
-            administer: if space.feed {
-                Grant::listed([], [])
-            } else {
-                Grant::staff()
+            // A feed's owner always runs it; the store names them. The
+            // member viewer still runs it if they did.
+            administer: match (space.feed, space.member_runs) {
+                (_, true) => Grant::listed([], [self.member_id]),
+                (true, false) => Grant::listed([], []),
+                (false, false) => Grant::staff(),
             },
         }
         .clean()
@@ -854,6 +864,7 @@ impl World {
             mentions,
             deleted: false,
             hidden: false,
+            hidden_by_staff: false,
             history: Vec::new(),
             settled: false,
         });
@@ -1080,11 +1091,24 @@ impl World {
     }
 
     /// Whether a post's text is shown to the viewer on pages: as
-    /// [`World::post_readable`], but staff also see hidden posts (marked
-    /// as hidden), with their history.
+    /// [`World::post_readable`], but those who moderate where it is, staff
+    /// and the space's administrators, also see hidden posts (marked as
+    /// hidden), with their history.
     fn post_shown(&self, post: usize, who: Who) -> bool {
         let p = &self.posts[post];
-        !p.deleted && (!p.hidden || who == Who::Staff) && self.thread_readable(p.thread, who)
+        let space = self.threads[p.thread].space;
+        let moderates =
+            who == Who::Staff || (who == Who::Member && self.member_moderates_in(space));
+        !p.deleted && (!p.hidden || moderates) && self.thread_readable(p.thread, who)
+    }
+
+    /// Whether the member viewer moderates in a space: its administer grant
+    /// names them, they can read it, and they aren't suspended
+    /// (DESIGN.md §3.1).
+    fn member_moderates_in(&self, space: usize) -> bool {
+        self.spaces[space].member_runs
+            && !self.member_suspended
+            && self.space_readable(space, Who::Member)
     }
 
     /// DESIGN.md §3.3: the author of a post in a thread they can no longer
@@ -1826,7 +1850,34 @@ impl World {
                 continue;
             }
             if !self.thread_readable(p.thread, who) {
-                assert_eq!(permalink.status, StatusCode::NOT_FOUND);
+                // Under a grant the moderator viewer follows a post's
+                // address, and reads its history unless it was deleted,
+                // each a page recorded (DESIGN.md §8).
+                let granted = who == Who::Staff && self.granted_thread(p.thread);
+                assert_eq!(
+                    permalink.status,
+                    if granted {
+                        StatusCode::TEMPORARY_REDIRECT
+                    } else {
+                        StatusCode::NOT_FOUND
+                    },
+                    "{who:?} permalink of post {}",
+                    p.id
+                );
+                let history = pages.get(&format!("/p/{}/revisions", p.id));
+                assert_eq!(
+                    history.status,
+                    if granted && !p.deleted {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::NOT_FOUND
+                    },
+                    "{who:?} history of post {}",
+                    p.id
+                );
+                if granted && !p.deleted {
+                    assert!(history.body.contains(&p.body_token), "post {}", p.id);
+                }
                 continue;
             }
             let t = &self.threads[p.thread];
@@ -2669,7 +2720,9 @@ impl World {
         let active = tc.draw(gs::booleans());
         // Everyone who can read it is told, by the access layer's own
         // judgement, which must be the reference function's: every member
-        // but the moderator who reads it now (DESIGN.md §8).
+        // but the moderator who reads it now (DESIGN.md §8), a suspended
+        // member by the memberships they will read with again
+        // (docs/v02-decisions.md #147).
         let readers = self
             .block(parlour::staff_access::readers(
                 self.db(),
@@ -2678,12 +2731,14 @@ impl World {
             ))
             .unwrap();
         let expected: Vec<i64> = {
+            let suspended = std::mem::replace(&mut self.member_suspended, false);
             let mut users: Vec<i64> = self
                 .users
                 .iter()
                 .copied()
                 .filter(|&user| self.opened_readable_by(opened, user))
                 .collect();
+            self.member_suspended = suspended;
             users.sort();
             users
         };
@@ -2697,6 +2752,7 @@ impl World {
                     scope,
                     report_id: None,
                     reason: "Checking",
+                    by_change: false,
                 },
                 &readers,
             )
@@ -2818,6 +2874,73 @@ impl World {
         assert_eq!(outcome.is_ok(), !p.deleted && readable, "{action:?}");
         if outcome.is_ok() {
             self.posts[post].hidden = action == PostAction::Hide;
+            self.posts[post].hidden_by_staff = action == PostAction::Hide;
+        }
+    }
+
+    /// The member viewer is named among those who run a space, or taken
+    /// off (DESIGN.md §3.1). A feed's grant always names its owner too.
+    #[rule]
+    fn member_runs_a_space(&mut self, tc: TestCase) {
+        let space = tc.draw(gs::integers::<usize>().max_value(self.spaces.len() - 1));
+        let runs = !self.spaces[space].member_runs;
+        let owner = self.spaces[space].owner;
+        let grant = if runs {
+            Grant::listed([], owner.into_iter().chain([self.member_id]))
+        } else if let Some(owner) = owner {
+            Grant::listed([], [owner])
+        } else {
+            Grant::staff()
+        };
+        self.block(store::set_grant(
+            self.db(),
+            self.spaces[space].id,
+            "administer",
+            &grant,
+        ))
+        .unwrap();
+        self.spaces[space].member_runs = runs;
+        self.changed(Change::SpaceChanged {
+            space_id: self.spaces[space].id,
+        });
+    }
+
+    /// The member viewer hides a post, or shows it again, as one of those
+    /// who run its space may (DESIGN.md §3.1, §3.2): only where they run
+    /// the space and read the thread, and never showing again what staff
+    /// hid.
+    #[rule]
+    fn member_moderates(&mut self, tc: TestCase) {
+        use parlour::moderation::PostAction;
+        tc.assume(!self.posts.is_empty());
+        let post = tc.draw(gs::integers::<usize>().max_value(self.posts.len() - 1));
+        let p = &self.posts[post];
+        tc.assume(!self.threads[p.thread].deleted);
+        let action = if p.hidden {
+            PostAction::Unhide
+        } else {
+            PostAction::Hide
+        };
+        let member = self.viewer_of(self.member_id);
+        let outcome = self
+            .block(parlour::moderation::moderate_post(
+                &self.cached.state,
+                &member,
+                p.id,
+                action,
+                "Testing",
+                None,
+            ))
+            .unwrap();
+        let space = self.threads[p.thread].space;
+        let allowed = !p.deleted
+            && self.thread_readable(p.thread, Who::Member)
+            && self.member_moderates_in(space)
+            && (action == PostAction::Hide || !p.hidden_by_staff);
+        assert_eq!(outcome.is_ok(), allowed, "{action:?}: {outcome:?}");
+        if outcome.is_ok() {
+            self.posts[post].hidden = action == PostAction::Hide;
+            self.posts[post].hidden_by_staff = false;
         }
     }
 
@@ -3014,6 +3137,7 @@ impl World {
                     mentions: false,
                     deleted: false,
                     hidden: false,
+                    hidden_by_staff: false,
                     history: Vec::new(),
                     settled: false,
                 });
@@ -3629,10 +3753,14 @@ impl Access {
     }
 
     /// Whether the viewer is shown the post's text where it is: live
-    /// posts, and for staff hidden ones too.
+    /// posts, and for those who moderate there hidden ones too: staff, and
+    /// those who run its space, here a feed's owner (DESIGN.md §3.1, §3.2).
     fn shown_post(&self, who: Option<usize>, post: usize) -> bool {
         let p = &self.posts[post];
-        !p.deleted && (!p.hidden || self.sees_hidden(who))
+        let space = self.threads[p.thread].space;
+        let runs =
+            who.is_some_and(|u| !self.users[u].suspended && self.spaces[space].owner == Some(u));
+        !p.deleted && (!p.hidden || self.sees_hidden(who) || runs)
     }
 
     /// DESIGN.md §3.4: a thread's readers are its space's readers, and,

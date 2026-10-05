@@ -263,7 +263,7 @@ pub async fn reply_refusal(
 }
 
 /// Whether the viewer may edit a post: it is theirs and live, they aren't
-/// silenced, and its thread isn't locked unless they are staff. Staff may
+/// silenced, and its thread isn't locked unless they moderate there. Staff may
 /// also edit other people's posts that aren't deleted, giving a reason
 /// (see [`edit`]).
 pub fn may_edit(viewer: &Viewer, post: &PostTarget) -> bool {
@@ -276,7 +276,19 @@ pub fn may_edit(viewer: &Viewer, post: &PostTarget) -> bool {
     if viewer.is_staff() {
         return post.body.is_some();
     }
-    user.id == post.author.id && post.is_live() && !post.thread.locked
+    user.id == post.author.id
+        && post.is_live()
+        && (!post.thread.locked || moderates(viewer, &post.thread))
+}
+
+/// Whether the viewer moderates where a thread is: staff, and those who
+/// run its space (DESIGN.md §3.1), who still write in it once it is
+/// locked.
+pub fn moderates(viewer: &Viewer, thread: &ThreadTarget) -> bool {
+    viewer.is_staff()
+        || thread
+            .space()
+            .is_some_and(|space| space.rules.may_administer(viewer))
 }
 
 /// Whether a staff member is editing someone else's post.
@@ -560,7 +572,7 @@ pub async fn react(
     if let Some(why) = restriction(user) {
         return Ok(Err(Refused::NotAllowed(why)));
     }
-    if post.thread.locked && !viewer.is_staff() {
+    if post.thread.locked && !moderates(viewer, &post.thread) {
         return Ok(Err(Refused::NotAllowed("This thread is locked.")));
     }
     let enabled = content::reaction_types(state.db(), true).await?;
@@ -650,13 +662,12 @@ pub async fn restrict_thread_breaking_glass(
     let after = restriction.audience(&target.space.rules);
     // Staff change who may read threads they can't, as they run every
     // space, but letting themselves read one is reading it by another way:
-    // breaking glass, which they confirm, saying why (DESIGN.md §3.1, §8).
-    // Those who run the space in their own right open its threads as any
-    // administrator may.
-    let breaks_glass = viewer.is_staff()
-        && !target.readable
-        && !target.space.rules.runs_in_own_right(viewer)
-        && user_can_read(user, &after);
+    // breaking glass, which they confirm, saying why (DESIGN.md §3.1, §8:
+    // any staff action that would let them read what they can't). That
+    // holds where the administer grant names them too: staff can name
+    // themselves there by their role, so being named is no sign the space
+    // is theirs to open.
+    let breaks_glass = viewer.is_staff() && !target.readable && user_can_read(user, &after);
     if breaks_glass && let Some(problem) = glass.and_then(crate::glass::reason_problem) {
         problems.push(problem);
     }
@@ -697,12 +708,12 @@ pub async fn restrict_thread_breaking_glass(
     }
     let recorded = match glass {
         Some((reason, readers)) => {
-            Some(crate::glass::record(&mut tx, user, &readers, reason, None).await?)
+            Some(crate::glass::record(&mut tx, user, &readers, reason, None, true).await?)
         }
         None => None,
     };
     tx.commit().await?;
-    if !author && viewer.is_staff() && !target.space.rules.administers_by_grant(viewer) {
+    if !author && viewer.is_staff() && !target.space.rules.runs_in_own_right(viewer) {
         mod_records::record(
             state.db(),
             &NewAction {
@@ -755,7 +766,11 @@ pub fn may_restrict(viewer: &Viewer, target: &content::RestrictionTarget) -> boo
 /// who could otherwise shut themselves out of their own thread, and in a
 /// feed its owner, who holds every permission on it (DESIGN.md §2, §3.2;
 /// the database names them too, however a thread comes there).
-fn named_in(restriction: ThreadRestriction, author: i64, space: &SpaceTarget) -> ThreadRestriction {
+pub(crate) fn named_in(
+    restriction: ThreadRestriction,
+    author: i64,
+    space: &SpaceTarget,
+) -> ThreadRestriction {
     let restriction = restriction.naming(author);
     match &space.owner {
         Some(owner) => restriction.naming(owner.user.id),
