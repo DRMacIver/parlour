@@ -15,12 +15,15 @@
 //! [`staff_access::HOURS`] hours, through [`notify::open_staff_access`],
 //! which tells everyone who could read it at that moment, at once. A
 //! change of who may read something tells those who could read it before
-//! the change: theirs is the privacy it touched.
+//! the change: theirs is the privacy it touched, and they are told even if
+//! the change shuts them out. The change, its grants and their notices are
+//! written in one transaction ([`record`]).
 
 use chrono::{DateTime, Duration, Utc};
 
 use crate::AppState;
 use crate::content::{self, access::Closed};
+use crate::db::Tx;
 use crate::error::AppError;
 use crate::moderation::{MAX_REASON_CHARS, clean_line, staff};
 use crate::notify;
@@ -149,7 +152,9 @@ pub async fn proposal(
 }
 
 /// Breaks glass on what `ask` names, for `reason`: opens a grant and tells
-/// everyone who can read it. Returns where reading it starts.
+/// everyone who can read it. Returns where reading it starts. Asking
+/// again while a grant already covers it (the form sent twice, or again
+/// from the browser's history) opens nothing more and tells nobody again.
 pub async fn break_glass(
     state: &AppState,
     viewer: &Viewer,
@@ -170,11 +175,21 @@ pub async fn break_glass(
     let Some(closed) = content::access::closed(db, viewer, scope).await? else {
         return Ok(Err(Refused::NotFound));
     };
+    if covered(user, &closed) {
+        return Ok(Ok(closed.href));
+    }
     if let Some(problem) = reason_problem(reason) {
         return Ok(Err(Refused::Invalid(vec![problem])));
     }
     let readers = readers(state, user, std::slice::from_ref(&closed)).await?;
-    record(state, user, &readers, reason, report_id).await?;
+    let mut tx = db.begin().await?;
+    // One sent at the same moment may have opened it since.
+    if staff_access::covered(&mut tx, user.id, closed.scope).await? {
+        return Ok(Ok(closed.href));
+    }
+    let recorded = record(&mut tx, user, &readers, reason, report_id).await?;
+    tx.commit().await?;
+    recorded.announce(state).await?;
     Ok(Ok(closed.href))
 }
 
@@ -196,20 +211,48 @@ pub async fn readers(
     Ok(readers)
 }
 
-/// Opens a grant on each scope, for `reason`, telling its readers.
-/// Returns the grants' ids.
+/// Grants opened in a transaction not yet committed, and who they told.
+#[must_use = "announce the grants once the transaction is committed"]
+pub struct Recorded {
+    ids: Vec<i64>,
+    told: Vec<i64>,
+}
+
+impl Recorded {
+    /// Once the transaction that opened them is committed: the pages of
+    /// what they opened are cleared from the cache, and those told see it
+    /// on their badge and are emailed. Returns the grants' ids.
+    pub async fn announce(self, state: &AppState) -> Result<Vec<i64>, AppError> {
+        for &id in &self.ids {
+            state
+                .changed(crate::changes::Change::StaffAccessOpened { access_id: id })
+                .await?;
+        }
+        notify::staff_access_told(state, &self.told);
+        Ok(self.ids)
+    }
+}
+
+/// Opens a grant on each scope, for `reason`, telling its readers, in
+/// `tx`: the transaction that also makes the change opening them, if a
+/// change does, so that the change is never made without its grants and
+/// their notices (DESIGN.md §8). [`Recorded::announce`] them once it is
+/// committed.
 pub async fn record(
-    state: &AppState,
+    tx: &mut Tx,
     user: &UserCtx,
     opens: &[(Scope, Vec<i64>)],
     reason: &str,
     report_id: Option<i64>,
-) -> Result<Vec<i64>, AppError> {
+) -> Result<Recorded, AppError> {
     let reason = clean_line(reason);
-    let mut ids = Vec::new();
+    let mut recorded = Recorded {
+        ids: Vec::new(),
+        told: Vec::new(),
+    };
     for (scope, readers) in opens {
-        let (id, _) = notify::open_staff_access(
-            state,
+        let (id, told) = notify::open_staff_access(
+            tx,
             &NewAccess {
                 actor_id: user.id,
                 scope: *scope,
@@ -219,10 +262,10 @@ pub async fn record(
             readers,
         )
         .await?;
-        state
-            .changed(crate::changes::Change::StaffAccessOpened { access_id: id })
-            .await?;
-        ids.push(id);
+        recorded.ids.push(id);
+        recorded.told.extend(told);
     }
-    Ok(ids)
+    recorded.told.sort();
+    recorded.told.dedup();
+    Ok(recorded)
 }

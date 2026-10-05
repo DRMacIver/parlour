@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT a.id, a.reason, a.report_id IS NOT NULL AS \"after_report!\", a.created_at,\n                  a.expires_at, u.id AS actor_id, u.username::text AS \"actor_username!\",\n                  u.display_name AS actor_name,\n                  t.id AS \"thread_id?\", t.title AS \"title?\", t.slug AS \"slug?\",\n                  t.space_id IS NULL AS \"conversation?\",\n                  (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))\n                      AS \"thread_readable?\",\n                  tc.name AS \"thread_space?\",\n                  (SELECT count(*) FROM private_thread_participants p\n                   WHERE p.thread_id = t.id AND p.left_at IS NULL) AS \"people!\",\n                  c.slug::text AS \"space_slug?\", c.name AS \"space_name?\",\n                  space_readable(c.visibility, c.id, $2, $3) AS \"space_readable?\",\n                  (SELECT count(*) FROM staff_access_views v WHERE v.access_id = a.id) AS \"views!\"\n           FROM staff_access a\n           JOIN users u ON u.id = a.actor_id\n           LEFT JOIN threads t ON t.id = a.thread_id\n           LEFT JOIN spaces tc ON tc.id = t.space_id\n           LEFT JOIN spaces c ON c.id = a.space_id\n           WHERE $1 OR staff_access_readable(a.id, $2, $3, $4, $5)\n           ORDER BY a.id DESC\n           LIMIT $6",
+  "query": "SELECT a.id, a.reason, a.report_id IS NOT NULL AS \"after_report!\", a.created_at,\n                  a.expires_at, u.id AS actor_id, u.username::text AS \"actor_username!\",\n                  u.display_name AS actor_name,\n                  t.id AS \"thread_id?\", t.title AS \"title?\", t.slug AS \"slug?\",\n                  t.space_id IS NULL AS \"conversation?\",\n                  (t.deleted_at IS NULL\n                   AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4)))\n                      AS \"thread_readable?\",\n                  tc.name AS \"thread_space?\",\n                  space_readable(tc.visibility, tc.id, $2, $3) AS \"thread_space_readable?\",\n                  (SELECT count(*) FROM private_thread_participants p\n                   WHERE p.thread_id = t.id AND p.left_at IS NULL) AS \"people!\",\n                  c.slug::text AS \"space_slug?\", c.name AS \"space_name?\",\n                  space_readable(c.visibility, c.id, $2, $3) AS \"space_readable?\",\n                  (SELECT count(*) FROM staff_access_views v WHERE v.access_id = a.id) AS \"views!\"\n           FROM staff_access a\n           JOIN users u ON u.id = a.actor_id\n           LEFT JOIN threads t ON t.id = a.thread_id\n           LEFT JOIN spaces tc ON tc.id = t.space_id\n           LEFT JOIN spaces c ON c.id = a.space_id\n           WHERE $1 OR EXISTS (SELECT 1 FROM notifications n\n                               WHERE n.staff_access_id = a.id AND n.user_id = $7)\n           ORDER BY a.id DESC\n           LIMIT $6",
   "describe": {
     "columns": [
       {
@@ -139,12 +139,18 @@
       },
       {
         "ordinal": 14,
+        "name": "thread_space_readable?",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 15,
         "name": "people!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "space_slug?",
         "type_info": "Text",
         "origin": {
@@ -155,7 +161,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "space_name?",
         "type_info": "Text",
         "origin": {
@@ -166,13 +172,13 @@
         }
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
         "name": "space_readable?",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 18,
+        "ordinal": 19,
         "name": "views!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -185,6 +191,7 @@
         "Int8Array",
         "Int8",
         "Int8Array",
+        "Int8",
         "Int8"
       ]
     },
@@ -204,11 +211,12 @@
       null,
       false,
       null,
+      null,
       false,
       false,
       null,
       null
     ]
   },
-  "hash": "f88eedc2e9c502ba7addbbc74869c394b48cc6d1bccaad39fefde3c437c0caaf"
+  "hash": "89c54c09a8a071ba1822fab8bb30c3e3dc1284a2f98ae21f88c1918d1e668160"
 }

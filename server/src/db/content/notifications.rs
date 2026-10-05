@@ -5,6 +5,12 @@
 //! visibility condition as everything else: a post that has since been
 //! deleted, hidden or moved somewhere the member can't see takes its
 //! notification with it (it isn't listed or counted).
+//!
+//! A notice that a moderator broke glass is the exception: it is for the
+//! member it was sent to for good, whether or not they can still read what
+//! it is about, as a change of who may read something tells those it
+//! shuts out (DESIGN.md §8). What it may name is decided in
+//! [`super::access::about`].
 
 use super::*;
 
@@ -22,7 +28,7 @@ pub enum Kind {
     /// A notice about the member or their posts.
     Moderation,
     /// A moderator broke glass on a thread, space or conversation the
-    /// member can read (DESIGN.md §8).
+    /// member could read then (DESIGN.md §8).
     StaffAccess,
 }
 
@@ -105,8 +111,6 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
         LEFT JOIN threads t ON t.id = p.thread_id
         WHERE n.user_id = $1
           AND CASE
-              WHEN n.staff_access_id IS NOT NULL
-                  THEN staff_access_readable(n.staff_access_id, $2, $3, $4, $5)
               WHEN n.post_id IS NULL THEN true
               ELSE p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
                    AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))
@@ -141,8 +145,6 @@ pub async fn list(db: &Db, viewer: &Viewer, page: i64) -> sqlx::Result<Notificat
         LEFT JOIN threads t ON t.id = p.thread_id
         WHERE n.user_id = $1
           AND CASE
-              WHEN n.staff_access_id IS NOT NULL
-                  THEN staff_access_readable(n.staff_access_id, $2, $3, $6, $7)
               WHEN n.post_id IS NULL THEN true
               ELSE p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL
                    AND (thread_readable(t, $2, $3, $6, $7) OR dm_readable(t.id, t.visibility, $6))

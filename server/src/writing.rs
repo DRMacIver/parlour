@@ -683,7 +683,10 @@ pub async fn restrict_thread_breaking_glass(
             Some((reason, crate::glass::readers(state, user, &[closed]).await?))
         }
     };
-    match store::set_thread_restriction(state.db(), thread_id, &restriction).await {
+    // Breaking glass, the change is made with its grant and notices or not
+    // at all (DESIGN.md §8).
+    let mut tx = state.db().begin().await?;
+    match store::set_thread_restriction(&mut tx, thread_id, &restriction).await {
         Ok(true) => {}
         Ok(false) => return Ok(Err(Refused::NotFound)),
         // A group it names was deleted in the meantime.
@@ -692,6 +695,13 @@ pub async fn restrict_thread_breaking_glass(
         }
         Err(err) => return Err(err.into()),
     }
+    let recorded = match glass {
+        Some((reason, readers)) => {
+            Some(crate::glass::record(&mut tx, user, &readers, reason, None).await?)
+        }
+        None => None,
+    };
+    tx.commit().await?;
     if !author && viewer.is_staff() && !target.space.rules.administers_by_grant(viewer) {
         mod_records::record(
             state.db(),
@@ -720,8 +730,8 @@ pub async fn restrict_thread_breaking_glass(
             previous_space_id: None,
         })
         .await?;
-    if let Some((reason, readers)) = glass {
-        crate::glass::record(state, user, &readers, reason, None).await?;
+    if let Some(recorded) = recorded {
+        recorded.announce(state).await?;
     }
     Ok(Ok(()))
 }

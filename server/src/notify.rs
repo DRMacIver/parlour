@@ -38,7 +38,7 @@ use serde_json::json;
 
 use crate::AppState;
 use crate::content::{self, notifications::Kind};
-use crate::db::Handle;
+use crate::db::{Handle, Tx};
 use crate::emails;
 use crate::jobs;
 use crate::live::Event;
@@ -183,13 +183,15 @@ async fn created(state: &AppState, user_id: i64, notification_id: i64) -> sqlx::
 }
 
 /// Opens a break-glass grant and tells everyone in `readers`, those who
-/// can read what it opens, in the same transaction (DESIGN.md §8): a
-/// notification each, emailed at once (§9) under their email preferences
-/// for notes from the moderators. The notice names the moderator and the
-/// day, not why, and never who reported it. Returns the grant's id and the
-/// members told.
+/// can read what it opens (or could, before the change that opens it), in
+/// `tx`, the transaction that makes any such change (DESIGN.md §8): a
+/// notification each, whose email job runs at once (§9) under their email
+/// preferences for notes from the moderators. The notice names the
+/// moderator and the day, not why, and never who reported it. Returns the
+/// grant's id and the members told; once `tx` is committed, call
+/// [`staff_access_told`] with them.
 pub async fn open_staff_access(
-    state: &AppState,
+    tx: &mut Tx,
     access: &staff_access::NewAccess<'_>,
     readers: &[i64],
 ) -> sqlx::Result<(i64, Vec<i64>)> {
@@ -197,25 +199,28 @@ pub async fn open_staff_access(
         staff_access::Scope::Thread(id) => Some(id),
         staff_access::Scope::Space(_) => None,
     };
-    let mut tx = state.db().begin().await?;
-    let access_id = staff_access::open(&mut tx, access).await?;
+    let access_id = staff_access::open(&mut *tx, access).await?;
     let mut told = Vec::new();
     for &user_id in readers {
         let Some(id) =
-            stored::insert_staff_access(&mut tx, user_id, access.actor_id, access_id, thread_id)
+            stored::insert_staff_access(&mut *tx, user_id, access.actor_id, access_id, thread_id)
                 .await?
         else {
             continue;
         };
-        jobs::enqueue_at(&mut tx, EMAIL_JOB, &json!({ "notification_id": id }), None).await?;
+        jobs::enqueue_at(&mut *tx, EMAIL_JOB, &json!({ "notification_id": id }), None).await?;
         told.push(user_id);
     }
-    tx.commit().await?;
-    for &user_id in &told {
+    Ok((access_id, told))
+}
+
+/// After the transaction that told them about a grant is committed: their
+/// open pages' counts change, and the emails go.
+pub fn staff_access_told(state: &AppState, told: &[i64]) {
+    for &user_id in told {
         state.live().publish(Event::Counts { user_id });
     }
     state.jobs().wake();
-    Ok((access_id, told))
 }
 
 /// Tells a member something from the moderators, with no post attached.
@@ -347,7 +352,9 @@ pub async fn email_if_away(state: &AppState, id: i64) -> anyhow::Result<bool> {
         }
         let item = match (due.staff_access_id, due.post_id) {
             (Some(access_id), _) => {
-                // Only while they can read what it is about, which it names.
+                // Everyone told is emailed, whether or not they can still
+                // read what it is about; it is named by its title only if
+                // they can.
                 let Some(about) = content::access::about(db, &viewer, access_id).await? else {
                     continue;
                 };

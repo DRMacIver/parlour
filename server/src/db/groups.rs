@@ -180,12 +180,13 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<Result<bool, String>> {
 }
 
 /// Adds a member to a group, returning whether they weren't in it already.
-pub async fn add_member(
-    db: &Db,
+pub async fn add_member<'c>(
+    db: impl Handle<'c>,
     group_id: i64,
     user_id: i64,
     added_by: Option<i64>,
 ) -> sqlx::Result<bool> {
+    let mut conn = db.open(KEY).acquire().await?;
     let done = sqlx::query!(
         "INSERT INTO group_members (group_id, user_id, added_by) VALUES ($1, $2, $3)
          ON CONFLICT DO NOTHING",
@@ -193,7 +194,7 @@ pub async fn add_member(
         user_id,
         added_by,
     )
-    .execute(db.pool())
+    .execute(&mut *conn)
     .await?;
     Ok(done.rows_affected() == 1)
 }

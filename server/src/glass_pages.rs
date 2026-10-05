@@ -69,7 +69,7 @@ impl GlassTemplate {
             "Nobody else can read it now, so nobody will be told.".to_owned()
         } else {
             format!(
-                "{who} ({}) will be told at once, on the site and by email, that a moderator ({}) viewed it and when, and its pages will say so from then on. They won’t be told why, or who reported it.",
+                "{who} ({}) will be told at once, on the site and by email, that a moderator ({}) viewed it and when, and its pages will say so from then on. The notice won’t say why or who reported it, but they can read your reason in the access log.",
                 crate::format::plural(n, "person", "people"),
                 self.moderator
             )

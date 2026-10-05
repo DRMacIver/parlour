@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT n.id, n.kind, n.created_at, n.read_at IS NOT NULL AS \"read!\", n.message, n.mod_action_id,\n               n.staff_access_id,\n               a.id AS \"actor_id?\", a.username AS \"actor_username?\", a.display_name AS \"actor_name?\",\n               p.id AS \"post_id?\", p.seq AS \"seq?\", t.id AS \"thread_id?\", t.title AS \"title?\",\n               t.slug AS \"slug?\", t.visibility = 'private' AS \"private?\"\n        FROM notifications n\n        LEFT JOIN users a ON a.id = n.actor_id\n        LEFT JOIN posts p ON p.id = n.post_id\n        LEFT JOIN threads t ON t.id = p.thread_id\n        WHERE n.user_id = $1\n          AND CASE\n              WHEN n.staff_access_id IS NOT NULL\n                  THEN staff_access_readable(n.staff_access_id, $2, $3, $6, $7)\n              WHEN n.post_id IS NULL THEN true\n              ELSE p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL\n                   AND (thread_readable(t, $2, $3, $6, $7) OR dm_readable(t.id, t.visibility, $6))\n              END\n          AND NOT EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id\n                          WHERE b.user_id = $1 AND b.blocked_user_id = n.actor_id AND bu.role = 'user')\n        ORDER BY n.created_at DESC, n.id DESC\n        LIMIT $4 OFFSET $5\n        ",
+  "query": "\n        SELECT n.id, n.kind, n.created_at, n.read_at IS NOT NULL AS \"read!\", n.message, n.mod_action_id,\n               n.staff_access_id,\n               a.id AS \"actor_id?\", a.username AS \"actor_username?\", a.display_name AS \"actor_name?\",\n               p.id AS \"post_id?\", p.seq AS \"seq?\", t.id AS \"thread_id?\", t.title AS \"title?\",\n               t.slug AS \"slug?\", t.visibility = 'private' AS \"private?\"\n        FROM notifications n\n        LEFT JOIN users a ON a.id = n.actor_id\n        LEFT JOIN posts p ON p.id = n.post_id\n        LEFT JOIN threads t ON t.id = p.thread_id\n        WHERE n.user_id = $1\n          AND CASE\n              WHEN n.post_id IS NULL THEN true\n              ELSE p.deleted_at IS NULL AND p.hidden_at IS NULL AND t.deleted_at IS NULL\n                   AND (thread_readable(t, $2, $3, $6, $7) OR dm_readable(t.id, t.visibility, $6))\n              END\n          AND NOT EXISTS (SELECT 1 FROM blocks b JOIN users bu ON bu.id = b.blocked_user_id\n                          WHERE b.user_id = $1 AND b.blocked_user_id = n.actor_id AND bu.role = 'user')\n        ORDER BY n.created_at DESC, n.id DESC\n        LIMIT $4 OFFSET $5\n        ",
   "describe": {
     "columns": [
       {
@@ -205,5 +205,5 @@
       null
     ]
   },
-  "hash": "8bb0d6eb4e0603a8b9180b2ac1f8a93d2554e77106a22991c8348ff558ce24ac"
+  "hash": "c2adc6d4777bbc4e8b7a453c89b53b33ec92eb1b46ee8016e00e92f03f67d374"
 }

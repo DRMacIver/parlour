@@ -958,7 +958,18 @@ pub async fn save_settings(
             .await;
         }
     };
-    match store::update_space(db, space.space.id, &settings).await? {
+    // Breaking glass, the change is made with its grants and notices or not
+    // at all (DESIGN.md §8).
+    let mut tx = db.begin().await?;
+    let saved = store::update_space(&mut tx, space.space.id, &settings).await?;
+    let recorded = match (&saved, viewer.user(), &glass) {
+        (Ok(true), Some(user), Some((reason, readers))) => {
+            Some(crate::glass::record(&mut tx, user, readers, reason, None).await?)
+        }
+        _ => None,
+    };
+    tx.commit().await?;
+    match saved {
         Err(why) => {
             render_settings(
                 &state,
@@ -973,8 +984,8 @@ pub async fn save_settings(
         }
         Ok(false) => web::not_found(&state, &viewer).await,
         Ok(true) => {
-            if let (Some(user), Some((reason, readers))) = (viewer.user(), &glass) {
-                crate::glass::record(&state, user, readers, reason, None).await?;
+            if let Some(recorded) = recorded {
+                recorded.announce(&state).await?;
             }
             if let Some(section) = section {
                 place_on_default(&state, space.space.id, section).await?;

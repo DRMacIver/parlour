@@ -449,9 +449,19 @@ pub async fn add_member(
                     }
                 }
             }
-            groups::add_member(state.db(), id, user_id, Some(added_by)).await?;
-            if let Some((reason, readers)) = glass {
-                crate::glass::record(&state, user, &readers, &reason, None).await?;
+            // Breaking glass, they join with its grants and notices or not
+            // at all (DESIGN.md §8).
+            let mut tx = state.db().begin().await?;
+            groups::add_member(&mut tx, id, user_id, Some(added_by)).await?;
+            let recorded = match glass {
+                Some((reason, readers)) => {
+                    Some(crate::glass::record(&mut tx, user, &readers, &reason, None).await?)
+                }
+                None => None,
+            };
+            tx.commit().await?;
+            if let Some(recorded) = recorded {
+                recorded.announce(&state).await?;
             }
             Ok(see_other(&format!("/admin/groups/{id}?done=added")))
         }

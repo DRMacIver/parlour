@@ -12,8 +12,8 @@
 <section class="panel"><div class="post-body">{{ text.html|safe }}</div></section>
 {% endif %}{% endif %}
 {% match private %}
-{% when Private::Thread %}<div class="notice" role="status"><p>The moderators will see your report and who wrote this post. Not all of them can read this thread. If they need to open the thread to act on it, everyone who can read it will be told a moderator looked, but not who reported it or why.</p></div>
-{% when Private::Conversation %}<div class="notice" role="status"><p>The moderators will see your report and who wrote this message. Only the people in this conversation can read it. If they need to open the conversation to act on it, everyone in it will be told a moderator looked, but not who reported it or why. Your other conversations stay private.</p></div>
+{% when Private::Thread %}<div class="notice" role="status"><p>The moderators will see your report and who wrote this post. Not all of them can read this thread. If they need to open the thread to act on it, everyone who can read it will be told a moderator looked, and can read the reason the moderator gave in the access log, but not who reported it.</p></div>
+{% when Private::Conversation %}<div class="notice" role="status"><p>The moderators will see your report and who wrote this message. Only the people in this conversation can read it. If they need to open the conversation to act on it, everyone in it will be told a moderator looked, and can read the reason the moderator gave in the access log, but not who reported it. Your other conversations stay private.</p></div>
 {% when Private::No %}
 {% endmatch %}
 <form class="panel" method="post" action="{{ action }}">

@@ -20,9 +20,13 @@
   <h2 class="panel-bar" id="glass-heading">What happens</h2>
   <div class="panel-text">
     <ul>
+      {% if change.is_some() %}
+      <li>You can read it for as long as the change stands, as one of its readers, rather than for {{ crate::staff_access::HOURS }} hours. The pages you open aren’t recorded one by one: the change itself goes in the access log, and its readers are told once.</li>
+      {% else %}
       <li>You can read it for {{ crate::staff_access::HOURS }} hours, until {{ self.expires() }}. Every page of it you open is recorded.</li>
+      {% endif %}
       <li>{{ self.told() }}</li>
-      <li>Your reason goes in the access log, which every admin can read, and so can everyone who can read what you opened. Don’t name who reported it.</li>
+      <li>Your reason goes in the access log, which every admin can read, and so can everyone told. Don’t name who reported it.</li>
       <li>No one else needs to approve this, and it can’t be taken back: the log can’t be changed.</li>
     </ul>
   </div>

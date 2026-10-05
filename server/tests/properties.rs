@@ -184,6 +184,8 @@ struct GrantModel {
     opened: Opened,
     /// Whether it is still running; some are made already run out.
     active: bool,
+    /// The members told about it: those who read what it opened then.
+    told: Vec<i64>,
 }
 
 /// A new member's post, held for a moderator.
@@ -1208,15 +1210,17 @@ impl World {
         unread
             .into_iter()
             .filter(|(post_id, access_id)| {
-                // A notice that a moderator broke glass counts while the
-                // viewer can read what it opened.
+                // A notice that a moderator broke glass counts for those
+                // told, whether or not they can still read what it opened
+                // (DESIGN.md §8).
                 if let Some(access_id) = access_id {
                     let grant = self
                         .grants
                         .iter()
                         .find(|g| g.id == *access_id)
                         .expect("a notice about a grant the test made");
-                    return self.opened_readable(grant.opened, who);
+                    assert!(grant.told.contains(&user), "{who:?} told of {access_id}");
+                    return true;
                 }
                 let Some(post_id) = post_id else { return true };
                 if let Some(i) = self.posts.iter().position(|p| p.id == *post_id) {
@@ -2004,6 +2008,28 @@ impl World {
                 assert!(body.contains(&m.body_token), "message {} missing", m.id);
             }
         }
+        // Their own break-glass log lists exactly the grants they were told
+        // about, whether or not they still read what each opened
+        // (DESIGN.md §8).
+        if let Some(user) = self.viewer_id(who) {
+            let told = self
+                .grants
+                .iter()
+                .filter(|grant| grant.told.contains(&user))
+                .count() as i64;
+            let heading = if told == 0 {
+                "None".to_owned()
+            } else {
+                format!("{told} time{}", if told == 1 { "" } else { "s" })
+            };
+            let log = pages.get("/settings/access");
+            assert!(
+                log.body
+                    .contains(&format!("id=\"access-heading\">{heading}</h2>")),
+                "{who:?}'s log should list {told}:\n{}",
+                log.body
+            );
+        }
         if who != Who::Staff {
             assert_eq!(
                 self.views("").0,
@@ -2662,9 +2688,10 @@ impl World {
             users
         };
         assert_eq!(readers, expected, "readers of {opened:?}");
-        let (id, told) = self
-            .block(parlour::notify::open_staff_access(
-                &self.cached.state,
+        let (id, told) = self.block(async {
+            let mut tx = self.cached.state.db().begin().await.unwrap();
+            let opened = parlour::notify::open_staff_access(
+                &mut tx,
                 &parlour::staff_access::NewAccess {
                     actor_id: self.staff_id,
                     scope,
@@ -2672,8 +2699,13 @@ impl World {
                     reason: "Checking",
                 },
                 &readers,
-            ))
+            )
+            .await
             .unwrap();
+            tx.commit().await.unwrap();
+            opened
+        });
+        parlour::notify::staff_access_told(&self.cached.state, &told);
         assert_eq!(told, expected, "told of {opened:?}");
         self.block(
             self.cached
@@ -2690,7 +2722,12 @@ impl World {
                  ALTER TABLE staff_access ENABLE TRIGGER staff_access_append_only;"
             ));
         }
-        self.grants.push(GrantModel { id, opened, active });
+        self.grants.push(GrantModel {
+            id,
+            opened,
+            active,
+            told,
+        });
         // The member viewer, if they read it, is told on its page at once,
         // and from then on (the checks look again).
         if self.opened_readable(opened, Who::Member) {

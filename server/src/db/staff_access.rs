@@ -10,7 +10,7 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::db::{Db, Handle, KEY};
+use crate::db::{Db, Handle, KEY, Tx};
 
 /// How long a grant lasts (DESIGN.md §8).
 pub const HOURS: i64 = 72;
@@ -50,6 +50,38 @@ pub async fn open<'c>(db: impl Handle<'c>, access: &NewAccess<'_>) -> sqlx::Resu
         access.report_id,
         access.reason,
         HOURS as i32,
+    )
+    .fetch_one(&mut *conn)
+    .await
+}
+
+/// Whether a grant `actor_id` holds now already covers `scope`: one on
+/// it, or, for a thread, on its space. Asked in the transaction that would
+/// open another, after waiting for any other such transaction of the same
+/// member of staff to finish, so that a confirmation sent twice at once
+/// opens one grant.
+pub async fn covered(tx: &mut Tx, actor_id: i64, scope: Scope) -> sqlx::Result<bool> {
+    let conn = tx.conn();
+    sqlx::query!(
+        "SELECT pg_advisory_xact_lock(hashtextextended('parlour break glass ' || $1::bigint, 0))",
+        actor_id
+    )
+    .execute(&mut *conn)
+    .await?;
+    let (thread_id, space_id) = match scope {
+        Scope::Thread(id) => (Some(id), None),
+        Scope::Space(id) => (None, Some(id)),
+    };
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM staff_access a
+               WHERE a.actor_id = $1 AND a.expires_at > now()
+                 AND (a.thread_id = $2 OR a.space_id = $3
+                      OR a.space_id = (SELECT t.space_id FROM threads t WHERE t.id = $2))
+           ) AS "covered!""#,
+        actor_id,
+        thread_id,
+        space_id,
     )
     .fetch_one(&mut *conn)
     .await

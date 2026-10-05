@@ -1189,6 +1189,7 @@ pub async fn moderate_thread_breaking_glass(
         }
     };
     let audience = thread.as_ref().map(|t| t.audience.clone());
+    let mut recorded = None;
     let mut previous_space_id = None;
     let mut details = json!({});
     let (key, changed) = match &action {
@@ -1218,7 +1219,16 @@ pub async fn moderate_thread_breaking_glass(
         }
         ThreadAction::Move(_) => {
             let to = destination.as_ref().expect("checked above");
-            previous_space_id = store::move_thread(db, thread_id, to.space.id).await?;
+            // Breaking glass, the move is made with its grant and notices
+            // or not at all (DESIGN.md §8).
+            let mut tx = db.begin().await?;
+            previous_space_id = store::move_thread(&mut tx, thread_id, to.space.id).await?;
+            if previous_space_id.is_some()
+                && let Some((why, readers)) = &glass
+            {
+                recorded = Some(crate::glass::record(&mut tx, user, readers, why, None).await?);
+            }
+            tx.commit().await?;
             details = json!({ "from_space_id": previous_space_id, "to_space_id": to.space.id });
             ("move_thread", previous_space_id.is_some())
         }
@@ -1290,8 +1300,8 @@ pub async fn moderate_thread_breaking_glass(
         })
         .await?;
     state.changed(Change::ModLogged).await?;
-    if let Some((why, readers)) = glass {
-        crate::glass::record(state, user, &readers, why, None).await?;
+    if let Some(recorded) = recorded {
+        recorded.announce(state).await?;
     }
     Ok(Ok(thread_id))
 }

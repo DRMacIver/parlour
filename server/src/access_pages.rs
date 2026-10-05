@@ -1,6 +1,7 @@
 //! The break-glass log (DESIGN.md §8, §11): `/admin/access`, every grant,
-//! for admins, and `/settings/access`, the grants on threads, spaces and
-//! conversations a member can read. Both depend on who is looking and are
+//! for admins, and `/settings/access`, the grants a member was told about,
+//! whether or not they still read what each opened. Both depend on who is
+//! looking and are
 //! never cached. What each may see is decided in
 //! [`crate::content::access`].
 
@@ -45,7 +46,7 @@ pub async fn admin_log(
     )
 }
 
-/// `/settings/access`: the grants on what the member can read.
+/// `/settings/access`: the grants the member was told about.
 pub async fn member_log(
     State(state): State<AppState>,
     viewer: Viewer,

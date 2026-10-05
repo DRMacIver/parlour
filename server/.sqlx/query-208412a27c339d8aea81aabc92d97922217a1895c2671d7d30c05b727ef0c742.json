@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM staff_access a\n               WHERE a.actor_id = $1 AND a.expires_at > now()\n                 AND (a.thread_id = $2 OR a.space_id = $3\n                      OR a.space_id = (SELECT t.space_id FROM threads t WHERE t.id = $2))\n           ) AS \"covered!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "covered!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "208412a27c339d8aea81aabc92d97922217a1895c2671d7d30c05b727ef0c742"
+}

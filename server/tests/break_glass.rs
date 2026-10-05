@@ -1181,14 +1181,14 @@ async fn reporting_private_content_says_what_staff_will_see(pool: PgPool) {
         .page_as(&format!("/p/{}/report", c.quiet_post), &c.ruth_cookie)
         .await;
     assert!(
-        form.contains("If they need to open the thread to act on it, everyone who can read it will be told a moderator looked"),
+        form.contains("If they need to open the thread to act on it, everyone who can read it will be told a moderator looked, and can read the reason the moderator gave in the access log, but not who reported it."),
         "{form}"
     );
     let form = f
         .page_as(&format!("/p/{}/report", c.dm_post), &c.ruth_cookie)
         .await;
     assert!(
-        form.contains("If they need to open the conversation to act on it, everyone in it will be told a moderator looked"),
+        form.contains("If they need to open the conversation to act on it, everyone in it will be told a moderator looked, and can read the reason the moderator gave in the access log, but not who reported it."),
         "{form}"
     );
     assert!(!form.contains("but not the conversation itself"), "{form}");
@@ -1262,9 +1262,10 @@ async fn opening_a_report_breaks_glass_and_everyone_in_it_is_told(pool: PgPool) 
         "{page}"
     );
     assert!(
-        page.contains("They won’t be told why, or who reported it."),
+        page.contains("The notice won’t say why or who reported it, but they can read your reason in the access log."),
         "{page}"
     );
+    assert!(!page.contains("won’t be told why"), "{page}");
     assert!(page.contains("72 hours"), "{page}");
     assert!(page.contains("name=\"glass_reason\""), "{page}");
     // Without a reason, nothing happens.
@@ -1852,4 +1853,408 @@ async fn the_readers_told_are_those_the_access_layer_lets_read(pool: PgPool) {
     let mut members = everyone.clone();
     members.retain(|&id| id != jonah);
     assert_eq!(readers(Scope::Space(c.general)).await, members);
+}
+
+/// A change that breaks glass tells those who could read it before
+/// (DESIGN.md §8), and so they are told even when the change shuts them
+/// out: their notifications, their badge, their email and their own log
+/// all say so, naming what they can no longer read without its title or
+/// anything else they can't read now.
+#[sqlx::test]
+async fn readers_a_change_shuts_out_are_still_told(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    let cookie = &c.sam_cookie;
+    let jonah = f.id("SELECT id FROM users WHERE username = 'jonah'").await;
+    let kit_cookie = f.session(c.kit).await;
+    let today = today();
+
+    // Sam narrows the quiet word to Ruth and himself, shutting Jonah out.
+    let audience = format!("/t/{}/audience", c.quiet);
+    ok(
+        f,
+        &audience,
+        &[
+            ("read", "only"),
+            ("read_users", "sam"),
+            ("reply", "space"),
+            ("glass_reason", "Looking into a complaint"),
+        ],
+        cookie,
+    )
+    .await;
+    let quiet = thread_path(f, c.quiet).await;
+    assert_status(
+        &f.get_as(&quiet, Some(&c.jonah_cookie)).await,
+        StatusCode::NOT_FOUND,
+    );
+    let mut expected = vec![c.ruth, jonah];
+    expected.sort();
+    assert_eq!(told(f).await, expected);
+    // Jonah is told, on the site, on the badge and by email, of a thread
+    // he could read, not what it is called.
+    let sentence =
+        format!("A moderator (Sam) viewed a thread you could read in General on {today}.");
+    let notes = f.page_as("/notifications", &c.jonah_cookie).await;
+    assert!(
+        notes.contains("A moderator (<strong>Sam</strong>) viewed"),
+        "{notes}"
+    );
+    assert!(
+        notes.contains("a thread you could read in General"),
+        "{notes}"
+    );
+    shows_none("/notifications", &notes, &CLOSED);
+    let badge: serde_json::Value =
+        serde_json::from_str(&f.page_as("/api/notifications", &c.jonah_cookie).await).unwrap();
+    assert_eq!(badge["unread"], 1, "{badge}");
+    assert_eq!(badge["items"][0]["text"], sentence.as_str(), "{badge}");
+    let email = f.last_email_to("jonah@example.com").await;
+    assert!(email.body.contains(&sentence), "{}", email.body);
+    shows_none("email", &email.body, &CLOSED);
+    shows_none("email", &email.subject, &CLOSED);
+    // The notice leads to his log, which has why, and names the thread by
+    // its number.
+    let notice = f
+        .id(&format!(
+            "SELECT id FROM notifications WHERE kind = 'staff_access' AND user_id = {jonah}"
+        ))
+        .await;
+    let response = f
+        .get_as(&format!("/notifications/{notice}"), Some(&c.jonah_cookie))
+        .await;
+    assert_eq!(response.location(), "/settings/access");
+    let log = f.page_as("/settings/access", &c.jonah_cookie).await;
+    assert!(log.contains("Looking into a complaint"), "{log}");
+    assert!(
+        log.contains(&format!("the thread № {} in General", c.quiet)),
+        "{log}"
+    );
+    assert!(!log.contains("/mod/t/"), "{log}");
+    shows_none("/settings/access", &log, &CLOSED);
+    // Ruth, who still reads it, is told what it is.
+    let notes = f.page_as("/notifications", &c.ruth_cookie).await;
+    assert!(notes.contains("the thread “Quietwordtitle”"), "{notes}");
+
+    // Sam lets only himself read the Circle, shutting Kit out: Kit is told
+    // of a space he could read, and not which.
+    let fields = [
+        ("name", "Circle"),
+        ("slug", "circle"),
+        ("description", ""),
+        ("read_level", "listed"),
+        ("read_users", "sam"),
+        ("reply_level", "listed"),
+        ("reply_users", "sam"),
+        ("start_level", "listed"),
+        ("start_users", "sam"),
+        ("administer_level", "listed"),
+        ("section", ""),
+        ("glass_reason", "Closing the Circle after a complaint"),
+    ];
+    ok(f, "/c/circle/settings", &fields, cookie).await;
+    assert_status(
+        &f.get_as("/c/circle", Some(&kit_cookie)).await,
+        StatusCode::NOT_FOUND,
+    );
+    let notes = f.page_as("/notifications", &kit_cookie).await;
+    assert!(notes.contains("a space you could read"), "{notes}");
+    assert!(!notes.contains("the space Circle"), "{notes}");
+    shows_none("/notifications", &notes, &CLOSED);
+    let email = f.last_email_to("kit@example.com").await;
+    assert!(
+        email.body.contains(&format!(
+            "A moderator (Sam) viewed a space you could read on {today}."
+        )),
+        "{}",
+        email.body
+    );
+    assert!(!email.body.contains("space Circle"), "{}", email.body);
+    let log = f.page_as("/settings/access", &kit_cookie).await;
+    assert!(
+        log.contains("Closing the Circle after a complaint"),
+        "{log}"
+    );
+    assert!(log.contains("a space you could read"), "{log}");
+    assert!(!log.contains("the space Circle"), "{log}");
+
+    // Sam moves a thread out of the second circle into the staffroom: Kit
+    // is told of a thread he could read, and not where it went.
+    let hidden = f
+        .thread(c.circle_two, c.kit, "Hiddentitle", "Hiddenbody")
+        .await
+        .thread_id;
+    ok(
+        f,
+        &format!("/mod/t/{hidden}"),
+        &[
+            ("action", "move"),
+            ("space", "staffroom"),
+            ("reason", "Staff business"),
+            ("glass_reason", "It belongs with the staff"),
+        ],
+        cookie,
+    )
+    .await;
+    let notes = f.page_as("/notifications", &kit_cookie).await;
+    assert!(notes.contains(">a thread you could read</a> on"), "{notes}");
+    shows_none(
+        "/notifications",
+        &notes,
+        &["Hiddentitle", "Hiddenbody", "Staffroom"],
+    );
+    let badge: serde_json::Value =
+        serde_json::from_str(&f.page_as("/api/notifications", &kit_cookie).await).unwrap();
+    assert_eq!(badge["unread"], 2, "{badge}");
+    let email = f.last_email_to("kit@example.com").await;
+    assert!(
+        email.body.contains(&format!(
+            "A moderator (Sam) viewed a thread you could read on {today}."
+        )),
+        "{}",
+        email.body
+    );
+    shows_none("email", &email.body, &["Hiddentitle", "Staffroom"]);
+}
+
+/// Each member's log lists the times a moderator looked at what they
+/// could read then, which they were told about (DESIGN.md §8): not what
+/// came before they could read it, and still what they can't read any
+/// more.
+#[sqlx::test]
+async fn each_members_log_is_what_they_were_told(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    ok(
+        f,
+        "/mod/break-glass",
+        &[
+            ("space", "circle"),
+            ("glass_reason", "A complaint about the Circle"),
+        ],
+        &c.sam_cookie,
+    )
+    .await;
+    let kit_cookie = f.session(c.kit).await;
+    let log = f.page_as("/settings/access", &kit_cookie).await;
+    assert!(log.contains("A complaint about the Circle"), "{log}");
+    // Ruth joins the Organisers afterwards: she reads the Circle now, but
+    // wasn't told, so it isn't hers.
+    f.join_group(c.organisers, c.ruth).await;
+    assert!(
+        f.page_as("/c/circle", &c.ruth_cookie)
+            .await
+            .contains("Circlesecrettitle")
+    );
+    let log = f.page_as("/settings/access", &c.ruth_cookie).await;
+    assert!(log.contains("No moderator has needed"), "{log}");
+    assert!(!log.contains("A complaint about the Circle"), "{log}");
+    // Kit leaves them: it is still his, without the space's name.
+    f.exec(&format!(
+        "DELETE FROM group_members WHERE group_id = {} AND user_id = {}",
+        c.organisers, c.kit
+    ))
+    .await;
+    let log = f.page_as("/settings/access", &kit_cookie).await;
+    assert!(log.contains("A complaint about the Circle"), "{log}");
+    assert!(log.contains("a space you could read"), "{log}");
+    shows_none("/settings/access", &log, &CLOSED);
+}
+
+/// Confirming again while a grant already covers it (the form sent twice,
+/// or again from the browser's history) opens nothing more and tells
+/// nobody again.
+#[sqlx::test]
+async fn confirming_twice_breaks_glass_once(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    let thread = c.secret.to_string();
+    let fields = [("thread", thread.as_str()), ("glass_reason", "A complaint")];
+    for _ in 0..2 {
+        let response = ok(f, "/mod/break-glass", &fields, &c.sam_cookie).await;
+        assert_eq!(response.location(), format!("/t/{}", c.secret));
+    }
+    // A grant on its space covers it too.
+    ok(
+        f,
+        "/mod/break-glass",
+        &[("space", "circle"), ("glass_reason", "A complaint")],
+        &c.sam_cookie,
+    )
+    .await;
+    ok(f, "/mod/break-glass", &fields, &c.sam_cookie).await;
+    assert_eq!(count(f, "SELECT count(*) FROM staff_access").await, 2);
+    assert_eq!(told(f).await, vec![c.kit, c.kit]);
+    // Two at once open one.
+    let lunch_two = f
+        .thread(c.circle_two, c.kit, "Othertitle", "Otherbody")
+        .await
+        .thread_id
+        .to_string();
+    let fields = [("thread", lunch_two.as_str()), ("glass_reason", "Again")];
+    let (a, b) = tokio::join!(
+        f.submit("/mod/break-glass", &fields, Some(&c.sam_cookie)),
+        f.submit("/mod/break-glass", &fields, Some(&c.sam_cookie)),
+    );
+    assert_status(&a, StatusCode::SEE_OTHER);
+    assert_status(&b, StatusCode::SEE_OTHER);
+    assert_eq!(count(f, "SELECT count(*) FROM staff_access").await, 3);
+    assert_eq!(told(f).await, vec![c.kit, c.kit, c.kit]);
+}
+
+/// A change that breaks glass and the grant it opens are made together:
+/// if the grant can't be opened, or its readers told, the change isn't
+/// made either, so that nobody reads by it unannounced (DESIGN.md §8).
+#[sqlx::test]
+async fn a_change_that_breaks_glass_needs_its_grant(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    let cookie = &c.sam_cookie;
+    let hidden = f
+        .thread(c.circle_two, c.kit, "Hiddentitle", "Hiddenbody")
+        .await
+        .thread_id;
+    // Telling anyone fails.
+    f.exec(
+        "CREATE FUNCTION refuse_notices() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN RAISE EXCEPTION 'no notices today'; END $$;
+         CREATE TRIGGER refuse_notices BEFORE INSERT ON notifications
+             FOR EACH ROW WHEN (NEW.kind = 'staff_access') EXECUTE FUNCTION refuse_notices();",
+    )
+    .await;
+    let restriction = || async {
+        sqlx::query_as::<_, (Option<Vec<i64>>, Option<Vec<i64>>)>(
+            "SELECT read_group_ids, read_user_ids FROM threads WHERE id = $1",
+        )
+        .bind(c.quiet)
+        .fetch_one(&f.db)
+        .await
+        .unwrap()
+    };
+    let before = restriction().await;
+    let response = f
+        .submit(
+            &format!("/t/{}/audience", c.quiet),
+            &[
+                ("read", "space"),
+                ("reply", "space"),
+                ("glass_reason", "Opening it up"),
+            ],
+            Some(cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(restriction().await, before);
+    let response = f
+        .submit(
+            "/c/circle/settings",
+            &[
+                ("name", "Circle"),
+                ("slug", "circle"),
+                ("description", ""),
+                ("read_level", "members"),
+                ("reply_level", "listed"),
+                ("reply_group", &c.organisers.to_string()),
+                ("start_level", "listed"),
+                ("start_group", &c.organisers.to_string()),
+                ("administer_level", "listed"),
+                ("section", ""),
+                ("glass_reason", "Opening it up"),
+            ],
+            Some(cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_status(
+        &f.get_as("/c/circle", Some(cookie)).await,
+        StatusCode::NOT_FOUND,
+    );
+    let response = f
+        .submit(
+            &format!("/mod/t/{hidden}"),
+            &[
+                ("action", "move"),
+                ("space", "general"),
+                ("reason", "Tidy"),
+                ("glass_reason", "It belongs in General"),
+            ],
+            Some(cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        count(
+            f,
+            &format!("SELECT space_id FROM threads WHERE id = {hidden}")
+        )
+        .await,
+        c.circle_two
+    );
+    let response = f
+        .submit(
+            &format!("/admin/groups/{}/members", c.organisers),
+            &[("username", "ada"), ("glass_reason", "Helping")],
+            Some(&c.ada_cookie),
+        )
+        .await;
+    assert_status(&response, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        count(
+            f,
+            &format!(
+                "SELECT count(*) FROM group_members WHERE group_id = {} AND user_id = {}",
+                c.organisers, c.ada
+            )
+        )
+        .await,
+        0
+    );
+    assert_eq!(count(f, "SELECT count(*) FROM staff_access").await, 0);
+}
+
+/// The confirmation page for a change says what the change does: the
+/// member of staff reads by it for as long as it stands, not for 72
+/// hours, and pages aren't recorded one by one.
+#[sqlx::test]
+async fn the_page_for_a_change_says_what_it_does(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    let page = f
+        .submit(
+            &format!("/t/{}/audience", c.quiet),
+            &[("read", "space"), ("reply", "space")],
+            Some(&c.sam_cookie),
+        )
+        .await;
+    assert_status(&page, StatusCode::OK);
+    assert!(!page.body.contains("hours, until"), "{}", page.body);
+    assert!(
+        !page.body.contains("Every page of it you open is recorded"),
+        "{}",
+        page.body
+    );
+    assert!(
+        page.body
+            .contains("The pages you open aren’t recorded one by one"),
+        "{}",
+        page.body
+    );
+    assert!(
+        page.body.contains("for as long as the change stands"),
+        "{}",
+        page.body
+    );
+    // Breaking glass to read something says how long and that each page
+    // is recorded.
+    let page = f
+        .page_as(
+            &format!("/mod/break-glass?thread={}", c.quiet),
+            &c.sam_cookie,
+        )
+        .await;
+    assert!(page.contains("72 hours"), "{page}");
+    assert!(
+        page.contains("Every page of it you open is recorded"),
+        "{page}"
+    );
 }

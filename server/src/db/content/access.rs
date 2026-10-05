@@ -7,11 +7,15 @@
 //! about to open, which is where it is and who can read it, never what it
 //! says.
 //!
-//! A grant is named to a member only while they can read what it opened,
-//! by the shared SQL function `staff_access_readable`, which asks
-//! `thread_readable`, `dm_readable` and `space_readable` as every other
-//! read does. Admins see every grant in the log, each named by what it
-//! is and where, and by its title only if they can read it themselves.
+//! A grant is the business of everyone told about it: those who could
+//! read what it opened when it was opened, or before the change that
+//! opened it, each of whom has a notification tied to it. They see its
+//! notice and its entry in their log for good, whether or not they can
+//! still read what it opened; it is named by its title, and its space by
+//! its name, only while they can read them, as `thread_readable`,
+//! `dm_readable` and `space_readable` decide. Admins see every grant in
+//! the log, each named by what it is and where, and by its title only if
+//! they can read it themselves.
 
 use super::*;
 use crate::db::staff_access::Scope;
@@ -111,27 +115,43 @@ pub(super) async fn space_notices(db: &Db, space_id: i64) -> sqlx::Result<Vec<Pa
         .collect())
 }
 
-/// A grant as its notice names it to someone who can read what it opened.
+/// A grant as its notice names it to a member who was told about it.
 #[derive(Clone, Debug)]
 pub struct About {
     pub access_id: i64,
     pub moderator: UserRef,
     pub what: What,
-    /// The thread's title, the conversation's (or a description of it), or
-    /// the space's name.
-    pub title: String,
+    /// The thread's title, the conversation's (or "" for an untitled one),
+    /// or the space's name, if the member can read it now; `None` if they
+    /// can't any more.
+    pub title: Option<String>,
+    /// For a thread they can't read any more, the name of its space, if
+    /// they read that.
+    pub place: Option<String>,
+    /// Where the notice leads: what was opened, if they can read it, and
+    /// otherwise their log, which says why.
     pub href: String,
     pub created_at: DateTime<Utc>,
 }
 
 impl About {
-    /// What the moderator viewed, as a notice says it: "the thread “Brass”".
+    /// What the moderator viewed, as a notice says it: "the thread
+    /// “Brass”", or, to someone who can't read it any more, "a thread you
+    /// could read in General".
     pub fn object(&self) -> String {
-        match self.what {
-            What::Thread => format!("the thread “{}”", self.title),
-            What::Conversation if self.title.is_empty() => "a conversation you’re in".to_owned(),
-            What::Conversation => format!("your conversation “{}”", self.title),
-            What::Space => format!("the space {}", self.title),
+        match (self.what, &self.title) {
+            (What::Thread, Some(title)) => format!("the thread “{title}”"),
+            (What::Thread, None) => match &self.place {
+                Some(space) => format!("a thread you could read in {space}"),
+                None => "a thread you could read".to_owned(),
+            },
+            (What::Conversation, Some(title)) if title.is_empty() => {
+                "a conversation you’re in".to_owned()
+            }
+            (What::Conversation, Some(title)) => format!("your conversation “{title}”"),
+            (What::Conversation, None) => "a conversation you were in".to_owned(),
+            (What::Space, Some(name)) => format!("the space {name}"),
+            (What::Space, None) => "a space you could read".to_owned(),
         }
     }
 
@@ -146,50 +166,77 @@ impl About {
     }
 }
 
-/// A grant, if the viewer can read what it opened now.
+/// A grant, if the viewer was told about it: everyone who could read what
+/// it opened when it was opened, or before the change that opened it,
+/// whether or not they can read it now (DESIGN.md §8). It is named by its
+/// title only while they can.
 pub async fn about(db: &Db, viewer: &Viewer, access_id: i64) -> sqlx::Result<Option<About>> {
-    if viewer.user().is_none() {
+    let Some(user_id) = viewer.user_id() else {
         return Ok(None);
-    }
+    };
     let filter = viewer.filter();
     let Some(row) = sqlx::query!(
         r#"SELECT a.id, a.created_at, u.id AS actor_id, u.username::text AS "actor_username!",
                   u.display_name AS actor_name,
                   t.id AS "thread_id?", t.title AS "title?", t.slug AS "slug?",
                   t.space_id IS NULL AS "conversation?",
-                  c.slug::text AS "space_slug?", c.name AS "space_name?"
+                  (t.deleted_at IS NULL
+                   AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4)))
+                      AS "thread_readable?",
+                  tc.name AS "thread_space?",
+                  space_readable(tc.visibility, tc.id, $2, $3) AS "thread_space_readable?",
+                  c.slug::text AS "space_slug?", c.name AS "space_name?",
+                  space_readable(c.visibility, c.id, $2, $3) AS "space_readable?"
            FROM staff_access a
            JOIN users u ON u.id = a.actor_id
            LEFT JOIN threads t ON t.id = a.thread_id
+           LEFT JOIN spaces tc ON tc.id = t.space_id
            LEFT JOIN spaces c ON c.id = a.space_id
-           WHERE a.id = $1 AND staff_access_readable(a.id, $2, $3, $4, $5)"#,
+           WHERE a.id = $1
+             AND EXISTS (SELECT 1 FROM notifications n
+                         WHERE n.staff_access_id = a.id AND n.user_id = $6)"#,
         access_id,
         &filter.visibilities,
         &filter.restricted_space_ids,
         filter.dm_viewer,
         &filter.group_ids,
+        user_id,
     )
     .fetch_optional(db.pool())
     .await?
     else {
         return Ok(None);
     };
-    let (what, title, href) = match (row.thread_id, row.space_slug) {
+    let log = "/settings/access".to_owned();
+    let thread_readable = row.thread_readable == Some(true);
+    let (what, title, place, href) = match (row.thread_id, row.space_slug) {
         (Some(id), _) if row.conversation == Some(true) => (
             What::Conversation,
-            row.title.unwrap_or_default(),
-            format!("/messages/{id}"),
+            thread_readable.then(|| row.title.unwrap_or_default()),
+            None,
+            if thread_readable {
+                format!("/messages/{id}")
+            } else {
+                log
+            },
         ),
-        (Some(id), _) => (
+        (Some(id), _) if thread_readable => (
             What::Thread,
-            row.title.unwrap_or_default(),
+            row.title,
+            None,
             crate::format::thread_href(&id, &row.slug.unwrap_or_default()),
         ),
-        (None, Some(slug)) => (
-            What::Space,
-            row.space_name.unwrap_or_default(),
-            format!("/c/{slug}"),
+        (Some(_), _) => (
+            What::Thread,
+            None,
+            row.thread_space
+                .filter(|_| row.thread_space_readable == Some(true)),
+            log,
         ),
+        (None, Some(slug)) if row.space_readable == Some(true) => {
+            (What::Space, row.space_name, None, format!("/c/{slug}"))
+        }
+        (None, Some(_)) => (What::Space, None, None, log),
         (None, None) => return Ok(None),
     };
     Ok(Some(About {
@@ -201,6 +248,7 @@ pub async fn about(db: &Db, viewer: &Viewer, access_id: i64) -> sqlx::Result<Opt
         },
         what,
         title,
+        place,
         href,
         created_at: row.created_at,
     }))
@@ -212,11 +260,12 @@ pub struct Logged {
     pub id: i64,
     pub moderator: UserRef,
     pub what: What,
-    /// What it opened, after "the thread", "the conversation" or "the
-    /// space": its title or name where the viewer may know it, and
-    /// otherwise what it is and where ("№ 12 in Circle", "between 2
-    /// people").
-    pub label: String,
+    /// What it opened, as the log says it after "viewed": by its title or
+    /// name where the viewer reads it ("the thread “Brass”"), and otherwise
+    /// by what it is and where, as far as they may know that ("the thread
+    /// № 12 in Circle", "the conversation between 2 people", "a space you
+    /// could read").
+    pub object: String,
     pub href: Option<String>,
     pub reason: String,
     /// Whether a report led to it.
@@ -246,8 +295,9 @@ pub async fn log(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<Logged>> {
     logged(db, viewer, true).await
 }
 
-/// The grants on threads, conversations and spaces the viewer can read
-/// now, newest first (`/settings/access`).
+/// The grants the viewer was told about, newest first
+/// (`/settings/access`): each time a moderator looked at what they could
+/// read then, whether or not they can read it now (DESIGN.md §8).
 pub async fn affecting(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<Logged>> {
     if viewer.user().is_none() {
         return Ok(Vec::new());
@@ -257,15 +307,20 @@ pub async fn affecting(db: &Db, viewer: &Viewer) -> sqlx::Result<Vec<Logged>> {
 
 async fn logged(db: &Db, viewer: &Viewer, everything: bool) -> sqlx::Result<Vec<Logged>> {
     let filter = viewer.filter();
+    // Staff run every space, so know every space's name and the staff
+    // pages about each thread; anyone else only those they read.
+    let staff = viewer.is_staff();
     let rows = sqlx::query!(
         r#"SELECT a.id, a.reason, a.report_id IS NOT NULL AS "after_report!", a.created_at,
                   a.expires_at, u.id AS actor_id, u.username::text AS "actor_username!",
                   u.display_name AS actor_name,
                   t.id AS "thread_id?", t.title AS "title?", t.slug AS "slug?",
                   t.space_id IS NULL AS "conversation?",
-                  (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4))
+                  (t.deleted_at IS NULL
+                   AND (thread_readable(t, $2, $3, $4, $5) OR dm_readable(t.id, t.visibility, $4)))
                       AS "thread_readable?",
                   tc.name AS "thread_space?",
+                  space_readable(tc.visibility, tc.id, $2, $3) AS "thread_space_readable?",
                   (SELECT count(*) FROM private_thread_participants p
                    WHERE p.thread_id = t.id AND p.left_at IS NULL) AS "people!",
                   c.slug::text AS "space_slug?", c.name AS "space_name?",
@@ -276,7 +331,8 @@ async fn logged(db: &Db, viewer: &Viewer, everything: bool) -> sqlx::Result<Vec<
            LEFT JOIN threads t ON t.id = a.thread_id
            LEFT JOIN spaces tc ON tc.id = t.space_id
            LEFT JOIN spaces c ON c.id = a.space_id
-           WHERE $1 OR staff_access_readable(a.id, $2, $3, $4, $5)
+           WHERE $1 OR EXISTS (SELECT 1 FROM notifications n
+                               WHERE n.staff_access_id = a.id AND n.user_id = $7)
            ORDER BY a.id DESC
            LIMIT $6"#,
         everything,
@@ -285,23 +341,24 @@ async fn logged(db: &Db, viewer: &Viewer, everything: bool) -> sqlx::Result<Vec<
         filter.dm_viewer,
         &filter.group_ids,
         LOG_LIMIT,
+        viewer.user_id(),
     )
     .fetch_all(db.pool())
     .await?;
     Ok(rows
         .into_iter()
         .map(|row| {
-            let thread_live_and_readable = row.thread_readable == Some(true);
-            let (what, label, href) = match (row.thread_id, row.space_slug) {
+            let thread_readable = row.thread_readable == Some(true);
+            let (what, object, href) = match (row.thread_id, row.space_slug) {
                 (Some(id), _) if row.conversation == Some(true) => {
-                    if thread_live_and_readable {
+                    if thread_readable {
                         let title = row.title.unwrap_or_default();
                         (
                             What::Conversation,
                             if title.is_empty() {
-                                "(untitled)".to_owned()
+                                "the conversation (untitled)".to_owned()
                             } else {
-                                format!("“{title}”")
+                                format!("the conversation “{title}”")
                             },
                             Some(format!("/messages/{id}")),
                         )
@@ -309,43 +366,43 @@ async fn logged(db: &Db, viewer: &Viewer, everything: bool) -> sqlx::Result<Vec<
                         (
                             What::Conversation,
                             format!(
-                                "between {}",
+                                "the conversation between {}",
                                 crate::format::plural(row.people, "person", "people")
                             ),
                             None,
                         )
                     }
                 }
-                (Some(id), _) => {
-                    if thread_live_and_readable {
-                        (
-                            What::Thread,
-                            format!("“{}”", row.title.unwrap_or_default()),
-                            Some(crate::format::thread_href(
-                                &id,
-                                &row.slug.unwrap_or_default(),
-                            )),
-                        )
-                    } else {
-                        (
-                            What::Thread,
-                            match row.thread_space {
-                                Some(space) => format!("№ {id} in {space}"),
-                                None => format!("№ {id}"),
-                            },
-                            Some(format!("/mod/t/{id}")),
-                        )
-                    }
-                }
-                (None, Some(slug)) => (
-                    What::Space,
-                    row.space_name.unwrap_or_default(),
-                    Some(if row.space_readable == Some(true) {
-                        format!("/c/{slug}")
-                    } else {
-                        format!("/c/{slug}/settings")
-                    }),
+                (Some(id), _) if thread_readable => (
+                    What::Thread,
+                    format!("the thread “{}”", row.title.unwrap_or_default()),
+                    Some(crate::format::thread_href(
+                        &id,
+                        &row.slug.unwrap_or_default(),
+                    )),
                 ),
+                (Some(id), _) => (
+                    What::Thread,
+                    match row
+                        .thread_space
+                        .filter(|_| staff || row.thread_space_readable == Some(true))
+                    {
+                        Some(space) => format!("the thread № {id} in {space}"),
+                        None => format!("the thread № {id}"),
+                    },
+                    staff.then(|| format!("/mod/t/{id}")),
+                ),
+                (None, Some(slug)) if row.space_readable == Some(true) => (
+                    What::Space,
+                    format!("the space {}", row.space_name.unwrap_or_default()),
+                    Some(format!("/c/{slug}")),
+                ),
+                (None, Some(slug)) if staff => (
+                    What::Space,
+                    format!("the space {}", row.space_name.unwrap_or_default()),
+                    Some(format!("/c/{slug}/settings")),
+                ),
+                (None, Some(_)) => (What::Space, "a space you could read".to_owned(), None),
                 (None, None) => (What::Space, String::new(), None),
             };
             Logged {
@@ -356,7 +413,7 @@ async fn logged(db: &Db, viewer: &Viewer, everything: bool) -> sqlx::Result<Vec<
                     display_name: row.actor_name,
                 },
                 what,
-                label,
+                object,
                 href,
                 reason: row.reason,
                 after_report: row.after_report,

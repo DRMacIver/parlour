@@ -245,7 +245,7 @@ Moderators and admins read only what their own groups and lists let them read, l
 If one of them needs to read a private thread, space or conversation beyond that, to deal with a report \
 for instance, they have to say why. Everyone who can read it is told at once, by a notification and \
 an email, and its page says so from then on. The reason goes in a log that can't be changed, which \
-admins can read, and you can see every time it touched something you can read under \
+admins can read, and you can see every time it touched something you could read under \
 [Moderators who looked](/settings/access). How many times it has happened each month is shown on the \
 [moderation log](/moderation).
 
