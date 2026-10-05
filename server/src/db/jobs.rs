@@ -121,6 +121,35 @@ pub async fn enqueue_at<'c>(
     .await
 }
 
+/// Adds a job that is due `after` from now, by the database's clock, which
+/// is the one [`run_next`] goes by: an app server's clock may differ from
+/// it a little, enough to leave a job due "now" waiting.
+pub async fn enqueue_after<'c>(
+    db: impl Handle<'c>,
+    kind: &str,
+    payload: &Value,
+    after: chrono::Duration,
+) -> sqlx::Result<i64> {
+    let mut conn = db.open(KEY).acquire().await?;
+    sqlx::query_scalar!(
+        "INSERT INTO jobs (kind, payload, run_at)
+         VALUES ($1, $2, now() + make_interval(secs => $3)) RETURNING id",
+        kind,
+        payload,
+        after.as_seconds_f64(),
+    )
+    .fetch_one(&mut *conn)
+    .await
+}
+
+/// The time now by the database's clock, for comparing with times it has
+/// stored.
+pub async fn db_now(db: &crate::db::Db) -> sqlx::Result<DateTime<Utc>> {
+    sqlx::query_scalar!(r#"SELECT now() AS "now!""#)
+        .fetch_one(db.pool())
+        .await
+}
+
 /// Whether a job of this kind is waiting to run (or running).
 pub async fn has_pending(db: &crate::db::Db, kind: &str) -> sqlx::Result<bool> {
     sqlx::query_scalar!(

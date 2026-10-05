@@ -33,7 +33,7 @@ use std::collections::BTreeMap;
 use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::{Duration, Utc};
+use chrono::Duration;
 use serde_json::json;
 
 use crate::AppState;
@@ -171,11 +171,11 @@ async fn created(state: &AppState, user_id: i64, notification_id: i64) -> sqlx::
     let delay = settings::notification_settings(state.db())
         .await?
         .email_delay_minutes;
-    jobs::enqueue_at(
+    jobs::enqueue_after(
         state.db(),
         EMAIL_JOB,
         &json!({ "notification_id": notification_id }),
-        Some(Utc::now() + Duration::minutes(i64::from(delay))),
+        Duration::minutes(i64::from(delay)),
     )
     .await?;
     state.jobs().wake();
@@ -302,7 +302,8 @@ pub async fn email_if_away(state: &AppState, id: i64) -> anyhow::Result<bool> {
     let delay = settings::notification_settings(db)
         .await?
         .email_delay_minutes;
-    let cutoff = Utc::now() - Duration::minutes(i64::from(delay));
+    // By the database's clock, which made the notification's time.
+    let cutoff = jobs::db_now(db).await? - Duration::minutes(i64::from(delay));
     // A notice that a moderator broke glass is emailed at once (DESIGN.md
     // §9); anything else waits for the delay.
     if pending.created_at > cutoff && pending.kind != Kind::StaffAccess {

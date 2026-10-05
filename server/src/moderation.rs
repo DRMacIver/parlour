@@ -2478,13 +2478,7 @@ pub async fn run_forget_ips(state: AppState, _payload: serde_json::Value) -> any
     let forgotten =
         mod_records::forget_old_ips(state.db(), i32::try_from(days).unwrap_or(i32::MAX)).await?;
     tracing::info!(forgotten, "forgot old addresses");
-    crate::jobs::enqueue_at(
-        state.db(),
-        FORGET_IPS_JOB,
-        &json!({}),
-        Some(Utc::now() + Duration::days(1)),
-    )
-    .await?;
+    crate::jobs::enqueue_after(state.db(), FORGET_IPS_JOB, &json!({}), Duration::days(1)).await?;
     Ok(())
 }
 

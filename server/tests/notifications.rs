@@ -1511,3 +1511,26 @@ async fn shutting_down_ends_open_streams(pool: PgPool) {
         assert!(String::from_utf8_lossy(&rest).ends_with("0\r\n\r\n"));
     }
 }
+
+/// With no delay, a notification's email is due as soon as it is made, by
+/// the database's clock, which the job runner goes by: an app server whose
+/// clock runs a little ahead of the database's doesn't leave it waiting.
+#[sqlx::test]
+async fn emails_with_no_delay_are_due_at_once(pool: PgPool) {
+    let s = setup(pool).await;
+    let (thread, _) = new_thread(&s.f, &s.ruth_cookie, "games", "Brass", "Hi").await;
+    for sent in 1..=30 {
+        let post =
+            s.f.post(thread, s.jonah, &format!("@ruth number {sent}"))
+                .await;
+        parlour::notify::post_created(&s.f.state, post)
+            .await
+            .unwrap();
+        let emails = s.f.emails().await;
+        assert_eq!(
+            emails.iter().filter(|e| e.to == "ruth@example.com").count(),
+            sent,
+            "{emails:?}"
+        );
+    }
+}
