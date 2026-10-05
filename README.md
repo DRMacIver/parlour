@@ -9,8 +9,9 @@ Anonymous visitors are served from an in-memory cache and never get a
 cookie.
 
 The design, and the decisions behind it, are in [DESIGN.md](DESIGN.md).
-This README is about running Parlour locally for development. Deployment
-(the production image, compose file, Caddy and backups) is not covered yet.
+This README is about running Parlour locally for development. To run a
+forum for real (the image, `deploy/compose.yaml` with Caddy and nightly
+backups, upgrades and restoring), see [docs/admin-guide.md](docs/admin-guide.md).
 
 ## Repository layout
 
@@ -24,6 +25,9 @@ server/    The Rust crate (axum, sqlx with Postgres, askama templates)
 web/       The JavaScript islands: Vite + React + TypeScript
 e2e/       Playwright browser tests
 dev/       compose.yaml for the development services
+deploy/    compose.yaml, Caddyfile, .env.example and the backup script, for
+           running a forum (docs/admin-guide.md); the image is ./Dockerfile
+docs/      the admin guide, and the decisions made while building
 design/    UI mockups
 research/  background research
 ```

@@ -1,0 +1,6 @@
+# Caddy in front of Parlour (DESIGN.md §10): HTTPS with certificates it
+# fetches and renews itself, for the domain in .env.
+{$PARLOUR_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy parlour:8080
+}

@@ -1,0 +1,119 @@
+# Parlour in production (DESIGN.md §10): the server, Postgres, Caddy for
+# HTTPS, and nightly backups. See docs/admin-guide.md.
+#
+#   cp .env.example .env    # then set PARLOUR_DOMAIN and POSTGRES_PASSWORD
+#   docker compose up -d --build
+#   docker compose logs parlour    # the one-time /setup link
+#
+# Every start of the stack takes a dump of the database first
+# (`pre-migration-dump`), and only then does Parlour start and run any
+# migrations a new version brings.
+
+name: parlour
+
+services:
+  parlour:
+    build:
+      context: ..
+    image: parlour:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pre-migration-dump:
+        condition: service_completed_successfully
+    environment:
+      # Parlour connects as `parlour`, which owns its database and is not
+      # a superuser (deploy/initdb makes it).
+      DATABASE_URL: "postgres://parlour:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/parlour?sslmode=disable"
+      PARLOUR_DOMAIN: "${PARLOUR_DOMAIN:?set PARLOUR_DOMAIN in .env}"
+      # Caddy, in front, says who is asking.
+      PARLOUR_TRUST_PROXY: "true"
+      PARLOUR_SMTP_HOST: "${PARLOUR_SMTP_HOST:-}"
+      PARLOUR_SMTP_PORT: "${PARLOUR_SMTP_PORT:-}"
+      PARLOUR_SMTP_SECURITY: "${PARLOUR_SMTP_SECURITY:-}"
+      PARLOUR_SMTP_USERNAME: "${PARLOUR_SMTP_USERNAME:-}"
+      PARLOUR_SMTP_PASSWORD: "${PARLOUR_SMTP_PASSWORD:-}"
+      PARLOUR_MAIL_FROM: "${PARLOUR_MAIL_FROM:-}"
+    volumes:
+      - uploads:/data/uploads
+
+  postgres:
+    # The major version is pinned: upgrading it means moving the data
+    # (docs/admin-guide.md), which a new image won't do by itself.
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres:/var/lib/postgresql
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # Over TCP: while it first sets itself up, Postgres listens only on
+      # its socket, so this waits until it has really started.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "parlour"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # A dump of the database before Parlour starts, so that whatever a new
+  # version's migrations do can be undone by restoring it. Runs once each
+  # time the stack is brought up, and keeps the last few.
+  pre-migration-dump:
+    image: postgres:18
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/backup.sh", "pre-migration"]
+    environment: &backup-env
+      PGHOST: postgres
+      PGUSER: parlour
+      PGDATABASE: parlour
+      PGPASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      BACKUP_KEEP_DAYS: "${BACKUP_KEEP_DAYS:-14}"
+      BACKUP_KEEP_PRE_MIGRATION: "${BACKUP_KEEP_PRE_MIGRATION:-5}"
+    volumes:
+      - backups:/backups
+      - ./backup.sh:/backup.sh:ro
+
+  # Nightly: the database and the uploads, kept for BACKUP_KEEP_DAYS days.
+  backup:
+    image: postgres:18
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/backup.sh", "nightly"]
+    environment:
+      <<: *backup-env
+      BACKUP_AT: "${BACKUP_AT:-03:30}"
+    volumes:
+      - backups:/backups
+      - uploads:/data/uploads:ro
+      - ./backup.sh:/backup.sh:ro
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - parlour
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      PARLOUR_DOMAIN: "${PARLOUR_DOMAIN:?set PARLOUR_DOMAIN in .env}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  postgres:
+  uploads:
+  backups:
+  caddy-data:
+  caddy-config:

@@ -41,7 +41,7 @@ These are informational. Change DESIGN.md if you agree, or ask for them to be re
 
 ## Known gaps, deliberately left out
 
-- Deployment: production Dockerfile, `deploy/` compose and Caddyfile, backups, the pre-migration dump (DESIGN §10), admin docs, and building `DATABASE_URL` from `POSTGRES_PASSWORD`.
+- Deployment: production Dockerfile, `deploy/` compose and Caddyfile, backups, the pre-migration dump (DESIGN §10), admin docs, and building `DATABASE_URL` from `POSTGRES_PASSWORD`. **Built in milestone 16** (`docs/v02-decisions.md` #158–#163, `docs/admin-guide.md`).
 - There's no admin view of failed or queued jobs, and no cleanup of unused uploads or old notifications.
 - The GitHub Actions CI file has never run (there's no remote).
 - Tests occasionally failed on a dev-Postgres connection error (`unknown message type: '\0'`). The cause was the dev port, 54329, being an ephemeral port: now fixed by moving to 25432 (docs/v02-decisions.md #125).

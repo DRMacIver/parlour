@@ -1807,6 +1807,48 @@ impl Seeder<'_> {
                 .collect();
             self.conversation_thread(general, title, 40, &lines).await?;
         }
+        // For the browser tests of a member's own feed and lists (DESIGN.md
+        // §3.2, §3.3): for each project, a member who opens their feed to
+        // their Friends list alone and posts in it, the friend they put on
+        // it, who has talked with them in General before (so that neither
+        // is new), and another member, new, who isn't on it.
+        let friends = [
+            (("abel", "Abel"), ("gail", "Gail"), ("nico", "Nico")),
+            (("beth", "Beth"), ("hugh", "Hugh"), ("opal", "Opal")),
+            (("cass", "Cass"), ("ivy", "Ivy"), ("pete", "Pete")),
+            (("drew", "Drew"), ("joel", "Joel"), ("rhea", "Rhea")),
+            (("eden", "Eden"), ("kai", "Kai"), ("saul", "Saul")),
+            (("finn", "Finn"), ("lena", "Lena"), ("tess", "Tess")),
+        ];
+        for ((owner, owner_name), (friend, friend_name), (other, other_name)) in friends {
+            let owner_id = self.extra_member(owner, owner_name, "sam", 150).await?;
+            let friend_id = self.extra_member(friend, friend_name, "sam", 150).await?;
+            self.extra_member(other, other_name, "sam", 20).await?;
+            let lines = [
+                "Has anyone tried writing up a session report after game night?",
+                "I keep meaning to. Where would you put it?",
+                "My feed, I think, for the people who were there.",
+                "Good idea. Nobody else wants the blow-by-blow.",
+                "Exactly. Who scored what, who flipped the table.",
+                "Nobody flipped the table.",
+                "Not yet.",
+                "Write it up and I’ll check your scores.",
+                "Deal.",
+                "And bring the scorepad next time.",
+            ];
+            let lines: Vec<(i64, &str)> = lines
+                .iter()
+                .enumerate()
+                .map(|(i, line)| (if i % 2 == 0 { owner_id } else { friend_id }, *line))
+                .collect();
+            self.conversation_thread(
+                general,
+                &format!("Session reports, {owner_name}?"),
+                30,
+                &lines,
+            )
+            .await?;
+        }
         for (username, name) in [
             ("ugo", "Ugo"),
             ("vera", "Vera"),

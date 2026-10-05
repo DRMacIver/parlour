@@ -1,0 +1,14 @@
+# Only what the image's build needs: the server's source, the islands'
+# source and their lockfile.
+.git
+design
+docs
+deploy
+dev
+e2e
+research
+server/target
+server/uploads
+web/node_modules
+web/dist
+**/.DS_Store
