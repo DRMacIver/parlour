@@ -20,7 +20,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 
-const postgres = process.env.E2E_POSTGRES_URL ?? "postgres://parlour:parlour@localhost:54329";
+const postgres = process.env.E2E_POSTGRES_URL ?? "postgres://parlour:parlour@localhost:25432";
 const port = Number(process.env.E2E_PORT ?? "18080");
 const setupPorts = [port + 1, port + 2];
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));

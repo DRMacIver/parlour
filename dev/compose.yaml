@@ -1,9 +1,17 @@
 # Development services for running the server and tests locally: Postgres,
 # and Mailpit, which catches the email the server sends.
 #   docker compose -f dev/compose.yaml up -d
-#   export DATABASE_URL="postgres://parlour:parlour@localhost:54329/parlour?sslmode=disable"
+#   export DATABASE_URL="postgres://parlour:parlour@localhost:25432/parlour?sslmode=disable"
 # (The server has no TLS; sslmode=disable avoids an intermittent "unexpected
 # response from SSLRequest" when sqlx tries TLS first.)
+#
+# Postgres's port is below 32768, outside every system's ephemeral port
+# range. A client given the server's own port as its ephemeral port connects
+# to itself instead (TCP's simultaneous open) and reads back what it sent,
+# which sqlx reports as "unknown message type: '\0'". Port 54329, which the
+# dev setup used before, is in that range on macOS and Linux and failed about
+# one connection in sixteen thousand; it is still published for scripts that
+# name it, but don't use it.
 #
 # To send email to Mailpit, also set
 #   PARLOUR_SMTP_HOST=localhost PARLOUR_SMTP_PORT=1025 PARLOUR_SMTP_SECURITY=none
@@ -17,6 +25,7 @@ services:
       POSTGRES_PASSWORD: parlour
       POSTGRES_DB: parlour
     ports:
+      - "127.0.0.1:25432:5432"
       - "127.0.0.1:54329:5432"
     volumes:
       - parlour-dev-pg:/var/lib/postgresql

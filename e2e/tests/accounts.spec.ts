@@ -115,7 +115,7 @@ test("an admin sees the site settings, members and reactions", async ({ page }) 
 const CHAIN_DEPTH = 24;
 
 async function addInviteChain() {
-  const postgres = process.env.E2E_POSTGRES_URL ?? "postgres://parlour:parlour@localhost:54329";
+  const postgres = process.env.E2E_POSTGRES_URL ?? "postgres://parlour:parlour@localhost:25432";
   const db = new pg.Client({ connectionString: `${postgres}/parlour_e2e` });
   await db.connect();
   try {

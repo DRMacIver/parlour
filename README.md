@@ -40,7 +40,7 @@ research/  background research
 
 ## Running it
 
-Start Postgres (on port 54329) and Mailpit (SMTP on 1025, web UI on
+Start Postgres (on port 25432) and Mailpit (SMTP on 1025, web UI on
 http://localhost:8025):
 
     docker compose -f dev/compose.yaml up -d
@@ -51,7 +51,7 @@ Build the islands once (and again whenever you change `web/`; see below):
 
 Then, in `server/`:
 
-    export DATABASE_URL="postgres://parlour:parlour@localhost:54329/parlour?sslmode=disable"
+    export DATABASE_URL="postgres://parlour:parlour@localhost:25432/parlour?sslmode=disable"
     cargo run -- seed      # fill the empty database with the sample forum
     cargo run              # serve it at http://localhost:8080
 
@@ -169,7 +169,7 @@ the hashed file names in Vite's manifest:
 Server tests run against the dev Postgres; each test gets a fresh database:
 
     cd server
-    export DATABASE_URL="postgres://parlour:parlour@localhost:54329/parlour?sslmode=disable"
+    export DATABASE_URL="postgres://parlour:parlour@localhost:25432/parlour?sslmode=disable"
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings
     cargo test

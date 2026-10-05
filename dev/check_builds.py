@@ -31,7 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SERVER = ROOT / "server"
 COMPOSE = ["docker", "compose", "-f", str(ROOT / "dev" / "compose.yaml")]
-SERVER_URL = os.environ.get("CHECK_POSTGRES", "postgres://parlour:parlour@localhost:54329")
+SERVER_URL = os.environ.get("CHECK_POSTGRES", "postgres://parlour:parlour@localhost:25432")
 
 
 def psql(sql: str, database: str = "parlour", stdin: str | None = None) -> None:
