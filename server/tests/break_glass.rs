@@ -2641,3 +2641,34 @@ async fn a_grant_opens_the_images_and_histories_in_what_it_opens(pool: PgPool) {
         StatusCode::NOT_FOUND
     );
 }
+
+/// A grant on a conversation opens its messages' permalinks as it does a
+/// thread's posts' (DESIGN.md §8), recording the view.
+#[sqlx::test]
+async fn a_grant_on_a_conversation_opens_its_permalinks(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    let path = format!("/p/{}", c.dm_post);
+    assert_status(
+        &f.get_as(&path, Some(&c.sam_cookie)).await,
+        StatusCode::NOT_FOUND,
+    );
+    ok(
+        f,
+        "/mod/break-glass",
+        &[
+            ("thread", &c.dm.to_string()),
+            ("glass_reason", "A report about a message"),
+        ],
+        &c.sam_cookie,
+    )
+    .await;
+    let access = count(f, "SELECT max(id) FROM staff_access").await;
+    let permalink = f.get_as(&path, Some(&c.sam_cookie)).await;
+    assert_status(&permalink, StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        permalink.location(),
+        format!("/messages/{}#p{}", c.dm, c.dm_post)
+    );
+    assert!(views(f).await.contains(&(access, path)));
+}

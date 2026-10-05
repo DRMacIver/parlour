@@ -1826,14 +1826,15 @@ impl World {
             }
         }
         // Who can take part in a thread: for members who can read it, and
-        // those who run its space (here, staff, where they read the space),
-        // whom it shows to without its title if it doesn't let them read
-        // it; visitors log in first.
+        // those who run its space (staff, where they read the space, and
+        // the member viewer where they moderate), whom it shows to without
+        // its title if it doesn't let them read it; visitors log in first.
         for (i, t) in self.threads.iter().enumerate() {
             let response = pages.get(&format!("/t/{}/audience", t.id));
             let expected = match who {
                 Who::Anonymous => StatusCode::SEE_OTHER,
                 Who::Staff if !t.deleted && self.space_readable(t.space, who) => StatusCode::OK,
+                Who::Member if !t.deleted && self.member_moderates_in(t.space) => StatusCode::OK,
                 _ if self.thread_readable(i, who) => StatusCode::OK,
                 _ => StatusCode::NOT_FOUND,
             };
@@ -2041,8 +2042,16 @@ impl World {
         }
         for m in &self.messages {
             let permalink = pages.get(&format!("/p/{}", m.id));
-            if !self.conversation_readable(m.conversation, who) {
-                assert_eq!(permalink.status, StatusCode::NOT_FOUND);
+            // Under a grant the moderator viewer follows a message's address
+            // as they would a post's (DESIGN.md §8).
+            let granted = who == Who::Staff && self.opened(Opened::Conversation(m.conversation));
+            if !self.conversation_readable(m.conversation, who) && !granted {
+                assert_eq!(
+                    permalink.status,
+                    StatusCode::NOT_FOUND,
+                    "{who:?} permalink of message {}",
+                    m.id
+                );
                 continue;
             }
             let c = &self.conversations[m.conversation];
