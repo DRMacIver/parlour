@@ -653,3 +653,186 @@ async fn staff_changing_a_space_run_by_staff_are_logged(pool: PgPool) {
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     assert_eq!(logged("archive_space").await, 1);
 }
+
+/// Deleting a space asks first, as deleting a front-page section or a
+/// group does, and then says it was done.
+#[sqlx::test]
+async fn deleting_a_space_asks_first(pool: PgPool) {
+    let s = setup(pool).await;
+    let games = s.f.space("boardgames", "members", None, 0).await;
+    s.f.set_grant(games, "administer", Grant::listed([], [s.ruth]))
+        .await;
+    let settings = s.f.page_as("/c/boardgames/settings", &s.ruth_cookie).await;
+    assert!(
+        settings.contains("<a class=\"button button-quiet\" href=\"/c/boardgames/delete\">"),
+        "{settings}"
+    );
+    assert!(
+        !settings.contains("action=\"/c/boardgames/delete\""),
+        "{settings}"
+    );
+    let page = s.f.page_as("/c/boardgames/delete", &s.ruth_cookie).await;
+    assert!(page.contains("Delete Boardgames?"), "{page}");
+    assert!(page.contains("action=\"/c/boardgames/delete\""), "{page}");
+    assert!(page.contains("href=\"/c/boardgames/settings\""), "{page}");
+    // Only those who run it are asked.
+    let response =
+        s.f.get_as("/c/boardgames/delete", Some(&s.jonah_cookie))
+            .await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    let response =
+        s.f.submit("/c/boardgames/delete", &[], Some(&s.ruth_cookie))
+            .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    assert_eq!(response.location(), "/spaces?deleted=1");
+    let page = s.f.page_as("/spaces?deleted=1", &s.ruth_cookie).await;
+    assert!(page.contains("The space was deleted."), "{page}");
+    // Visitors have nothing to be told, and keep one address.
+    let response = s.f.get("/spaces?deleted=1").await;
+    assert_eq!(response.status, StatusCode::PERMANENT_REDIRECT);
+    // A space with threads isn't offered.
+    let kept = s.f.space("kept", "members", None, 1).await;
+    s.f.thread(kept, s.ruth, "Here", "Yes").await;
+    let page = s.f.page_as("/c/kept/delete", &s.staff_cookie).await;
+    assert!(page.contains("can’t be deleted"), "{page}");
+    assert!(!page.contains("action=\"/c/kept/delete\""), "{page}");
+}
+
+/// Each page has one name: `/` is the front page and `/spaces` the space
+/// index, in the navigation, the breadcrumbs and what pages say about
+/// them.
+#[sqlx::test]
+async fn the_front_page_and_the_space_index_have_one_name_each(pool: PgPool) {
+    let s = setup(pool).await;
+    let games = s.f.space("games", "members", None, 0).await;
+    s.f.set_grant(games, "administer", Grant::listed([], [s.ruth]))
+        .await;
+    for path in ["/", "/spaces", "/c/games", "/c/games/settings", "/latest"] {
+        let page = s.f.page_as(path, &s.ruth_cookie).await;
+        assert!(!page.contains("Forum index"), "{path}: {page}");
+        assert!(!page.contains("forum index"), "{path}: {page}");
+        assert!(!page.contains("list of spaces"), "{path}: {page}");
+        assert!(page.contains(">Front page</a>"), "{path}: {page}");
+    }
+    let settings = s.f.page_as("/c/games/settings", &s.ruth_cookie).await;
+    assert!(!settings.contains("the index"), "{settings}");
+    assert!(settings.contains("the space index"), "{settings}");
+    let layout = s.f.page_as("/settings/layout", &s.ruth_cookie).await;
+    assert!(!layout.contains("list of spaces"), "{layout}");
+    let missing = s.f.get("/c/nowhere").await;
+    assert!(
+        missing.body.contains("Back to the front page"),
+        "{}",
+        missing.body
+    );
+}
+
+/// A space nobody runs any more, whose maker hasn't been on the site for
+/// 60 days, can be handed to a member by staff (DESIGN.md §3.1): its
+/// settings show staff that nobody runs it and when its maker was last
+/// seen, and offer to hand it on only once the 60 days have passed. The
+/// handing is logged, and the new administrator told.
+#[sqlx::test]
+async fn staff_hand_on_a_space_its_maker_left(pool: PgPool) {
+    let s = setup(pool).await;
+    let kit = s.f.member("kit", "user", None).await;
+    let jonah = s.f.user_id("jonah").await;
+    let games = s.f.space("games", "public", None, 0).await;
+    s.f.exec(&format!(
+        "UPDATE spaces SET created_by = {kit} WHERE id = {games};
+         UPDATE users SET last_seen_at = now() - interval '10 days' WHERE id = {kit}"
+    ))
+    .await;
+    // While someone runs it, there is nothing to hand on.
+    s.f.set_grant(games, "administer", Grant::listed([], [kit]))
+        .await;
+    let page = s.f.page_as("/c/games/settings", &s.staff_cookie).await;
+    assert!(!page.contains("Nobody runs this space"), "{page}");
+    let hand = |cookie: &str| {
+        let f = &s.f;
+        let cookie = cookie.to_owned();
+        async move {
+            f.submit(
+                "/c/games/hand",
+                &[
+                    ("username", "jonah"),
+                    ("reason", "Jonah asked to look after it"),
+                ],
+                Some(&cookie),
+            )
+            .await
+        }
+    };
+    let response = hand(&s.staff_cookie).await;
+    assert_eq!(
+        response.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        response.body
+    );
+    assert!(
+        response.body.contains("Someone runs this space already"),
+        "{}",
+        response.body
+    );
+    // Kit leaves it, ten days after last being seen: not yet.
+    s.f.set_grant(games, "administer", Grant::listed([], []))
+        .await;
+    let page = s.f.page_as("/c/games/settings", &s.staff_cookie).await;
+    assert!(page.contains("Nobody runs this space."), "{page}");
+    assert!(
+        page.contains("Kit, who made it, was last seen 10 days ago"),
+        "{page}"
+    );
+    assert!(page.contains("in 50 days"), "{page}");
+    assert!(!page.contains("action=\"/c/games/hand\""), "{page}");
+    let response = hand(&s.staff_cookie).await;
+    assert_eq!(
+        response.status,
+        StatusCode::BAD_REQUEST,
+        "{}",
+        response.body
+    );
+    // Members aren't offered it, and can't.
+    assert_eq!(hand(&s.ruth_cookie).await.status, StatusCode::FORBIDDEN);
+    // After 60 days away, it can be handed on.
+    s.f.exec(&format!(
+        "UPDATE users SET last_seen_at = now() - interval '61 days' WHERE id = {kit}"
+    ))
+    .await;
+    let page = s.f.page_as("/c/games/settings", &s.staff_cookie).await;
+    assert!(page.contains("was last seen 61 days ago"), "{page}");
+    assert!(page.contains("action=\"/c/games/hand\""), "{page}");
+    let response = hand(&s.staff_cookie).await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let administer: Vec<i64> = sqlx::query_scalar(
+        "SELECT user_ids FROM space_grants WHERE space_id = $1 AND verb = 'administer'",
+    )
+    .bind(games)
+    .fetch_one(&s.f.db)
+    .await
+    .unwrap();
+    assert_eq!(administer, vec![jonah]);
+    assert_eq!(
+        count(
+            &s.f,
+            &format!(
+                "SELECT count(*) FROM mod_actions WHERE action = 'hand_space' AND user_id = {jonah}"
+            )
+        )
+        .await,
+        1
+    );
+    let notes = s.f.page_as("/notifications", &s.jonah_cookie).await;
+    assert!(
+        notes.contains(
+            "A moderator handed you the space Games, which nobody ran any more: you run it now."
+        ),
+        "{notes}"
+    );
+    let log = s.f.page("/moderation").await;
+    assert!(log.contains("handed"), "{log}");
+    assert!(log.contains("Jonah asked to look after it"), "{log}");
+    // Jonah runs it now.
+    s.f.page_as("/c/games/settings", &s.jonah_cookie).await;
+}

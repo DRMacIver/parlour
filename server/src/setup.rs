@@ -84,7 +84,7 @@ async fn not_needed(state: &AppState, viewer: &Viewer) -> Result<Response, AppEr
         StatusCode::NOT_FOUND,
         "Already set up",
         &["This forum has an admin account already, so there is nothing to set up."],
-        Some(("/", "Go to the forum index")),
+        Some(("/", "Go to the front page")),
     )
     .await
 }

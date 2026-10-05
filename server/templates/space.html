@@ -2,7 +2,7 @@
 {%- import "_macros.html" as m -%}
 {% block title %}{{ space.space.name }} · {{ layout.site_name }}{% endblock %}
 {% block content %}
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <span aria-current="page">{{ space.space.name }}</span></nav>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Front page</a> › <span aria-current="page">{{ space.space.name }}</span></nav>
 <h1 class="page-title">{{ space.space.name }} {% call m::access_flag(space.read_level, space.group_names, space.list_names) %}{% endcall %}{% if space.archived %} <span class="flag">Archived</span>{% endif %}</h1>
 {% if let Some(owner) = space.owner %}<p class="thread-meta">{% if own_feed %}Your feed.{% else %}The feed of <a href="/u/{{ owner.username }}">{{ owner.display_name }}</a>.{% endif %}</p>{% endif %}
 {% if !space.description.is_empty() %}<p class="lede">{{ space.description }}</p>{% endif %}
@@ -23,7 +23,7 @@
   {% call m::pagination(pagination, "Pages") %}{% endcall %}
 </div>
 {% if threads.is_empty() %}
-<section class="panel"><p class="empty">No threads yet.{% if own_feed %} Your feed joins the list of spaces, and other members’ front pages, once you start one.{% endif %}</p></section>
+<section class="panel"><p class="empty">No threads yet.{% if own_feed %} Your feed joins the space index, and other members’ front pages, once you start one.{% endif %}</p></section>
 {% else %}
 {% include "_thread_table.html" %}
 {% endif %}

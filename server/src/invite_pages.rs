@@ -306,7 +306,7 @@ pub async fn redeem_page(
             StatusCode::OK,
             "Already a member",
             &[&text],
-            Some(("/", "Go to the forum index")),
+            Some(("/", "Go to the front page")),
         )
         .await;
     }

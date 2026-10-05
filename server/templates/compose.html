@@ -3,7 +3,7 @@
 {%- import "_forms.html" as f -%}
 {% block title %}{{ heading }} · {{ layout.site_name }}{% endblock %}
 {% block content %}
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a>{% for crumb in crumbs %} › <a href="{{ crumb.href }}">{{ crumb.label }}</a>{% endfor %}</nav>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Front page</a>{% for crumb in crumbs %} › <a href="{{ crumb.href }}">{{ crumb.label }}</a>{% endfor %}</nav>
 <h1 class="page-title">{{ heading }}</h1>
 {% call f::errors(errors) %}{% endcall %}
 {% if let Some(source) = source %}

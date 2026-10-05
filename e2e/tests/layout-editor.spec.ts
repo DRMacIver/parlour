@@ -105,7 +105,7 @@ test("a member arranges their own front page", async ({ page }) => {
   await page.goto("/");
   await page.locator("a", { hasText: "Arrange your front page" }).click();
   await expect(page.locator("h1")).toHaveText("Your front page");
-  await expect(page.locator(".toolbar-note")).toContainText("follows the default");
+  await expect(page.locator(".toolbar-note")).toContainText("is the default one for now");
   await editorReady(page);
   await expectFits(page);
 

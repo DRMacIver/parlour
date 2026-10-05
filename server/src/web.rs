@@ -225,7 +225,7 @@ pub async fn forbidden(state: &AppState, viewer: &Viewer) -> Result<Response, Ap
         StatusCode::FORBIDDEN,
         "Not allowed",
         &["You don’t have permission to do that."],
-        Some(("/", "Back to the forum index")),
+        Some(("/", "Back to the front page")),
     )
     .await
 }

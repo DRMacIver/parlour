@@ -29,16 +29,16 @@
 
 {% if admin %}
 <section class="panel" aria-labelledby="followers-heading">
-  <h2 class="panel-bar" id="followers-heading">Who follows it</h2>
+  <h2 class="panel-bar" id="followers-heading">Members using the default</h2>
   <div class="panel-text">
-    <p>{% if followers == 1 %}1 member hasn’t arranged their own front page, and follows this one.{% else %}{{ followers }} members haven’t arranged their own front page, and follow this one.{% endif %} Each change here reaches them as it is made, less any space they have muted. Applying it again also puts back the spaces they have unmuted since.</p>
+    <p>{% if followers == 1 %}1 member hasn’t arranged their own front page, so it is this one.{% else %}{{ followers }} members haven’t arranged their own front page, so it is this one.{% endif %} Each change here reaches them as it is made, less any space they have muted. Applying it again also puts back the spaces they have unmuted since.</p>
     <form class="form-inline" method="post" action="/admin/layout/apply"><button class="button button-small" type="submit">Apply to members who haven’t edited theirs</button></form>
   </div>
 </section>
 {% else if arrangement.edited %}
 <p class="toolbar-note">You have arranged your front page yourself, so changes to the default front page don’t reach it.</p>
 {% else %}
-<p class="toolbar-note">Your front page follows the default for now: when the admins change the default, yours changes with it. Once you change anything here it is yours, and stays as you leave it.</p>
+<p class="toolbar-note">Your front page is the default one for now: when the admins change the default, yours changes with it. Once you change anything here it is yours, and stays as you leave it.</p>
 {% endif %}
 
 <div class="layout-editor"{% if props.is_some() %} data-island="layout-editor"{% endif %}>
@@ -131,9 +131,9 @@
 <section class="panel" aria-labelledby="muted-heading">
   <h2 class="panel-bar" id="muted-heading">Muted spaces</h2>
   {% if arrangement.muted.is_empty() %}
-  <p class="empty">You haven’t muted any spaces. Muting a space, from its page, leaves it out of your front page, Latest, the list of spaces and search.</p>
+  <p class="empty">You haven’t muted any spaces. Muting a space, from its page, leaves it out of your front page, Latest, the space index and search.</p>
   {% else %}
-  <p class="panel-text">These are left out of your front page, Latest, the list of spaces and search. Their pages still work, and you can still post in them.</p>
+  <p class="panel-text">These are left out of your front page, Latest, the space index and search. Their pages still work, and you can still post in them.</p>
   <ul class="member-list layout-spaces">
   {% for space in arrangement.muted %}
     <li>

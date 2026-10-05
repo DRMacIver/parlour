@@ -518,6 +518,7 @@ fn describe(row: Row, staff: bool, bare: bool) -> LogEntry {
             }
         }
         "edit_space"
+        | "hand_space"
         | "archive_space"
         | "unarchive_space"
         | "delete_space"
@@ -526,6 +527,7 @@ fn describe(row: Row, staff: bool, bare: bool) -> LogEntry {
             // What was done to the space, before and after its name.
             let (before, after) = match row.action.as_str() {
                 "edit_space" => ("changed the settings of ", ""),
+                "hand_space" => ("handed ", " to "),
                 "archive_space" => ("archived ", ""),
                 "unarchive_space" => ("opened again ", ""),
                 "mark_space_essential" => ("made ", " essential"),
@@ -544,6 +546,9 @@ fn describe(row: Row, staff: bool, bare: bool) -> LogEntry {
             let mut bits = vec![text(before), space];
             if !after.is_empty() {
                 bits.push(text(after));
+            }
+            if row.action == "hand_space" {
+                bits.push(who());
             }
             bits
         }

@@ -2,7 +2,7 @@
 {%- import "_macros.html" as m -%}
 {% block title %}{% if !self.is_all() %}{{ self.heading() }} · {% endif %}Latest · {{ layout.site_name }}{% endblock %}
 {% block content %}
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › {% if self.is_all() %}<span aria-current="page">Latest</span>{% else %}<a href="/latest">Latest</a> › <span aria-current="page">{{ self.heading() }}</span>{% endif %}</nav>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Front page</a> › {% if self.is_all() %}<span aria-current="page">Latest</span>{% else %}<a href="/latest">Latest</a> › <span aria-current="page">{{ self.heading() }}</span>{% endif %}</nav>
 <h1 class="page-title">{{ self.heading() }}</h1>
 <nav class="tabs" aria-label="Which threads">
   {% for tab in tabs %}<a href="{{ tab.href }}"{% if tab.current %} aria-current="page"{% endif %}>{{ tab.label }}</a>{% endfor %}

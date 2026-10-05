@@ -33,7 +33,7 @@ test("a member finds their own feed and where to post in it", async ({ page }) =
   await page.locator(`.details a[href='/c/${me}']`).click();
   await expect(page).toHaveURL(new RegExp(`/c/${me}$`));
   await expect(page.locator(".thread-meta")).toHaveText("Your feed.");
-  await expect(page.locator(".empty")).toContainText("Your feed joins the list of spaces");
+  await expect(page.locator(".empty")).toContainText("Your feed joins the space index");
   await expect(page.locator(`a[href='/c/${me}/new']`)).toBeVisible();
   await expectFits(page);
 

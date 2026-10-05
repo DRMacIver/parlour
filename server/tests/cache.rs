@@ -531,8 +531,8 @@ async fn removing_a_post_clears_pages_that_show_it(pool: PgPool) {
         .await;
     // The last visible post is now Ruth's.
     let row = s.f.page("/c/games").await;
-    assert!(!row.contains("by Jonah <a"), "{row}");
-    assert!(row.contains("by Ruth <a"), "{row}");
+    assert!(!row.contains(">Jonah</a> <a"), "{row}");
+    assert!(row.contains(">Ruth</a> <a"), "{row}");
 }
 
 #[sqlx::test]

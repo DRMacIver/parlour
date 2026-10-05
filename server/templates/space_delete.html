@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Delete {{ space.space.name }} · {{ layout.site_name }}{% endblock %}
+{% block content %}
+<div class="narrow">
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Front page</a> › <a href="/c/{{ space.space.slug }}">{{ space.space.name }}</a> › <a href="/c/{{ space.space.slug }}/settings">Settings</a></nav>
+<h1 class="page-title">Delete {{ space.space.name }}?</h1>
+{% if space.is_feed() %}
+<p>A feed can’t be deleted: every member has one. Archive it instead to close it to new posts.</p>
+<p class="form-actions form-actions-page"><a href="/c/{{ space.space.slug }}/settings">Back to its settings</a></p>
+{% else if thread_count > 0 %}
+<p>{{ space.space.name }} has {{ crate::format::plural(thread_count, "thread", "threads") }}, so it can’t be deleted. Archive it instead, or have its threads moved elsewhere first.</p>
+<p class="form-actions form-actions-page"><a href="/c/{{ space.space.slug }}/settings">Back to its settings</a></p>
+{% else %}
+<p>The space goes for good, with its settings and its place on every front page. Its address, /c/{{ space.space.slug }}, is free for another space to take. This can’t be undone.</p>
+<form class="form-actions form-actions-page" method="post" action="/c/{{ space.space.slug }}/delete">
+  <button class="button" type="submit">Delete the space</button>
+  <a href="/c/{{ space.space.slug }}/settings">Keep it</a>
+</form>
+{% endif %}
+</div>
+{% endblock %}

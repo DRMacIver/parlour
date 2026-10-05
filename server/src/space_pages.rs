@@ -107,6 +107,8 @@ struct SpacesTemplate {
     /// worth offering.
     has_mutes: bool,
     can_create: bool,
+    /// What was just done, after deleting a space.
+    notice: Option<&'static str>,
 }
 
 impl SpacesTemplate {
@@ -179,11 +181,16 @@ pub async fn index(
             .any(|(key, value)| key == name && value == "1")
     };
     let archived = flag("archived");
-    // Visitors have nothing muted, so for them this is no view at all.
+    // Visitors have nothing muted, so for them this is no view at all; nor
+    // have they deleted anything.
     let muted = flag("muted") && viewer.user().is_some();
-    if let Some(redirect) =
-        redirect_unless_canonical(&uri, &index_href(sort, kinds, archived, muted))
-    {
+    let deleted = flag("deleted") && viewer.user().is_some();
+    let mut canonical = index_href(sort, kinds, archived, muted);
+    if deleted {
+        canonical.push(if canonical.contains('?') { '&' } else { '?' });
+        canonical.push_str("deleted=1");
+    }
+    if let Some(redirect) = redirect_unless_canonical(&uri, &canonical) {
         return Ok(redirect);
     }
     let mut deps = Deps::new();
@@ -203,6 +210,7 @@ pub async fn index(
             muted,
             has_mutes,
             can_create: may_create(&state, &viewer).await?,
+            notice: deleted.then_some("The space was deleted."),
         },
         &deps,
     )
@@ -651,6 +659,20 @@ struct SettingsTemplate {
     /// Whether the viewer runs it as staff without being able to read it,
     /// so may break glass on it from here (DESIGN.md §8).
     closed: bool,
+    /// For staff, whether nobody runs it, and when its maker was last seen
+    /// (DESIGN.md §3.1).
+    unrun: Option<content::Unrun>,
+    /// The handing-on form's fields, if refused.
+    hand: HandForm,
+}
+
+/// The form for handing on a space nobody runs.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct HandForm {
+    #[serde(default)]
+    username: String,
+    #[serde(default)]
+    reason: String,
 }
 
 impl SettingsTemplate {
@@ -674,9 +696,36 @@ impl SettingsTemplate {
         }
     }
 
+    /// What the settings say to staff about a space nobody runs.
+    fn unrun_note(&self) -> String {
+        let Some(unrun) = &self.unrun else {
+            return String::new();
+        };
+        let maker = match (&unrun.maker, unrun.days_away()) {
+            (Some(maker), Some(days)) => format!(
+                "{}, who made it, was last seen {} ago",
+                maker.display_name,
+                crate::format::plural(days, "day", "days")
+            ),
+            _ => "Whoever made it has left the site".to_owned(),
+        };
+        if unrun.claimable() {
+            format!(
+                "{maker}, so a member who asks to run it can be handed it here. Make sure they can read it."
+            )
+        } else {
+            let wait = content::CLAIM_DAYS - unrun.days_away().unwrap_or_default();
+            format!(
+                "{maker}. A member who asks to run it can be handed it once its maker has been away for {} days, in {}.",
+                content::CLAIM_DAYS,
+                crate::format::plural(wait, "day", "days")
+            )
+        }
+    }
+
     /// What a feed's form says about who runs it.
     fn feed_runner_hint(&self, owner: &FeedOwner) -> String {
-        let also = "Others named here change these settings, pin and lock threads, and can archive it, as moderators and admins always can.";
+        let also = "Others named here change these settings, pin, lock, rename and delete its threads, hide posts in it, and can archive it, as moderators and admins always can.";
         if self.own_feed {
             format!("You always run your feed. {also}")
         } else {
@@ -766,11 +815,37 @@ async fn render_settings(
     notice: Option<&'static str>,
     errors: Vec<String>,
 ) -> Result<Response, AppError> {
+    render_settings_with(
+        state,
+        viewer,
+        status,
+        space,
+        form,
+        notice,
+        errors,
+        HandForm::default(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn render_settings_with(
+    state: &AppState,
+    viewer: &Viewer,
+    status: StatusCode,
+    space: SpaceTarget,
+    form: SettingsForm,
+    notice: Option<&'static str>,
+    errors: Vec<String>,
+    hand: HandForm,
+) -> Result<Response, AppError> {
     let db = state.db();
     render(
         status,
         &SettingsTemplate {
             layout: Layout::load(state, viewer, Nav::None).await?,
+            unrun: content::unrun_space(db, viewer, space.space.id).await?,
+            hand,
             thread_count: content::space_thread_count(db, viewer, space.space.id).await?,
             sections: default_sections(state).await?,
             groups: choosable(state, viewer, &space).await?,
@@ -804,6 +879,7 @@ pub async fn settings_page(
             "The space is ready. To start with, any member can read it, reply and start threads; change that here.",
         ),
         "saved" => Some("Saved."),
+        "handed" => Some("Handed on: they run it now."),
         _ => None,
     };
     let form = SettingsForm::from_space(&state, &space).await?;
@@ -1086,6 +1162,149 @@ pub async fn unarchive(
     set_archived(&state, &viewer, &slug, false).await
 }
 
+/// `POST /c/{slug}/hand`: staff hand a topic space nobody runs, whose
+/// maker has been away for [`content::CLAIM_DAYS`] days, to a member who
+/// asked to run it (DESIGN.md §3.1). It is logged, and they are told.
+pub async fn hand(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(slug): Path<String>,
+    Form(hand): Form<HandForm>,
+) -> Result<Response, AppError> {
+    let space = match administered(&state, &viewer, &slug).await? {
+        Ok(space) => space,
+        Err(response) => return Ok(response),
+    };
+    let Some(user) = viewer.user().filter(|_| viewer.is_staff()) else {
+        return web::forbidden(&state, &viewer).await;
+    };
+    let db = state.db();
+    let reason = crate::moderation::clean_line(&hand.reason);
+    let mut problems = Vec::new();
+    match content::unrun_space(db, &viewer, space.space.id).await? {
+        None => problems.push(
+            "Someone runs this space already. Change who runs it in the settings above instead."
+                .to_owned(),
+        ),
+        Some(unrun) if !unrun.claimable() => problems.push(format!(
+            "Its maker hasn’t been away for {} days yet.",
+            content::CLAIM_DAYS
+        )),
+        Some(_) => {}
+    }
+    let found = users::by_usernames(db, &[hand.username.trim().to_owned()]).await?;
+    let member = match found.first() {
+        None => {
+            problems.push(format!(
+                "There is no member called {}.",
+                hand.username.trim()
+            ));
+            None
+        }
+        Some(found) => crate::sessions::user_ctx(db, found.id).await?,
+    };
+    if let Some(member) = &member
+        && (member.is_suspended() || !user_can_read(member, &space.rules.read.audience()))
+    {
+        problems.push(format!(
+            "{} can’t read this space, so couldn’t run it.",
+            member.display_name
+        ));
+    }
+    crate::moderation::check_reason(&reason, &mut problems);
+    let member = match member {
+        Some(member) if problems.is_empty() => member,
+        _ => {
+            let form = SettingsForm::from_space(&state, &space).await?;
+            return render_settings_with(
+                &state,
+                &viewer,
+                StatusCode::BAD_REQUEST,
+                space,
+                form,
+                None,
+                problems,
+                hand,
+            )
+            .await;
+        }
+    };
+    store::set_grant(
+        db,
+        space.space.id,
+        "administer",
+        &Grant::listed([], [member.id]),
+    )
+    .await?;
+    let action_id = mod_records::record(
+        db,
+        &NewAction {
+            actor_id: user.id,
+            action: "hand_space",
+            target_kind: "space",
+            target_id: space.space.id,
+            user_id: Some(member.id),
+            thread_id: None,
+            post_id: None,
+            reason: &reason,
+            public: space.visibility == "public",
+            details: json!({ "slug": space.space.slug, "name": space.space.name }),
+        },
+    )
+    .await?;
+    crate::notify::moderation(
+        &state,
+        member.id,
+        Some(user.id),
+        &format!(
+            "A moderator handed you the space {}, which nobody ran any more: you run it now.",
+            space.space.name
+        ),
+        Some(action_id),
+    )
+    .await?;
+    state.changed(Change::ModLogged).await?;
+    state
+        .changed(Change::SpaceChanged {
+            space_id: space.space.id,
+        })
+        .await?;
+    Ok(see_other(&format!(
+        "/c/{}/settings?done=handed",
+        space.space.slug
+    )))
+}
+
+#[derive(Template)]
+#[template(path = "space_delete.html")]
+struct DeleteTemplate {
+    layout: Layout,
+    space: SpaceTarget,
+    /// How many threads it has ever had: only one with none can be deleted.
+    thread_count: i64,
+}
+
+/// `GET /c/{slug}/delete`: asks those who run the space whether to delete
+/// it, as deleting a section or a group does.
+pub async fn delete_page(
+    State(state): State<AppState>,
+    viewer: Viewer,
+    Path(slug): Path<String>,
+) -> Result<Response, AppError> {
+    let space = match administered(&state, &viewer, &slug).await? {
+        Ok(space) => space,
+        Err(response) => return Ok(response),
+    };
+    render(
+        StatusCode::OK,
+        &DeleteTemplate {
+            layout: Layout::load(&state, &viewer, Nav::None).await?,
+            thread_count: content::space_thread_count(state.db(), &viewer, space.space.id).await?,
+            space,
+        },
+    )
+}
+
 pub async fn delete(
     State(state): State<AppState>,
     viewer: Viewer,
@@ -1103,7 +1322,7 @@ pub async fn delete(
                     space_id: space.space.id,
                 })
                 .await?;
-            Ok(see_other("/spaces"))
+            Ok(see_other("/spaces?deleted=1"))
         }
         Ok(false) => web::not_found(&state, &viewer).await,
         Err(why) => {

@@ -1016,3 +1016,29 @@ async fn last_post_time_and_author_come_from_the_same_post(pool: PgPool) {
         assert!(!page.contains(&removed), "{path} shows {removed}");
     }
 }
+
+/// A post's author, in a thread and in thread lists, leads to their
+/// profile, where their feed, "Send a message" and "Report…" are, as a
+/// conversation's messages already do.
+#[sqlx::test]
+async fn authors_lead_to_their_profiles(pool: PgPool) {
+    let f = Forum::new(pool);
+    let ruth = f.user("ruth").await;
+    let jonah = f.user("jonah").await;
+    let games = f.space("games", "public", None, 0).await;
+    let t = f.thread(games, ruth, "Spirit Island", "First").await;
+    let reply = f.post(t.thread_id, jonah, "Second").await;
+    let page = f.page(&format!("/t/{}/spirit-island", t.thread_id)).await;
+    for (post, who) in [(t.first_post_id, "ruth"), (reply, "jonah")] {
+        let html = post_html(&page, post);
+        assert!(
+            html.contains(&format!("class=\"author-name\" href=\"/u/{who}\"")),
+            "{html}"
+        );
+    }
+    for path in ["/c/games", "/latest"] {
+        let page = f.page(path).await;
+        assert!(page.contains("by <a href=\"/u/ruth\">Ruth</a>"), "{page}");
+        assert!(page.contains("by <a href=\"/u/jonah\">Jonah</a>"), "{page}");
+    }
+}

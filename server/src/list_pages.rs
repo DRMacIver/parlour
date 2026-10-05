@@ -197,6 +197,8 @@ struct ListTemplate {
     named_in: i64,
     /// How many threads' own restrictions name it (DESIGN.md §3.4).
     threads_naming: i64,
+    /// The threads the viewer can read whose restriction names it.
+    threads: Vec<content::ThreadRef>,
     /// The name and username typed into the forms, if refused.
     name: String,
     username: String,
@@ -229,6 +231,39 @@ impl ListTemplate {
         } else {
             0
         }
+    }
+
+    /// For its owner, how many threads they can't read name the list.
+    fn unreadable_threads(&self) -> i64 {
+        if self.list.yours {
+            self.threads_naming - self.threads.len() as i64
+        } else {
+            0
+        }
+    }
+
+    fn unreadable_threads_note(&self) -> String {
+        let too = if self.spaces.is_empty() && self.threads.is_empty() {
+            ""
+        } else {
+            " too"
+        };
+        match self.unreadable_threads() {
+            1 => format!(
+                "A thread you can’t read names it{too}. Its author and the people who run its space can change who may take part in it."
+            ),
+            n => format!(
+                "{n} threads you can’t read name it{too}. Their authors and the people who run their spaces can change who may take part in them."
+            ),
+        }
+    }
+
+    /// Whether the panel lists nothing at all.
+    fn named_nowhere_shown(&self) -> bool {
+        self.spaces.is_empty()
+            && self.threads.is_empty()
+            && self.unreadable_spaces() == 0
+            && self.unreadable_threads() == 0
     }
 
     fn unreadable_note(&self) -> String {
@@ -268,6 +303,7 @@ async fn render_list(
             spaces: content::spaces_naming(db, viewer, list.id).await?,
             named_in: lists::spaces_naming(db, list.id).await?,
             threads_naming: lists::threads_naming(db, list.id).await?,
+            threads: content::threads_naming(db, viewer, list.id).await?,
             notice: outcome.notice,
             errors: outcome.errors,
             name: outcome.name.unwrap_or_else(|| list.name.clone()),

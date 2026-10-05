@@ -2,7 +2,7 @@
 {% block title %}Who can take part in {{ audience.space.name }} · {{ layout.site_name }}{% endblock %}
 {% block content %}
 <div class="narrow">
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/c/{{ audience.space.slug }}">{{ audience.space.name }}</a> › <span aria-current="page">Who can take part</span></nav>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Front page</a> › <a href="/c/{{ audience.space.slug }}">{{ audience.space.name }}</a> › <span aria-current="page">Who can take part</span></nav>
 <h1 class="page-title">Who can take part in {{ audience.space.name }}</h1>
 <p class="lede">Replying and starting threads also need permission to read. A list is named only to the person who made it and the people on it; anyone else sees whose choice it is.</p>
 {% if audience.archived %}<div class="notice" role="status"><p>The space is archived, so nobody can post in it.</p></div>{% endif %}

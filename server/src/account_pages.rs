@@ -125,7 +125,7 @@ pub async fn delete_account(
             "Your profile, picture, email address and password are gone, and you have been logged out everywhere.",
             "What you posted stays where it is, shown as by a deleted member.",
         ],
-        Some(("/", "Back to the forum index")),
+        Some(("/", "Back to the front page")),
     )
     .await?;
     Ok(web::end_session(response, &state))

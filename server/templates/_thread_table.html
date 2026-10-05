@@ -19,7 +19,7 @@
           {% if row.new_posts() > 0 %}<a class="unread" href="/t/{{ row.thread.id }}/unread">{{ row.new_posts() }} new</a>{% endif %}
         </div>
         <div class="row-meta">
-          <span>by {{ row.author.display_name }}, {% call m::time(row.created_at) %}{% endcall %}</span>
+          <span>by <a href="/u/{{ row.author.username }}">{{ row.author.display_name }}</a>, {% call m::time(row.created_at) %}{% endcall %}</span>
           {% if show_space %}<span>in <a href="/c/{{ row.space.slug }}">{{ row.space.name }}</a></span>{% endif %}
           {% if let Some(source) = row.forked_from %}<span class="fork-origin">from <a href="{{ crate::format::thread_href(source.id, source.slug) }}">{{ source.title }}</a></span>{% endif %}
           {% let pages = row.page_links() %}
@@ -40,7 +40,7 @@
       <td class="last-col">
         {% call m::time(row.last_post_at) %}{% endcall %}
         {% if let Some(by) = row.last_by %}
-        <div class="row-meta">by {{ by.display_name }}{% if let Some(post_id) = row.last_post_id %} <a href="/p/{{ post_id }}" aria-label="Go to last post">→</a>{% endif %}</div>
+        <div class="row-meta">by <a href="/u/{{ by.username }}">{{ by.display_name }}</a>{% if let Some(post_id) = row.last_post_id %} <a href="/p/{{ post_id }}" aria-label="Go to last post">→</a>{% endif %}</div>
         {% endif %}
       </td>
     </tr>

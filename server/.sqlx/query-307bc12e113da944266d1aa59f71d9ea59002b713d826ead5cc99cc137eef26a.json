@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT m.id AS \"maker_id?\", m.username::text AS \"maker_username?\",\n                  m.display_name AS \"maker_name?\",\n                  coalesce(m.last_seen_at, m.created_at) AS \"last_seen?\"\n           FROM spaces c\n           JOIN space_grants g ON g.space_id = c.id AND g.verb = 'administer'\n           LEFT JOIN users m ON m.id = c.created_by AND m.deleted_at IS NULL\n           WHERE c.id = $1 AND c.kind = 'topic' AND g.level = 'listed'\n             AND NOT EXISTS (SELECT 1 FROM users u\n                             WHERE u.id = ANY (g.user_ids) AND u.deleted_at IS NULL)\n             AND NOT EXISTS (SELECT 1 FROM group_members gm JOIN users u ON u.id = gm.user_id\n                             WHERE gm.group_id = ANY (g.group_ids) AND u.deleted_at IS NULL)\n             AND NOT EXISTS (SELECT 1 FROM groups gr JOIN users u ON u.id = gr.owner_user_id\n                             WHERE gr.id = ANY (g.group_ids) AND u.deleted_at IS NULL)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "maker_id?",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "maker_username?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "maker_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "last_seen?",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "307bc12e113da944266d1aa59f71d9ea59002b713d826ead5cc99cc137eef26a"
+}

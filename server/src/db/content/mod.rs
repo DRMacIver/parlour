@@ -1862,6 +1862,65 @@ pub async fn space_thread_count(db: &Db, viewer: &Viewer, id: i64) -> sqlx::Resu
     .await
 }
 
+/// How many days a space's maker must have been away before staff may
+/// hand on a space nobody runs (DESIGN.md §3.1).
+pub const CLAIM_DAYS: i64 = 60;
+
+/// A topic space nobody runs any more, as staff see it on its settings
+/// (DESIGN.md §3.1): who made it and when they were last on the site.
+#[derive(Clone, Debug)]
+pub struct Unrun {
+    /// Who made it, unless that isn't known or their account was deleted.
+    pub maker: Option<UserRef>,
+    /// When its maker was last seen (or joined, if never since).
+    pub last_seen: Option<DateTime<Utc>>,
+}
+
+impl Unrun {
+    /// Whole days since its maker was last seen, if they are still here.
+    pub fn days_away(&self) -> Option<i64> {
+        self.last_seen.map(|at| (Utc::now() - at).num_days())
+    }
+
+    /// Whether it may be handed on now: its maker has been away for
+    /// [`CLAIM_DAYS`] days, or is gone.
+    pub fn claimable(&self) -> bool {
+        self.days_away().is_none_or(|days| days >= CLAIM_DAYS)
+    }
+}
+
+/// For staff, a topic space nobody runs: its administer grant names
+/// people and groups (rather than every member, or staff) and none of them
+/// lets anyone in whose account is still there. `None` for anyone else,
+/// for a feed, which always has its owner, and for a space someone runs.
+pub async fn unrun_space(db: &Db, viewer: &Viewer, space_id: i64) -> sqlx::Result<Option<Unrun>> {
+    if !viewer.is_staff() {
+        return Ok(None);
+    }
+    let row = sqlx::query!(
+        r#"SELECT m.id AS "maker_id?", m.username::text AS "maker_username?",
+                  m.display_name AS "maker_name?",
+                  coalesce(m.last_seen_at, m.created_at) AS "last_seen?"
+           FROM spaces c
+           JOIN space_grants g ON g.space_id = c.id AND g.verb = 'administer'
+           LEFT JOIN users m ON m.id = c.created_by AND m.deleted_at IS NULL
+           WHERE c.id = $1 AND c.kind = 'topic' AND g.level = 'listed'
+             AND NOT EXISTS (SELECT 1 FROM users u
+                             WHERE u.id = ANY (g.user_ids) AND u.deleted_at IS NULL)
+             AND NOT EXISTS (SELECT 1 FROM group_members gm JOIN users u ON u.id = gm.user_id
+                             WHERE gm.group_id = ANY (g.group_ids) AND u.deleted_at IS NULL)
+             AND NOT EXISTS (SELECT 1 FROM groups gr JOIN users u ON u.id = gr.owner_user_id
+                             WHERE gr.id = ANY (g.group_ids) AND u.deleted_at IS NULL)"#,
+        space_id,
+    )
+    .fetch_optional(db.pool())
+    .await?;
+    Ok(row.map(|row| Unrun {
+        maker: user_ref(row.maker_id, row.maker_username, row.maker_name),
+        last_seen: row.last_seen,
+    }))
+}
+
 /// The spaces the viewer can read whose grants name a group or list, by
 /// name, for the list's page (DESIGN.md §3.3).
 pub async fn spaces_naming(db: &Db, viewer: &Viewer, group_id: i64) -> sqlx::Result<Vec<SpaceRef>> {
@@ -1876,6 +1935,31 @@ pub async fn spaces_naming(db: &Db, viewer: &Viewer, group_id: i64) -> sqlx::Res
         &filter.visibilities,
         &filter.restricted_space_ids,
         group_id,
+    )
+    .fetch_all(db.pool())
+    .await
+}
+
+/// The live threads the viewer can read whose own restriction (DESIGN.md
+/// §3.4) names a group or list, for its page, by title.
+pub async fn threads_naming(
+    db: &Db,
+    viewer: &Viewer,
+    group_id: i64,
+) -> sqlx::Result<Vec<ThreadRef>> {
+    let filter = viewer.filter();
+    sqlx::query_as!(
+        ThreadRef,
+        r#"SELECT t.id, t.title, t.slug FROM threads t
+           WHERE t.deleted_at IS NULL
+             AND (t.read_group_ids @> ARRAY[$1]::bigint[] OR t.reply_group_ids @> ARRAY[$1]::bigint[])
+             AND thread_readable(t, $2, $3, $4, $5)
+           ORDER BY t.last_post_at DESC, t.id DESC"#,
+        group_id,
+        &filter.visibilities,
+        &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
     )
     .fetch_all(db.pool())
     .await

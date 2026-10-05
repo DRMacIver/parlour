@@ -39,7 +39,7 @@
 {% block content %}
 {% let space = audience.target.space.space %}
 <div class="narrow">
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/c/{{ space.slug }}">{{ space.name }}</a>{% if let Some(thread) = audience.target.thread %} › <a href="{{ crate::format::thread_href(thread.id, thread.slug) }}">{{ thread.title }}</a>{% endif %} › <span aria-current="page">Who can take part</span></nav>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Front page</a> › <a href="/c/{{ space.slug }}">{{ space.name }}</a>{% if let Some(thread) = audience.target.thread %} › <a href="{{ crate::format::thread_href(thread.id, thread.slug) }}">{{ thread.title }}</a>{% endif %} › <span aria-current="page">Who can take part</span></nav>
 <h1 class="page-title">{{ self.heading() }}</h1>
 <p class="lede">A thread can be narrower than its space, never wider: of those who can read {{ space.name }}, it may let only some read it, and only some of its readers reply. A list is named only to the person who made it and the people on it; anyone else sees whose choice it is.</p>
 {% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}

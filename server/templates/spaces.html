@@ -2,8 +2,9 @@
 {%- import "_macros.html" as m -%}
 {% block title %}Spaces · {{ layout.site_name }}{% endblock %}
 {% block content %}
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <span aria-current="page">Spaces</span></nav>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Front page</a> › <span aria-current="page">Spaces</span></nav>
 <h1 class="page-title">Spaces</h1>
+{% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
 <div class="toolbar">
   {% if can_create %}<a class="button" href="/spaces/new">New space</a>{% endif %}
   <span class="toolbar-note">Sorted by {% if self.sort_is("created") %}newest first{% else %}<a href="{{ self.sort_href("created") }}">newest first</a>{% endif %} · {% if self.sort_is("activity") %}latest post{% else %}<a href="{{ self.sort_href("activity") }}">latest post</a>{% endif %} · {% if self.sort_is("name") %}name{% else %}<a href="{{ self.sort_href("name") }}">name</a>{% endif %}</span>

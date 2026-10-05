@@ -165,7 +165,7 @@ async fn members_arrange_their_own_front_page_with_plain_forms(pool: PgPool) {
 
     // The page: every section with its spaces, and the forms for each.
     let page = f.page_as(MINE, &cookie).await;
-    assert!(page.contains("follows the default"), "{page}");
+    assert!(page.contains("is the default one for now"), "{page}");
     assert!(page.contains(&format!("action=\"{MINE}/sections\"")));
     assert!(page.contains(&format!("action=\"{MINE}/sections/{my_forum}\"")));
     assert!(page.contains("value=\"Forum\""));
@@ -211,7 +211,7 @@ async fn members_arrange_their_own_front_page_with_plain_forms(pool: PgPool) {
     assert!(edited(&f, layout).await);
     let page = f.page_as(&format!("{MINE}?done=section"), &cookie).await;
     assert!(page.contains("Section saved."), "{page}");
-    assert!(!page.contains("follows the default"), "{page}");
+    assert!(!page.contains("is the default one for now"), "{page}");
     let mine = section_named(&f, layout, "Mine").await;
 
     // Renaming.
@@ -1536,4 +1536,22 @@ async fn a_step_that_changes_nothing_in_the_default_keeps_the_cached_front_page(
     )
     .await;
     assert!(!cached(f));
+}
+
+/// The default's editor says how many members use it, without calling
+/// that following, which is putting a space in a section (DESIGN.md §3.5).
+#[sqlx::test]
+async fn the_default_says_who_uses_it(pool: PgPool) {
+    let f = Forum::new(pool);
+    let admin = f.member("ada", "admin", None).await;
+    let cookie = f.session(admin).await;
+    f.user("ruth").await;
+    let page = f.page_as("/admin/layout", &cookie).await;
+    assert!(page.contains("Members using the default"), "{page}");
+    assert!(!page.contains("Who follows it"), "{page}");
+    assert!(
+        page.contains("haven’t arranged their own front page, so it is this one."),
+        "{page}"
+    );
+    assert!(!page.contains("follow this one"), "{page}");
 }

@@ -779,9 +779,9 @@ async fn visitors_tab_pages_come_from_the_cache_and_clear_with_what_they_show(po
     // A new post in a space on the tab clears it, once reported.
     let jonah = f.user("jonah").await;
     let post = f.post(t.thread_id, jonah, "A reply").await;
-    assert!(!f.page(&path).await.contains("by Jonah"));
+    assert!(!f.page(&path).await.contains(">Jonah</a>"));
     f.changed(Change::PostCreated { post_id: post }).await;
-    assert!(f.page(&path).await.contains("by Jonah"));
+    assert!(f.page(&path).await.contains(">Jonah</a>"));
     // A new thread in a space off the tab doesn't appear on it.
     let books = f.unlisted_space("books", "public").await;
     let other = f.thread(books, ruth, "Le Guin", "x").await;

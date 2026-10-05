@@ -22,7 +22,7 @@
 {% endmacro %}
 
 {% block content %}
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/c/{{ space.space.slug }}">{{ space.space.name }}</a> › <span aria-current="page">Settings</span></nav>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Front page</a> › <a href="/c/{{ space.space.slug }}">{{ space.space.name }}</a> › <span aria-current="page">Settings</span></nav>
 <h1 class="page-title">{{ space.space.name }}: settings</h1>
 {% if let Some(text) = notice %}<div class="notice notice-success" role="status"><p>{{ text }}</p></div>{% endif %}
 {% call f::errors(errors) %}{% endcall %}
@@ -47,7 +47,7 @@
       {% endif %}
     </div>
     <div class="field">
-      <label for="description">Description <span class="field-hint">(optional; shown on the index)</span></label>
+      <label for="description">Description <span class="field-hint">(optional; shown on the front page and in the space index)</span></label>
       <input id="description" name="description" type="text" maxlength="500" value="{{ form.description }}">
     </div>
     {% if staff %}
@@ -81,7 +81,7 @@
     {% call grant_fields("read", "Who can read it", form.read, groups.read, true, true, "Nobody can post where they can’t read. Moderators and admins read only what this lets them, like everyone else.") %}{% endcall %}
     {% call grant_fields("reply", "Who can reply in its threads", form.reply, groups.reply, false, true, "Of those who can read it.") %}{% endcall %}
     {% call grant_fields("start", "Who can start threads", form.start, groups.start, false, true, "Of those who can read it.") %}{% endcall %}
-    {% call grant_fields("administer", "Who runs it", form.administer, groups.administer, false, true, "They change these settings, pin and lock threads, and can archive the space. Moderators and admins always can.") %}{% endcall %}
+    {% call grant_fields("administer", "Who runs it", form.administer, groups.administer, false, true, "They change these settings, pin, lock, rename and delete its threads, hide posts in it, and can archive the space. Moderators and admins always can.") %}{% endcall %}
     {% endif %}
     <div class="form-actions">
       <button class="button" type="submit">Save</button>
@@ -89,18 +89,41 @@
     </div>
   </div>
 </form>
+{% if unrun.is_some() %}
+<section class="panel" aria-labelledby="unrun-heading">
+  <h2 class="panel-bar" id="unrun-heading">Nobody runs this space</h2>
+  <div class="form">
+    <p class="form-note">Nobody runs this space. {{ self.unrun_note() }}</p>
+    {% if let Some(unrun) = unrun %}{% if unrun.claimable() %}
+    <form class="form" method="post" action="/c/{{ space.space.slug }}/hand">
+      <div class="field">
+        <label for="hand-username">Hand it to</label>
+        <input id="hand-username" name="username" type="text" maxlength="64" autocomplete="off" placeholder="username" value="{{ hand.username }}" required>
+        <span class="field-hint">They will run it, and are told.</span>
+      </div>
+      <div class="field">
+        <label for="hand-reason">Reason</label>
+        <input id="hand-reason" name="reason" type="text" maxlength="500" value="{{ hand.reason }}" required>
+        <span class="field-hint">Goes in the moderation log{% if space.visibility == "public" %}, which is public for this space{% endif %}.</span>
+      </div>
+      <div class="form-actions"><button class="button" type="submit">Hand it on</button></div>
+    </form>
+    {% endif %}{% endif %}
+  </div>
+</section>
+{% endif %}
 <section class="panel" aria-labelledby="archive-heading">
   <h2 class="panel-bar" id="archive-heading">{% if space.archived() %}Archived{% else %}Archive{% endif %}</h2>
   <div class="form">
     {% if space.archived() && self.owner_gone() %}
     <p class="form-note">The space is archived for good: it was the feed of a member who has deleted their account. Everyone who could read it still can, and nobody can post in it.</p>
     {% else if space.archived() %}
-    <p class="form-note">The space is archived: everyone who could read it still can, nobody can post in it, and it is left out of the index and the list of spaces unless asked for.</p>
+    <p class="form-note">The space is archived: everyone who could read it still can, nobody can post in it, and it is left off every front page, and out of the space index unless asked for.</p>
     <form class="form-inline" method="post" action="/c/{{ space.space.slug }}/unarchive">
       <button class="button button-quiet" type="submit">Open it again</button>
     </form>
     {% else %}
-    <p class="form-note">Archiving keeps the space and its threads readable but closes it to new posts, and takes it out of the index. It can be opened again later.</p>
+    <p class="form-note">Archiving keeps the space and its threads readable but closes it to new posts, and takes it off every front page and out of the space index. It can be opened again later.</p>
     <form class="form-inline" method="post" action="/c/{{ space.space.slug }}/archive">
       <button class="button button-quiet" type="submit">Archive this space</button>
     </form>
@@ -115,9 +138,8 @@
     {% else if thread_count > 0 %}
     <p class="form-note">This space has {{ crate::format::plural(thread_count, "thread", "threads") }}, so it can’t be deleted. Archive it instead, or have its threads moved elsewhere first.</p>
     {% else %}
-    <form class="form-inline" method="post" action="/c/{{ space.space.slug }}/delete">
-      <button class="button button-quiet" type="submit">Delete this space</button>
-    </form>
+    <p class="form-note">An empty space can be deleted for good. You’ll be asked first.</p>
+    <p><a class="button button-quiet" href="/c/{{ space.space.slug }}/delete">Delete this space…</a></p>
     {% endif %}
   </div>
 </section>

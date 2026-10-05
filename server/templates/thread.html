@@ -2,7 +2,7 @@
 {%- import "_macros.html" as m -%}
 {% block title %}{{ thread.thread.title }} · {{ layout.site_name }}{% endblock %}
 {% block content %}
-<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Forum index</a> › <a href="/c/{{ thread.space.space.slug }}">{{ thread.space.space.name }}</a></nav>
+<nav class="breadcrumbs" aria-label="Breadcrumb"><a href="/">Front page</a> › <a href="/c/{{ thread.space.space.slug }}">{{ thread.space.space.name }}</a></nav>
 <h1 class="page-title">{{ thread.thread.title }}</h1>
 <p class="thread-meta">
   Started by {{ thread.author.display_name }} on {% call m::time(thread.created_at) %}{% endcall %}
@@ -60,9 +60,9 @@
   {% when PostBody::Live { author, body_html, edited_at, hidden } %}
   <article class="post{% if *hidden %} post-hidden{% endif %}" id="p{{ post.id }}">
     <aside class="post-author" aria-label="About {{ author.user.display_name }}">
-      {% call m::picture(author.user, author.avatar, "") %}{% endcall %}
+      <a class="author-picture" href="/u/{{ author.user.username }}" tabindex="-1" aria-hidden="true">{% call m::picture(author.user, author.avatar, "") %}{% endcall %}</a>
       <div class="author-names">
-        <span class="author-name">{{ author.user.display_name }}</span>
+        <a class="author-name" href="/u/{{ author.user.username }}">{{ author.user.display_name }}</a>
         <span class="author-username">@{{ author.user.username }}</span>
       </div>
       {% if author.title.is_some() || author.pronouns.is_some() %}

@@ -326,6 +326,10 @@ main.wrap { padding-top: 18px; padding-bottom: 40px; }
 }
 .author-names { display: flex; flex-direction: column; }
 .author-name { font-variant: small-caps; letter-spacing: 0.08em; font-size: 19px; font-weight: 700; color: var(--ink); line-height: 1.2; }
+a.author-name { text-decoration: none; }
+a.author-name:hover, a.author-name:focus-visible { text-decoration: underline; }
+/* The picture links to the profile too, without changing the column's layout. */
+.author-picture { display: contents; }
 .author-title { font-style: italic; }
 .author-status { margin-top: 6px; color: var(--ink); font-style: italic; }
 .author-stats { margin-top: 6px; }

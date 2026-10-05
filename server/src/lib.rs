@@ -296,8 +296,12 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/c/{slug}/audience", get(space_pages::audience_page))
         .route("/c/{slug}/archive", post(space_pages::archive))
+        .route("/c/{slug}/hand", post(space_pages::hand))
         .route("/c/{slug}/unarchive", post(space_pages::unarchive))
-        .route("/c/{slug}/delete", post(space_pages::delete))
+        .route(
+            "/c/{slug}/delete",
+            get(space_pages::delete_page).post(space_pages::delete),
+        )
         .route("/c/{slug}/follow", post(space_pages::follow))
         .route("/c/{slug}/unfollow", post(space_pages::unfollow))
         .route("/c/{slug}/mute", post(space_pages::mute))

@@ -58,7 +58,7 @@ pub(crate) async fn not_allowed(
         StatusCode::FORBIDDEN,
         "Not allowed",
         &[reason],
-        Some(("/", "Back to the forum index")),
+        Some(("/", "Back to the front page")),
     )
     .await
 }
@@ -416,7 +416,7 @@ async fn refused(
                     draft_title: draft.title,
                     draft_body: draft.body,
                     back: "/",
-                    back_label: "Back to the forum index",
+                    back_label: "Back to the front page",
                 },
             );
         }

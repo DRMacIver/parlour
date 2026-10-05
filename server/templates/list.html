@@ -53,17 +53,24 @@
 
 <section class="panel" aria-labelledby="spaces-heading">
   <h2 class="panel-bar" id="spaces-heading">Where it is named</h2>
-  {% if !spaces.is_empty() %}
+  {% if !spaces.is_empty() || !threads.is_empty() %}
   <ul class="member-list">
   {% for space in spaces %}
-    <li><a href="/c/{{ space.slug }}">{{ space.name }}</a></li>
+    <li><a href="/c/{{ space.slug }}">{{ space.name }}</a> <span class="row-meta">a space’s settings</span></li>
+  {% endfor %}
+  {% for thread in threads %}
+    <li><a href="/t/{{ thread.id }}/audience">{{ thread.title }}</a> <span class="row-meta">a thread’s “Who can take part”</span></li>
   {% endfor %}
   </ul>
   {% endif %}
   {% if self.unreadable_spaces() > 0 %}
-  <p class="{% if spaces.is_empty() %}empty{% else %}panel-foot{% endif %}">{{ self.unreadable_note() }}</p>
-  {% else if spaces.is_empty() %}
-  <p class="empty">{% if list.yours && named_in == 0 %}No space’s settings name this list yet.{% else %}No space you can read names this list.{% endif %}</p>
+  <p class="{% if spaces.is_empty() && threads.is_empty() %}empty{% else %}panel-foot{% endif %}">{{ self.unreadable_note() }}</p>
+  {% endif %}
+  {% if self.unreadable_threads() > 0 %}
+  <p class="{% if spaces.is_empty() && threads.is_empty() && self.unreadable_spaces() == 0 %}empty{% else %}panel-foot{% endif %}">{{ self.unreadable_threads_note() }}</p>
+  {% endif %}
+  {% if self.named_nowhere_shown() %}
+  <p class="empty">{% if list.yours %}No space’s settings or thread’s “Who can take part” name this list yet.{% else %}Nothing you can read names this list.{% endif %}</p>
   {% endif %}
 </section>
 

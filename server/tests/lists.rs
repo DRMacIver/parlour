@@ -1492,3 +1492,56 @@ async fn the_audience_page_names_lists_only_to_their_people(pool: PgPool) {
     assert!(page.contains("People Ruth has chosen"), "{page}");
     assert!(!page.contains("Book club"), "{page}");
 }
+
+/// A list's page says where it is named: the spaces whose settings name
+/// it and the threads whose "Who can take part" does, each a link, so that
+/// its owner can find what keeps it from being deleted.
+#[sqlx::test]
+async fn a_lists_page_names_the_threads_that_name_it(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    let walkers = c.ruths_list("Walkers").await;
+    let page = f
+        .page_as(&format!("/settings/lists/{walkers}"), &c.ruth_cookie)
+        .await;
+    assert!(
+        page.contains("No space’s settings or thread’s “Who can take part” name this list yet."),
+        "{page}"
+    );
+    let lists = f.page_as("/settings/lists", &c.ruth_cookie).await;
+    assert!(
+        lists.contains("in a space’s settings or a thread’s “Who can take part”"),
+        "{lists}"
+    );
+    let general = f.space("general", "members", None, 0).await;
+    let t = f
+        .thread(general, c.ruth, "Walk on Sunday", "Who is in?")
+        .await;
+    let response = f
+        .submit(
+            &format!("/t/{}/audience", t.thread_id),
+            &[
+                ("read", "only"),
+                ("read_group", &walkers.to_string()),
+                ("reply", "space"),
+            ],
+            Some(&c.ruth_cookie),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
+    let page = f
+        .page_as(&format!("/settings/lists/{walkers}"), &c.ruth_cookie)
+        .await;
+    assert!(
+        page.contains(&format!(
+            "<a href=\"/t/{}/audience\">Walk on Sunday</a>",
+            t.thread_id
+        )),
+        "{page}"
+    );
+    assert!(
+        page.contains("The list can’t be deleted while 1 thread names it"),
+        "{page}"
+    );
+    let _ = (c.jonah, c.maya);
+}

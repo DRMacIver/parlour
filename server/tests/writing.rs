@@ -541,7 +541,10 @@ async fn mentions_link_to_members_who_exist(pool: PgPool) {
     assert!(post.contains("<a href=\"/u/ruth\""), "{post}");
     assert!(post.contains(">@Ruth</a>"), "{post}");
     assert!(!post.contains("/u/nobody"));
-    assert!(!post.contains("/u/jonah"));
+    // Jonah's name leads to his profile beside his post, but `@jonah` in
+    // code is no mention.
+    let body = &post[post.find("class=\"post-body\"").unwrap()..];
+    assert!(!body.contains("/u/jonah"), "{body}");
 }
 
 // ---------------------------------------------------------------------------

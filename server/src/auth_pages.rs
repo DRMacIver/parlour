@@ -143,7 +143,7 @@ pub async fn login_page(
             StatusCode::OK,
             "Logged in",
             &[&text],
-            Some(("/", "Go to the forum index")),
+            Some(("/", "Go to the front page")),
         )
         .await;
     }
