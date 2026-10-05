@@ -485,7 +485,8 @@ pub async fn thread(
     };
     // The slug is checked first with a cheap query, so that a wrong one
     // costs no more than any other non-canonical URL.
-    let Some(canonical_slug) = content::thread_slug(&state.db, &viewer, id).await? else {
+    let Some(canonical_slug) = content::thread_slug(&state.db, &viewer, id, Some(&slug)).await?
+    else {
         return conversation_or_not_found(&state, &viewer, id).await;
     };
     let canonical = page_href(&format::thread_href(&id, &canonical_slug), page);
@@ -615,7 +616,7 @@ async fn redirect_to_thread(
     let Some(id) = parse_id(id) else {
         return web::not_found(state, viewer).await;
     };
-    match content::thread_slug(&state.db, viewer, id).await? {
+    match content::thread_slug(&state.db, viewer, id, None).await? {
         Some(slug) => Ok(redirect(&format::thread_href(&id, &slug)).into_response()),
         None => conversation_or_not_found(state, viewer, id).await,
     }

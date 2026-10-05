@@ -29,6 +29,7 @@ use crate::moderation::{
 };
 use crate::pages::parse_id;
 use crate::pagination::{PageItem, Pagination, page_href};
+use crate::permissions::Audience;
 use crate::settings::{self, ModerationSettings};
 use crate::viewer::Viewer;
 use crate::web::{self, Layout, Nav, cacheable, redirect_unless_canonical, render, see_other};
@@ -125,9 +126,9 @@ struct ReportTemplate {
     action: String,
     /// The post being reported, if it is one.
     post: Option<PostTarget>,
-    /// For a message, a note that reporting shows the conversation to the
-    /// moderators.
-    private: bool,
+    /// Whether what is reported is private, so that the form says what
+    /// opening it would mean.
+    private: Private,
     reasons: &'static [(&'static str, &'static str)],
     reason: String,
     details: String,
@@ -148,14 +149,14 @@ async fn render_report(
         ReportPage::Post(post) => (
             format!("Report № {} by {}", post.seq, post.author.display_name),
             format!("/p/{}/report", post.post_id),
-            post.thread.conversation().is_some(),
+            Private::of(&post.thread),
             format!("/p/{}", post.post_id),
             Some(*post),
         ),
         ReportPage::Member(username, name) => (
             format!("Report {name}"),
             format!("/u/{username}/report"),
-            false,
+            Private::No,
             format!("/u/{username}"),
             None,
         ),
@@ -175,6 +176,32 @@ async fn render_report(
             cancel,
         },
     )
+}
+
+/// Whether a reported post is somewhere not every moderator may read
+/// (DESIGN.md §8): the report form tells its reporter that, if the
+/// moderators open it, everyone who can read it will be told.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Private {
+    /// Every moderator reads it, as a member or by a grant to staff.
+    No,
+    /// A thread whose audience leaves some of them out.
+    Thread,
+    /// A conversation, which only the people in it read.
+    Conversation,
+}
+
+impl Private {
+    fn of(thread: &ThreadTarget) -> Private {
+        match &thread.place {
+            content::Place::Conversation(_) => Private::Conversation,
+            content::Place::Space(space) => match thread.restriction.audience(&space.rules) {
+                Audience::Public | Audience::Members | Audience::Staff => Private::No,
+                _ => Private::Thread,
+            },
+            content::Place::Unreadable => Private::Thread,
+        }
+    }
 }
 
 enum ReportPage {
@@ -434,7 +461,9 @@ struct HeldTemplate {
     layout: Layout,
     held: HeldPost,
     place: (String, String),
-    html: String,
+    /// What it says, unless the viewer is staff who couldn't read it once
+    /// it is up.
+    html: Option<String>,
     staff: bool,
 }
 
@@ -451,10 +480,17 @@ pub async fn held_page(
         Ok(held) => held,
         Err(refusal) => return refused(&state, &viewer, refusal, &back).await,
     };
-    let place = moderation::held_place(&state, &viewer, &held.place).await?;
-    let html = crate::store::render_post(state.db(), &held.body_md)
-        .await?
-        .html;
+    let shown = moderation::held_shown(&state, &viewer, &held).await?;
+    let place = moderation::held_place(&state, &viewer, &held.place, shown).await?;
+    let html = if shown {
+        Some(
+            crate::store::render_post(state.db(), &held.body_md)
+                .await?
+                .html,
+        )
+    } else {
+        None
+    };
     render(
         StatusCode::OK,
         &HeldTemplate {
@@ -1519,7 +1555,7 @@ struct ModImageTemplate {
     name: String,
     url: String,
     /// `None` once it has been removed.
-    image: Option<crate::upload_records::ImageUse>,
+    image: Option<content::uploads::ImageUse>,
 }
 
 /// `/mod/uploads/{name}`: an image, where it is used, and the form to
@@ -1536,12 +1572,12 @@ pub async fn image_page(
     let Some((sha256, ext)) = crate::uploads::parse_name(&name) else {
         return web::not_found(&state, &viewer).await;
     };
-    let image = match crate::upload_records::image_use(state.db(), sha256, ext).await? {
-        crate::upload_records::ImageLookup::NotFound => {
+    let image = match content::uploads::image_use(state.db(), &viewer, sha256, ext).await? {
+        content::uploads::ImageLookup::NotFound => {
             return web::not_found(&state, &viewer).await;
         }
-        crate::upload_records::ImageLookup::Removed => None,
-        crate::upload_records::ImageLookup::Found(image) => Some(image),
+        content::uploads::ImageLookup::Removed => None,
+        content::uploads::ImageLookup::Found(image) => Some(image),
     };
     render(
         StatusCode::OK,

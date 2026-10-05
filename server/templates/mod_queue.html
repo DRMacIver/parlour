@@ -164,14 +164,14 @@
     </form>
   </div>
 </article>
-{% when QueueKind::Held { held, author, place } %}
+{% when QueueKind::Held { held, author, place, readable } %}
 <article class="panel queue-item">
   <header class="queue-head"><span class="queue-kind queue-kind-held">Held for approval</span><span class="queue-where"><a href="{{ place.1 }}">{{ place.0 }}</a></span><span class="spacer"></span>{% call m::time(item.first_at) %}{% endcall %}</header>
   <div class="queue-body">
     <p class="queue-reason"><strong>A new member’s post</strong> <span class="row-meta">· new members’ first posts are read before they appear</span></p>
     <blockquote class="queue-excerpt">
       <div class="row-meta"><strong><a href="/mod/users/{{ author.user.username }}">{{ author.user.username }}</a></strong> · joined {{ crate::format::date(author.created_at) }}{% if let Some(inviter) = author.invited_by %} · invited by {{ inviter.username }}{% endif %}</div>
-      {{ crate::mod_pages::excerpt(held.body_md) }} <a href="/held/{{ held.id }}">Read it all</a>
+      {% if readable %}{{ crate::mod_pages::excerpt(held.body_md) }} <a href="/held/{{ held.id }}">Read it all</a>{% else %}<em>You can’t read where it would go, so what it says isn’t shown to you.</em> You can still approve or reject it.{% endif %}
     </blockquote>
     <form class="queue-actions" method="post" action="/mod/held/{{ held.id }}/approve">
       {% call md::no_enter() %}{% endcall %}

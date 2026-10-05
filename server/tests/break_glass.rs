@@ -23,6 +23,7 @@ use sqlx::PgPool;
 /// - Staffroom: read by staff, which names Sam and Ada by their role.
 ///   "Staff matters".
 /// - Ruth and Jonah's conversation, which Jonah has reported.
+/// - An image, shown both in Lunch plans and in Circle secret.
 ///
 /// Every title and post is a word of its own, so that a page showing it
 /// can be found.
@@ -43,6 +44,9 @@ struct Club {
     staff_thread: i64,
     dm: i64,
     dm_post: i64,
+    kit: i64,
+    /// The image's name, as `/mod/uploads/{image}` has it.
+    image: String,
     ruth_cookie: String,
     jonah_cookie: String,
     sam_cookie: String,
@@ -97,6 +101,21 @@ async fn club(pool: PgPool) -> Club {
         )
         .await
         .thread_id;
+    let sha = "ab".repeat(32);
+    f.exec(&format!(
+        "INSERT INTO uploads (sha256, ext, mime, bytes, width, height)
+         VALUES ('{sha}', 'png', 'image/png', 1, 1, 1)"
+    ))
+    .await;
+    let image = format!("{sha}.png");
+    f.post(lunch, ruth, &format!("Pictured ![](/uploads/{image})"))
+        .await;
+    f.post(
+        secret.thread_id,
+        kit,
+        &format!("Pictured ![](/uploads/{image})"),
+    )
+    .await;
     let dm = store::create_conversation(
         &f.db,
         &NewConversation {
@@ -139,6 +158,8 @@ async fn club(pool: PgPool) -> Club {
         staff_thread,
         dm: dm.thread_id,
         dm_post: dm.first_post_id,
+        kit,
+        image,
     }
 }
 
@@ -188,6 +209,28 @@ fn shows_none(path: &str, body: &str, words: &[&str]) {
     for word in words {
         assert!(!body.contains(word), "{path} shows {word}:\n{body}");
     }
+}
+
+/// Asks for an image as the browser holding `cookie`, saying it has it
+/// already (the images these tests make have no files): "not modified" if
+/// they may fetch it, "not found" if not.
+async fn image_status(f: &Forum, path: &str, cookie: &str) -> StatusCode {
+    use axum::body::Body;
+    use axum::http::{Request, header};
+    let sha = path
+        .trim_start_matches("/uploads/")
+        .split('.')
+        .next()
+        .unwrap();
+    f.request(
+        Request::get(path)
+            .header(header::COOKIE, cookie)
+            .header(header::IF_NONE_MATCH, format!("\"{sha}\""))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .status
 }
 
 /// Every view recorded so far, as (grant, path).
@@ -246,6 +289,23 @@ async fn staff_read_what_their_memberships_let_them(pool: PgPool) {
             let body = f.page_as(path, cookie).await;
             shows_none(path, &body, &CLOSED);
         }
+        // An image's page names the threads they read that show it, and
+        // only counts the others.
+        let path = format!("/mod/uploads/{}", c.image);
+        let body = f.page_as(&path, cookie).await;
+        shows_none(&path, &body, &CLOSED);
+        assert!(body.contains("Lunchplanstitle"), "{body}");
+        assert!(body.contains("1 post in a thread you can’t read"), "{body}");
+        let secret_image_post = f
+            .id(&format!(
+                "SELECT max(id) FROM posts WHERE thread_id = {}",
+                c.secret
+            ))
+            .await;
+        assert!(
+            !body.contains(&format!("/mod/p/{secret_image_post}\"")),
+            "{body}"
+        );
     }
     // The queue still says a message was reported, and by whom, but not
     // what it says.
@@ -262,6 +322,11 @@ async fn staff_read_what_their_memberships_let_them(pool: PgPool) {
     f.join_group(c.organisers, c.sam).await;
     let page = f.page_as(&secret, &c.sam_cookie).await;
     assert!(page.contains("Circlesecretbody"), "{page}");
+    let page = f
+        .page_as(&format!("/mod/uploads/{}", c.image), &c.sam_cookie)
+        .await;
+    assert!(page.contains("Circlesecrettitle"), "{page}");
+    assert!(!page.contains("can’t read"), "{page}");
     // And nothing of this was a read under a grant.
     assert_eq!(count(f, "SELECT count(*) FROM staff_access_views").await, 0);
 }
@@ -545,12 +610,13 @@ async fn pages_shown_under_a_grant_are_recorded(pool: PgPool) {
         views(f).await,
         vec![(on_quiet, quiet.clone()), (on_quiet, quiet.clone())]
     );
-    // Its short address leads there, showing nothing itself.
-    let response = f
-        .get_as(&format!("/t/{}", c.quiet), Some(&c.sam_cookie))
-        .await;
+    // Its short address leads there, and since the address it gives says
+    // what the thread is called, that is recorded too.
+    let short = format!("/t/{}", c.quiet);
+    let response = f.get_as(&short, Some(&c.sam_cookie)).await;
     assert_status(&response, StatusCode::PERMANENT_REDIRECT);
     assert_eq!(response.location(), quiet);
+    assert_eq!(views(f).await.last().unwrap(), &(on_quiet, short));
     // Only that thread: not the Circle, not the conversation, and nowhere
     // but its own page.
     for path in [
@@ -567,7 +633,7 @@ async fn pages_shown_under_a_grant_are_recorded(pool: PgPool) {
         let body = f.page_as(path, &c.sam_cookie).await;
         shows_none(path, &body, &CLOSED);
     }
-    assert_eq!(views(f).await.len(), 2);
+    assert_eq!(views(f).await.len(), 3);
     // Nobody else reads under Sam's grant: not Ada, nor Ruth's own pages
     // record anything.
     assert_status(
@@ -575,7 +641,7 @@ async fn pages_shown_under_a_grant_are_recorded(pool: PgPool) {
         StatusCode::NOT_FOUND,
     );
     f.page_as(&quiet, &c.ruth_cookie).await;
-    assert_eq!(views(f).await.len(), 2);
+    assert_eq!(views(f).await.len(), 3);
 
     // A grant on the Circle opens the space's page and every thread in
     // it, restricted ones included, each recorded.
@@ -606,7 +672,7 @@ async fn pages_shown_under_a_grant_are_recorded(pool: PgPool) {
         assert!(page.contains("body"), "{page}");
     }
     assert_eq!(
-        views(f).await[2..],
+        views(f).await[3..],
         [
             (on_circle, "/c/circle".to_owned()),
             (on_circle, secret.clone()),
@@ -718,6 +784,7 @@ async fn every_page_showing_granted_text_is_recorded(pool: PgPool) {
         "/u/ruth".to_owned(),
         "/u/kit".to_owned(),
         "/settings/export".to_owned(),
+        format!("/mod/uploads/{}", c.image),
     ];
     paths.push("/search?q=findme".to_owned());
     for thread in [c.lunch, c.quiet, c.secret, c.staff_thread] {
@@ -725,6 +792,7 @@ async fn every_page_showing_granted_text_is_recorded(pool: PgPool) {
         paths.push(path.clone());
         paths.push(format!("{path}?page=2"));
         paths.push(format!("/t/{thread}"));
+        paths.push(format!("/t/{thread}/wrong-slug"));
         paths.push(format!("/t/{thread}/unread"));
         paths.push(format!("/t/{thread}/audience"));
         paths.push(format!("/t/{thread}/reply"));
@@ -755,11 +823,17 @@ async fn every_page_showing_granted_text_is_recorded(pool: PgPool) {
             new.iter().all(|p| *p == path),
             "{path} recorded views of other pages: {new:?}"
         );
+        // A redirect shows what its address says: a thread's slug is made
+        // from its title.
+        let location = response
+            .header(axum::http::header::LOCATION)
+            .unwrap_or_default()
+            .to_lowercase();
         let shown: Vec<&str> = CLOSED
             .iter()
             .chain(&["Mentionbody", "Tuckedtitle"])
             .copied()
-            .filter(|word| response.body.contains(word))
+            .filter(|word| response.body.contains(word) || location.contains(&word.to_lowercase()))
             .collect();
         if !shown.is_empty() {
             assert!(
@@ -773,4 +847,311 @@ async fn every_page_showing_granted_text_is_recorded(pool: PgPool) {
     // The pages that are for reading under a grant did: the thread, the
     // space, the conversation.
     assert!(recorded >= 4, "only {recorded} pages showed anything");
+}
+
+/// Changing who may read something so that it would let a moderator read
+/// what they can't is breaking glass by another way (DESIGN.md §3.1, §8),
+/// and until the confirmation page exists it is refused: for a thread's
+/// restriction as for a space's read grant, even once they have named
+/// themselves among those who run the space.
+#[sqlx::test]
+async fn staff_cant_let_themselves_read_by_changing_who_may(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    let cookie = &c.sam_cookie;
+    let quiet = thread_path(f, c.quiet).await;
+    let restriction = |f: &Forum| {
+        let db = f.db.clone();
+        let quiet = c.quiet;
+        async move {
+            sqlx::query_as::<_, (Option<Vec<i64>>, Option<Vec<i64>>)>(
+                "SELECT read_group_ids, read_user_ids FROM threads WHERE id = $1",
+            )
+            .bind(quiet)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    let before = restriction(f).await;
+    // The thread's audience form: lifting the restriction, or naming
+    // themselves in it.
+    let audience = format!("/t/{}/audience", c.quiet);
+    for fields in [
+        vec![("read", "space"), ("reply", "space")],
+        vec![
+            ("read", "only"),
+            ("read_users", "jonah, sam"),
+            ("reply", "space"),
+        ],
+        vec![("read", "only"), ("read_users", "sam"), ("reply", "space")],
+    ] {
+        let response = f.submit(&audience, &fields, Some(cookie)).await;
+        assert_status(&response, StatusCode::BAD_REQUEST);
+        assert!(
+            response
+                .body
+                .contains("You can’t read this thread, and that would let you"),
+            "{fields:?}: {}",
+            response.body
+        );
+        shows_none(&audience, &response.body, &CLOSED);
+        assert_eq!(restriction(f).await, before);
+    }
+    assert_status(&f.get_as(&quiet, Some(cookie)).await, StatusCode::NOT_FOUND);
+    // Narrowing it, which still leaves them out, is theirs to do.
+    ok(
+        f,
+        &audience,
+        &[
+            ("read", "only"),
+            ("read_users", "jonah"),
+            ("reply", "space"),
+        ],
+        cookie,
+    )
+    .await;
+    let (groups, mut users) = restriction(f).await;
+    users.as_mut().unwrap().sort();
+    let jonah = f.id("SELECT id FROM users WHERE username = 'jonah'").await;
+    assert_eq!((groups, users), (Some(vec![]), Some(vec![c.ruth, jonah])));
+
+    // A space's read grant: naming themselves among those who run it
+    // first doesn't make it theirs to open. They would be the only member
+    // the administer grant names who can't read the space.
+    let settings = |read_level: &'static str, read_users: &'static str| {
+        let organisers = c.organisers.to_string();
+        move || {
+            vec![
+                ("name".to_owned(), "Circle".to_owned()),
+                ("slug".to_owned(), "circle".to_owned()),
+                ("description".to_owned(), String::new()),
+                ("read_level".to_owned(), read_level.to_owned()),
+                ("read_group".to_owned(), organisers.clone()),
+                ("read_users".to_owned(), read_users.to_owned()),
+                ("reply_level".to_owned(), "listed".to_owned()),
+                ("reply_group".to_owned(), organisers.clone()),
+                ("start_level".to_owned(), "listed".to_owned()),
+                ("start_group".to_owned(), organisers.clone()),
+                ("administer_level".to_owned(), "listed".to_owned()),
+                ("administer_users".to_owned(), "sam".to_owned()),
+                ("section".to_owned(), String::new()),
+            ]
+        }
+    };
+    let save = |fields: Vec<(String, String)>| async move {
+        let fields: Vec<(&str, &str)> = fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        f.submit("/c/circle/settings", &fields, Some(cookie)).await
+    };
+    // Naming themselves to run it leaves them unable to read it: allowed.
+    let response = save(settings("listed", "")()).await;
+    assert_status(&response, StatusCode::SEE_OTHER);
+    let administer: Vec<i64> = sqlx::query_scalar(
+        "SELECT user_ids FROM space_grants WHERE space_id = $1 AND verb = 'administer'",
+    )
+    .bind(c.circle)
+    .fetch_one(&f.db)
+    .await
+    .unwrap();
+    assert_eq!(administer, vec![c.sam]);
+    // Then letting members, or themselves, read it: refused all the same.
+    for fields in [settings("members", "")(), settings("listed", "sam")()] {
+        let response = save(fields).await;
+        assert_status(&response, StatusCode::BAD_REQUEST);
+        assert!(
+            response.body.contains("would let you read it"),
+            "{}",
+            response.body
+        );
+    }
+    assert_status(
+        &f.get_as("/c/circle", Some(cookie)).await,
+        StatusCode::NOT_FOUND,
+    );
+
+    // Someone who runs a space in their own right, and reads it, may open
+    // a thread in it as any administrator may, staff or not.
+    f.set_grant(c.general, "administer", Grant::listed([], [c.sam]))
+        .await;
+    ok(
+        f,
+        &audience,
+        &[("read", "space"), ("reply", "space")],
+        cookie,
+    )
+    .await;
+    let page = f.page_as(&quiet, cookie).await;
+    assert!(page.contains("Quietwordbody"), "{page}");
+    assert_eq!(count(f, "SELECT count(*) FROM staff_access_views").await, 0);
+}
+
+/// A post held for approval is shown to a moderator only where they could
+/// read it once it is up: a new thread in a space they can't read, or one
+/// whose restriction leaves them out, or a reply in a thread they can't
+/// read, is shown by who wrote it and where, and can still be approved or
+/// rejected, as a report on what they can't read is (DESIGN.md §1
+/// principle 3, §8). Its author always sees their own.
+#[sqlx::test]
+async fn held_posts_are_shown_only_where_staff_read(pool: PgPool) {
+    use parlour::mod_records::{self, HeldPlace};
+    let c = club(pool).await;
+    let f = &c.f;
+    let hold = |author: i64, place: HeldPlace, body: &'static str| {
+        let db = f.db.clone();
+        async move { mod_records::hold(&db, author, &place, body).await.unwrap() }
+    };
+    let image = format!("/uploads/{}", c.image);
+    let in_secret = hold(
+        c.kit,
+        HeldPlace::Reply {
+            thread_id: c.secret,
+            reply_to_post_id: None,
+        },
+        "Heldsecretbody",
+    )
+    .await;
+    let in_circle = hold(
+        c.kit,
+        HeldPlace::Thread {
+            space_id: c.circle,
+            title: "Heldcircletitle".into(),
+            forked_from_post_id: None,
+            read: None,
+        },
+        "Heldcirclebody",
+    )
+    .await;
+    let narrowed = hold(
+        c.ruth,
+        HeldPlace::Thread {
+            space_id: c.general,
+            title: "Heldquiettitle".into(),
+            forked_from_post_id: None,
+            read: Some(Grant::listed([], [c.ruth])),
+        },
+        "Heldquietbody",
+    )
+    .await;
+    let in_lunch = hold(
+        c.ruth,
+        HeldPlace::Reply {
+            thread_id: c.lunch,
+            reply_to_post_id: None,
+        },
+        "Heldlunchbody",
+    )
+    .await;
+    // The image only in a held post where the moderator can't read.
+    let sha = "cd".repeat(32);
+    f.exec(&format!(
+        "INSERT INTO uploads (sha256, ext, mime, bytes, width, height)
+         VALUES ('{sha}', 'png', 'image/png', 1, 1, 1);
+         UPDATE held_posts SET body_md = body_md || ' ![](/uploads/{sha}.png)' WHERE id = {in_secret};"
+    ))
+    .await;
+    let held_image = format!("/uploads/{sha}.png");
+    let closed = [
+        "Heldsecretbody",
+        "Heldcircletitle",
+        "Heldcirclebody",
+        "Heldquiettitle",
+        "Heldquietbody",
+        &held_image,
+    ];
+    let cookie = &c.sam_cookie;
+    let queue = f.page_as("/mod/queue", cookie).await;
+    shows_none("/mod/queue", &queue, &closed);
+    shows_none("/mod/queue", &queue, &CLOSED);
+    assert!(queue.contains("Heldlunchbody"), "{queue}");
+    assert!(
+        queue.contains("You can’t read where it would go"),
+        "{queue}"
+    );
+    for id in [in_secret, in_circle, narrowed] {
+        let path = format!("/held/{id}");
+        let page = f.page_as(&path, cookie).await;
+        shows_none(&path, &page, &closed);
+        shows_none(&path, &page, &CLOSED);
+        assert!(page.contains("You can’t read where it would go"), "{page}");
+    }
+    let page = f.page_as(&format!("/held/{in_lunch}"), cookie).await;
+    assert!(page.contains("Heldlunchbody"), "{page}");
+    // Nor do they get its images.
+    assert_eq!(
+        image_status(f, &held_image, cookie).await,
+        StatusCode::NOT_FOUND
+    );
+    let _ = image;
+    // Its author sees all of their own.
+    let kit_cookie = f.session(c.kit).await;
+    let page = f.page_as(&format!("/held/{in_secret}"), &kit_cookie).await;
+    assert!(page.contains("Heldsecretbody"), "{page}");
+    assert!(page.contains(&held_image), "{page}");
+    // And a moderator who reads there sees it, and its image.
+    f.join_group(c.organisers, c.sam).await;
+    let page = f.page_as(&format!("/held/{in_secret}"), cookie).await;
+    assert!(page.contains("Heldsecretbody"), "{page}");
+    assert_eq!(
+        image_status(f, &held_image, cookie).await,
+        StatusCode::NOT_MODIFIED
+    );
+    f.exec(&format!(
+        "DELETE FROM group_members WHERE group_id = {} AND user_id = {}",
+        c.organisers, c.sam
+    ))
+    .await;
+    // Approving and rejecting need no reading.
+    ok(
+        f,
+        &format!("/mod/held/{in_circle}/approve"),
+        &[("back", "/mod/queue")],
+        cookie,
+    )
+    .await;
+    ok(
+        f,
+        &format!("/mod/held/{narrowed}/reject"),
+        &[("reason", "Not here"), ("back", "/mod/queue")],
+        cookie,
+    )
+    .await;
+    let log = f.page_as("/mod/log", cookie).await;
+    shows_none("/mod/log", &log, &closed);
+    assert_eq!(count(f, "SELECT count(*) FROM staff_access_views").await, 0);
+}
+
+/// The report form tells the reporter of something private what the
+/// moderators will see, and what happens if they open it (DESIGN.md §8).
+#[sqlx::test]
+async fn reporting_private_content_says_what_staff_will_see(pool: PgPool) {
+    let c = club(pool).await;
+    let f = &c.f;
+    let lunch_post = f
+        .id(&format!(
+            "SELECT min(id) FROM posts WHERE thread_id = {}",
+            c.lunch
+        ))
+        .await;
+    let form = f
+        .page_as(&format!("/p/{}/report", c.quiet_post), &c.ruth_cookie)
+        .await;
+    assert!(
+        form.contains("If they need to open the thread to act on it, everyone who can read it will be told a moderator looked"),
+        "{form}"
+    );
+    let form = f
+        .page_as(&format!("/p/{}/report", c.dm_post), &c.ruth_cookie)
+        .await;
+    assert!(
+        form.contains("If they need to open the conversation to act on it, everyone in it will be told a moderator looked"),
+        "{form}"
+    );
+    assert!(!form.contains("but not the conversation itself"), "{form}");
+    let form = f
+        .page_as(&format!("/p/{lunch_post}/report"), &c.ruth_cookie)
+        .await;
+    assert!(!form.contains("a moderator looked"), "{form}");
 }

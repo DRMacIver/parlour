@@ -879,13 +879,12 @@ pub async fn save_settings(
         .await?;
     // Staff run spaces they can't read, but changing who may read one so
     // that they could would be reading it by another way: breaking glass,
-    // which isn't done from here (DESIGN.md §3.1, §8). Someone the
-    // administer grant names, or whose group or list it names, runs it in
-    // their own right, staff or not; a grant to "staff" is the role again.
+    // which isn't done from here (DESIGN.md §3.1, §8). Naming themselves
+    // among those who run it changes nothing: anyone else the administer
+    // grant names must read the space to run it, so a member of staff who
+    // can't read it runs it only by their role.
     if let (Some(user), Ok(new)) = (viewer.user(), &settings)
         && viewer.is_staff()
-        && !(space.rules.administer.level == Level::Listed
-            && space.rules.administers_by_grant(&viewer))
         && !user_can_read(user, &space.rules.read.audience())
         && user_can_read(user, &new.read.audience())
     {

@@ -300,7 +300,10 @@ async fn a_reported_conversation_stays_closed_to_staff(pool: PgPool) {
     let form =
         s.f.page_as(&format!("/p/{post}/report"), &s.ruth_cookie)
             .await;
-    assert!(form.contains("but not the conversation itself"), "{form}");
+    assert!(
+        form.contains("everyone in it will be told a moderator looked"),
+        "{form}"
+    );
     let response = report(
         &s.f,
         &s.ruth_cookie,

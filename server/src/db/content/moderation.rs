@@ -745,3 +745,24 @@ pub async fn closed_post(
         },
     }))
 }
+
+/// Whether the viewer could read a post held for approval once it is up:
+/// the thread a reply would go in, or the space a new thread would start
+/// in and the restriction its author chose. A moderator is shown what a
+/// held post says only then (DESIGN.md §1 principle 3, §8); its author
+/// always sees their own, which is for the caller to decide.
+pub async fn held_readable(db: &Db, viewer: &Viewer, held_id: i64) -> sqlx::Result<bool> {
+    let filter = viewer.filter();
+    Ok(sqlx::query_scalar!(
+        r#"SELECT held_readable(h, $2, $3, $4, $5) AS "readable!"
+           FROM held_posts h WHERE h.id = $1"#,
+        held_id,
+        &filter.visibilities,
+        &filter.restricted_space_ids,
+        filter.dm_viewer,
+        &filter.group_ids,
+    )
+    .fetch_optional(db.pool())
+    .await?
+    .unwrap_or(false))
+}

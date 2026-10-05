@@ -1624,13 +1624,25 @@ pub async fn post_location(
 }
 
 /// The thread's canonical slug, if the viewer can see it, for the
-/// redirects to its page: under a break-glass grant too, since the page
-/// it leads to records the view (a redirect shows nothing).
-pub async fn thread_slug(db: &Db, viewer: &Viewer, thread_id: i64) -> sqlx::Result<Option<String>> {
+/// redirects to its page: under a break-glass grant too. `asked` is the
+/// slug the viewer's address already holds, if any. A slug is made from
+/// the thread's title, so an address that gives one the viewer didn't ask
+/// with shows what the thread is called: under a grant, that is a page
+/// shown, and recorded as one before the slug is returned (DESIGN.md §8).
+/// When it is the slug they asked with, the thread's page records the
+/// view instead, or the redirect (to another page of it) shows nothing new.
+pub async fn thread_slug(
+    db: &Db,
+    viewer: &Viewer,
+    thread_id: i64,
+    asked: Option<&str>,
+) -> sqlx::Result<Option<String>> {
     let filter = viewer.filter();
-    sqlx::query_scalar!(
+    let Some(row) = sqlx::query!(
         r#"
-        SELECT t.slug FROM threads t
+        SELECT t.slug, t.space_id AS "space_id!",
+               thread_readable(t, $2, $3, $4, $5) AS "readable!"
+        FROM threads t
         WHERE t.id = $1 AND t.deleted_at IS NULL AND t.space_id IS NOT NULL
           AND (thread_readable(t, $2, $3, $4, $5) OR thread_granted(t, $6, $7))
         "#,
@@ -1643,7 +1655,22 @@ pub async fn thread_slug(db: &Db, viewer: &Viewer, thread_id: i64) -> sqlx::Resu
         &filter.granted_space_ids,
     )
     .fetch_optional(db.pool())
-    .await
+    .await?
+    else {
+        return Ok(None);
+    };
+    if !row.readable && asked != Some(row.slug.as_str()) {
+        record_granted_view(
+            db,
+            viewer,
+            Granted::Thread {
+                thread_id,
+                space_id: Some(row.space_id),
+            },
+        )
+        .await?;
+    }
+    Ok(Some(row.slug))
 }
 
 // ---------------------------------------------------------------------------

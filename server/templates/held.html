@@ -12,7 +12,7 @@
 {% endif %}
 <section class="panel">
   <h2 class="panel-bar">{{ place.0 }}</h2>
-  <div class="post-body">{{ html|safe }}</div>
+  {% if let Some(html) = html %}<div class="post-body">{{ html|safe }}</div>{% else %}<p class="panel-text">You can’t read where it would go, so what it says isn’t shown to you. You can still approve or reject it.</p>{% endif %}
   <p class="panel-foot">By {{ held.author.display_name }} · <time datetime="{{ crate::format::iso(held.created_at) }}">{{ crate::format::datetime(held.created_at) }}</time></p>
 </section>
 {% if staff && held.status == "held" %}<p><a href="/mod/queue">Decide in the moderation queue</a></p>{% endif %}

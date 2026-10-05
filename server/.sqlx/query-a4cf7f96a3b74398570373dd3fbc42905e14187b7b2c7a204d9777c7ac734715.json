@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT t.slug, t.space_id AS \"space_id!\",\n               thread_readable(t, $2, $3, $4, $5) AS \"readable!\"\n        FROM threads t\n        WHERE t.id = $1 AND t.deleted_at IS NULL AND t.space_id IS NOT NULL\n          AND (thread_readable(t, $2, $3, $4, $5) OR thread_granted(t, $6, $7))\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "space_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "threads",
+            "name": "space_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "readable!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "a4cf7f96a3b74398570373dd3fbc42905e14187b7b2c7a204d9777c7ac734715"
+}

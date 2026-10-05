@@ -2,7 +2,6 @@
 //! storing the files is [`crate::uploads`]; who may fetch them is
 //! [`crate::content::uploads`].
 
-use crate::content::UserRef;
 use crate::db::{Db, Handle, KEY};
 use crate::uploads::Processed;
 
@@ -80,126 +79,6 @@ pub async fn in_post(db: &Db, post_id: i64) -> sqlx::Result<Vec<String>> {
         .into_iter()
         .map(|row| crate::uploads::url(&row.sha256, &row.ext))
         .collect())
-}
-
-/// A post in a space thread that shows an image, now or in an earlier
-/// version.
-pub struct ImageInPost {
-    pub post_id: i64,
-    pub seq: i32,
-    pub thread_title: String,
-    pub deleted: bool,
-}
-
-/// Everything about an image, for staff deciding whether to remove it.
-pub struct ImageUse {
-    pub width: i32,
-    pub height: i32,
-    pub bytes: i32,
-    pub uploaders: Vec<UserRef>,
-    /// Posts in space threads, which staff may read.
-    pub posts: Vec<ImageInPost>,
-    /// How many posts in conversations show it. Staff aren't told which,
-    /// as they may not read the conversations.
-    pub conversation_posts: i64,
-    /// Posts held for approval that show it.
-    pub held_posts: Vec<i64>,
-    /// The members whose picture it is.
-    pub avatars: Vec<UserRef>,
-}
-
-pub enum ImageLookup {
-    NotFound,
-    /// Staff removed it.
-    Removed,
-    Found(ImageUse),
-}
-
-/// Where an image is used, for staff. The caller checks the viewer is
-/// staff.
-pub async fn image_use(db: &Db, sha256: &str, ext: &str) -> sqlx::Result<ImageLookup> {
-    let pool = db.pool();
-    let Some(file) = sqlx::query!(
-        "SELECT width, height, bytes FROM uploads WHERE sha256 = $1 AND ext = $2 LIMIT 1",
-        sha256,
-        ext
-    )
-    .fetch_optional(pool)
-    .await?
-    else {
-        return Ok(if is_removed(db, sha256).await? {
-            ImageLookup::Removed
-        } else {
-            ImageLookup::NotFound
-        });
-    };
-    let uploaders = sqlx::query!(
-        r#"SELECT a.id, a.username AS "username!: String", a.display_name
-           FROM uploads u JOIN users a ON a.id = u.user_id
-           WHERE u.sha256 = $1 ORDER BY u.created_at, a.id"#,
-        sha256
-    )
-    .fetch_all(pool)
-    .await?;
-    let avatars = sqlx::query!(
-        r#"SELECT a.id, a.username AS "username!: String", a.display_name
-           FROM uploads u JOIN users a ON a.avatar_upload_id = u.id
-           WHERE u.sha256 = $1 ORDER BY a.id"#,
-        sha256
-    )
-    .fetch_all(pool)
-    .await?;
-    let posts = sqlx::query!(
-        r#"WITH shown_in AS (
-               SELECT post_id FROM post_uploads WHERE sha256 = $1
-               UNION
-               SELECT r.post_id FROM revision_uploads ru JOIN post_revisions r ON r.id = ru.revision_id
-               WHERE ru.sha256 = $1
-           )
-           SELECT p.id, p.seq, t.title, t.space_id IS NULL AS "private!",
-                  p.deleted_at IS NOT NULL OR t.deleted_at IS NOT NULL AS "deleted!"
-           FROM shown_in s JOIN posts p ON p.id = s.post_id JOIN threads t ON t.id = p.thread_id
-           ORDER BY p.id"#,
-        sha256
-    )
-    .fetch_all(pool)
-    .await?;
-    let held_posts = sqlx::query_scalar!(
-        "SELECT held_post_id FROM held_post_uploads WHERE sha256 = $1 ORDER BY held_post_id",
-        sha256
-    )
-    .fetch_all(pool)
-    .await?;
-    let user_ref = |id: i64, username: String, display_name: String| UserRef {
-        id,
-        username,
-        display_name,
-    };
-    Ok(ImageLookup::Found(ImageUse {
-        width: file.width,
-        height: file.height,
-        bytes: file.bytes,
-        uploaders: uploaders
-            .into_iter()
-            .map(|r| user_ref(r.id, r.username, r.display_name))
-            .collect(),
-        conversation_posts: posts.iter().filter(|p| p.private).count() as i64,
-        posts: posts
-            .into_iter()
-            .filter(|p| !p.private)
-            .map(|p| ImageInPost {
-                post_id: p.id,
-                seq: p.seq,
-                thread_title: p.title,
-                deleted: p.deleted,
-            })
-            .collect(),
-        held_posts,
-        avatars: avatars
-            .into_iter()
-            .map(|r| user_ref(r.id, r.username, r.display_name))
-            .collect(),
-    }))
 }
 
 /// What removing an image took away.

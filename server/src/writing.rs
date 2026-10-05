@@ -17,7 +17,7 @@ use crate::error::AppError;
 use crate::markdown;
 use crate::mod_records::{self, HeldPlace, NewAction};
 use crate::notify;
-use crate::permissions::{Audience, Grant, ThreadRestriction, at_most_as_visible};
+use crate::permissions::{Audience, Grant, ThreadRestriction, at_most_as_visible, user_can_read};
 use crate::ratelimit::{Action, Scope};
 use crate::social;
 use crate::store::{self, Edited, NewPost, NewThread};
@@ -624,14 +624,26 @@ pub async fn restrict_thread(
     if !restriction.reply_within_read() {
         problems.push(REPLIERS_READ.to_owned());
     }
+    let before = target.audience();
+    let after = restriction.audience(&target.space.rules);
+    // Staff change who may read threads they can't, as they run every
+    // space, but letting themselves read one would be reading it by
+    // another way: breaking glass, which isn't done from here (DESIGN.md
+    // §3.1, §8). Those who run the space in their own right open its
+    // threads as any administrator may.
+    if viewer.is_staff()
+        && !target.readable
+        && !target.space.rules.runs_in_own_right(viewer)
+        && user_can_read(user, &after)
+    {
+        problems.push(OPENS_TO_STAFF.to_owned());
+    }
     if !problems.is_empty() {
         return Ok(Err(Refused::Invalid(problems)));
     }
     if restriction == target.restriction {
         return Ok(Ok(()));
     }
-    let before = target.audience();
-    let after = restriction.audience(&target.space.rules);
     match store::set_thread_restriction(state.db(), thread_id, &restriction).await {
         Ok(true) => {}
         Ok(false) => return Ok(Err(Refused::NotFound)),
@@ -673,6 +685,8 @@ pub async fn restrict_thread(
 }
 
 const CHOOSE_GROUPS: &str = "Choose groups and lists from those offered.";
+
+const OPENS_TO_STAFF: &str = "You can’t read this thread, and that would let you read it. Leave who can read it to someone who can, or choose people that still leave you out.";
 
 const NARROWED_TO_NAMES: &str = "A thread can only be narrowed to groups, lists and people.";
 

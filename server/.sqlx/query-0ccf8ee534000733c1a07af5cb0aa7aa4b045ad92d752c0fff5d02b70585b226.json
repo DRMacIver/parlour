@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT held_readable(h, $2, $3, $4, $5) AS \"readable!\"\n           FROM held_posts h WHERE h.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "readable!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8Array",
+        "Int8",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0ccf8ee534000733c1a07af5cb0aa7aa4b045ad92d752c0fff5d02b70585b226"
+}

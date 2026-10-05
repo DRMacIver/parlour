@@ -189,6 +189,8 @@ struct GrantModel {
 struct HeldModel {
     id: i64,
     author: i64,
+    /// The space the thread would start in.
+    space: usize,
     title_token: String,
     body_token: String,
 }
@@ -1285,8 +1287,12 @@ impl World {
                 tokens.extend(p.history.iter().map(String::as_str));
             }
         }
+        // Staff are shown a held post only where they could read it once
+        // it is up (DESIGN.md §8); its author always.
         for h in &self.held {
-            if who == Who::Staff || (who == Who::Member && h.author == self.member_id) {
+            if (who == Who::Staff && self.space_readable(h.space, who))
+                || (who == Who::Member && h.author == self.member_id)
+            {
                 tokens.insert(h.title_token.as_str());
                 tokens.insert(h.body_token.as_str());
             }
@@ -1660,13 +1666,18 @@ impl World {
             } else {
                 BTreeSet::new()
             };
+            // A redirect shows what its address says: a thread's slug is
+            // made from its title.
+            let location = response
+                .header(axum::http::header::LOCATION)
+                .unwrap_or_default();
             for token in forbidden
                 .iter()
                 .filter(|t| !kept.contains(t.as_str()) && !granted.contains(t.as_str()))
             {
                 assert!(
-                    !response.body.contains(token.as_str()),
-                    "{path} shows {token} to {who:?}:\n{}",
+                    !response.body.contains(token.as_str()) && !location.contains(token.as_str()),
+                    "{path} shows {token} to {who:?} (leading to {location:?}):\n{}",
                     response.body
                 );
             }
@@ -2782,6 +2793,7 @@ impl World {
         self.held.push(HeldModel {
             id,
             author,
+            space,
             title_token,
             body_token,
         });
@@ -3080,8 +3092,9 @@ struct Access {
     conversations: Vec<AccessConversation>,
     messages: Vec<AccessMessage>,
     images: u64,
-    /// The images in posts held for approval.
-    held_images: Vec<String>,
+    /// The images in posts held for approval, each with the thread the
+    /// reply holding it would go in.
+    held_images: Vec<(String, usize)>,
     /// The default layout and its one section.
     default_layout: i64,
     default_section: i64,
@@ -3462,9 +3475,14 @@ impl Access {
     /// if it has its own read restriction, only those it names (staff are
     /// no exception; a suspended member is named by nothing).
     fn reads_thread(&self, who: Option<usize>, thread: usize) -> bool {
+        !self.threads[thread].deleted && self.reads_thread_if_live(who, thread)
+    }
+
+    /// Whether the viewer would read a thread were it live, as a held
+    /// reply in it is read (`held_readable`).
+    fn reads_thread_if_live(&self, who: Option<usize>, thread: usize) -> bool {
         let t = &self.threads[thread];
-        !t.deleted
-            && self.reads_space(who, t.space)
+        self.reads_space(who, t.space)
             && match &t.read {
                 None => true,
                 Some(names) => {
@@ -3582,7 +3600,7 @@ impl Access {
             }
             // Conversations never have space pages.
             assert!(
-                self.block(content::thread_slug(db, viewer, conversation.id))
+                self.block(content::thread_slug(db, viewer, conversation.id, None))
                     .unwrap()
                     .is_none()
             );
@@ -4225,7 +4243,7 @@ impl Access {
                 .unwrap();
             assert_eq!(page.is_some(), visible, "{who:?}: thread {t}");
             assert_eq!(
-                self.block(content::thread_slug(db, &viewer, thread.id))
+                self.block(content::thread_slug(db, &viewer, thread.id, None))
                     .unwrap()
                     .is_some(),
                 visible,
@@ -4428,15 +4446,16 @@ impl Access {
         }
 
         // Images in posts held for approval are for staff, who review
-        // them.
-        for image in &self.held_images {
+        // them, where they could read them once they are up (DESIGN.md §8).
+        for (image, thread) in &self.held_images {
             let access = self
                 .block(content::uploads::upload_access(db, &viewer, image, "png"))
                 .unwrap();
             assert_eq!(
                 access,
-                self.sees_hidden(who).then_some(UploadAccess::Private),
-                "{who:?}: image in a held post"
+                (self.sees_hidden(who) && self.reads_thread_if_live(who, *thread))
+                    .then_some(UploadAccess::Private),
+                "{who:?}: image in a held post in thread {thread}"
             );
         }
 
@@ -5071,7 +5090,7 @@ impl Access {
             &format!("Held{markdown}"),
         ))
         .unwrap();
-        self.held_images.push(image);
+        self.held_images.push((image, thread));
     }
 
     #[rule]

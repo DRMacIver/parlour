@@ -18,11 +18,12 @@
 </section>
 <section class="panel" aria-labelledby="where-heading">
   <h2 class="panel-bar" id="where-heading">Where it is shown</h2>
-  {% if image.posts.is_empty() && image.conversation_posts == 0 && image.held_posts.is_empty() %}
+  {% if image.posts.is_empty() && image.closed_posts == 0 && image.conversation_posts == 0 && image.held_posts.is_empty() %}
   <p class="empty">It isn’t in any post.</p>
   {% else %}
   <ul class="mod-links">
     {% for post in image.posts %}<li><a href="/mod/p/{{ post.post_id }}">№ {{ post.seq }}</a> in {{ post.thread_title }}{% if post.deleted %} <span class="flag">Deleted</span>{% endif %}</li>{% endfor %}
+    {% if image.closed_posts > 0 %}<li>{{ crate::format::plural(image.closed_posts, "post in a thread", "posts in threads") }} you can’t read</li>{% endif %}
     {% for id in image.held_posts %}<li><a href="/held/{{ id }}">A post held for approval</a></li>{% endfor %}
     {% if image.conversation_posts > 0 %}<li>{{ crate::format::plural(image.conversation_posts, "message", "messages") }} in conversations, which staff can’t read without breaking glass</li>{% endif %}
   </ul>

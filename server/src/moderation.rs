@@ -506,6 +506,9 @@ pub enum QueueKind {
         author: Box<MemberRecord>,
         /// Where it would go: the space or thread, as a link.
         place: (String, String),
+        /// Whether the moderator could read it there once it is up, and so
+        /// may be shown what it says (DESIGN.md §8).
+        readable: bool,
     },
 }
 
@@ -601,13 +604,15 @@ pub async fn queue(state: &AppState, viewer: &Viewer) -> Result<Vec<QueueItem>, 
         let Some(author) = mod_records::member_record(db, &held.author.username).await? else {
             continue;
         };
-        let place = held_place(state, viewer, &held.place).await?;
+        let readable = content::moderation::held_readable(db, viewer, held.id).await?;
+        let place = held_place(state, viewer, &held.place, readable).await?;
         items.push(QueueItem {
             first_at: held.created_at,
             kind: QueueKind::Held {
                 held: Box::new(held),
                 author: Box::new(author),
                 place,
+                readable,
             },
         });
     }
@@ -615,22 +620,45 @@ pub async fn queue(state: &AppState, viewer: &Viewer) -> Result<Vec<QueueItem>, 
     Ok(items)
 }
 
-/// Where a held post would go, as a label and a link.
+/// Where a held post would go, as a label and a link. `shown` says
+/// whether the viewer may be shown the post (its author, or someone who
+/// could read it once it is up); a new thread's title is given only then.
 pub async fn held_place(
     state: &AppState,
     viewer: &Viewer,
     place: &HeldPlace,
+    shown: bool,
 ) -> Result<(String, String), AppError> {
     Ok(match place {
         HeldPlace::Thread {
             space_id, title, ..
-        } => match content::space_by_id(state.db(), viewer, *space_id).await? {
+        } if shown => match content::space_by_id(state.db(), viewer, *space_id).await? {
             Some(c) => (
                 format!("{} › new thread “{title}”", c.space.name),
                 format!("/c/{}", c.space.slug),
             ),
             None => (format!("new thread “{title}”"), "/".to_owned()),
         },
+        // Staff run every space, but read only what their own memberships
+        // let them (DESIGN.md §3.1): the space is named, leading to its page
+        // if they read it and otherwise to its settings, which they run.
+        HeldPlace::Thread { space_id, .. } => {
+            match content::space_by_id(state.db(), viewer, *space_id).await? {
+                Some(c) => (
+                    format!("{} › new thread", c.space.name),
+                    format!("/c/{}", c.space.slug),
+                ),
+                None => {
+                    match content::administered_space_by_id(state.db(), viewer, *space_id).await? {
+                        Some(c) => (
+                            format!("{} › new thread", c.space.name),
+                            format!("/c/{}/settings", c.space.slug),
+                        ),
+                        None => ("a new thread".to_owned(), "/".to_owned()),
+                    }
+                }
+            }
+        }
         HeldPlace::Reply { thread_id, .. } => {
             match content::thread_target(state.db(), viewer, *thread_id).await? {
                 Some(t) => {
@@ -1951,6 +1979,18 @@ pub async fn held_for(state: &AppState, viewer: &Viewer, id: i64) -> Outcome<Hel
         Some(held) if held.author.id == user.id || user.is_staff() => Ok(Ok(held)),
         _ => Ok(Err(Refused::NotFound)),
     }
+}
+
+/// Whether the viewer may be shown what a held post says: its author
+/// always; staff only where they could read it once it is up (DESIGN.md
+/// §1 principle 3, §8), though they approve or reject it either way.
+pub async fn held_shown(
+    state: &AppState,
+    viewer: &Viewer,
+    held: &HeldPost,
+) -> Result<bool, AppError> {
+    Ok(viewer.user_id() == Some(held.author.id)
+        || content::moderation::held_readable(state.db(), viewer, held.id).await?)
 }
 
 // ---------------------------------------------------------------------------

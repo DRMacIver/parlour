@@ -352,6 +352,20 @@ impl SpaceRules {
         })
     }
 
+    /// Whether the viewer runs the space as anyone else the administer
+    /// grant names would: it names them (by more than their role, since a
+    /// grant to "staff" is the role again), and they can read the space.
+    /// Staff who don't may still administer it, but not open what they
+    /// can't read by changing who may (DESIGN.md §3.1, §8).
+    pub fn runs_in_own_right(&self, viewer: &Viewer) -> bool {
+        viewer.user().is_some_and(|user| {
+            user.may_act()
+                && self.administer.level != Level::Staff
+                && self.administer.allows(user)
+                && user_can_read(user, &self.read.audience())
+        })
+    }
+
     /// Whether the viewer administers the space in their own right, and
     /// not only as staff. Staff acting on other people's spaces is logged.
     pub fn administers_by_grant(&self, viewer: &Viewer) -> bool {
