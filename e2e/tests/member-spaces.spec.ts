@@ -2,7 +2,8 @@
 // in a real browser: they put a friend on their Friends list, open their
 // feed to that list alone and post the first thread in it, which the friend
 // finds on Latest and on the feed's page while another member is told
-// there's no such page; and a member makes a topic space, archives it,
+// there's no such page; the owner hides the friend's reply and locks the
+// thread, as the one who runs the feed; and a member makes a topic space, archives it,
 // opens it again and deletes it, being asked first. Every page must fit the
 // screen and work without JavaScript.
 //
@@ -81,6 +82,33 @@ test("a member opens their feed to their Friends list alone", async ({ page, bro
   await friendPage.locator("a", { hasText: title }).click();
   await expect(friendPage.locator(".post-body").first()).toContainText(body);
   await expectFits(friendPage);
+
+  // The friend replies; the owner, who runs the feed, hides the reply and
+  // locks the thread (DESIGN.md §3.2), from the thread's own page.
+  const reply = `I am sure someone flipped something (${stamp})`;
+  await friendPage.fill("#reply-body", reply);
+  await friendPage.locator("#reply button[type=submit]:not([name])").click();
+  await expect(friendPage.locator(".post-body", { hasText: reply })).toBeVisible();
+  await page.goto(threadUrl);
+  const replyPost = page.locator("article.post", { hasText: reply });
+  await replyPost.locator(".post-actions a", { hasText: "moderate" }).click();
+  await expect(page.locator("h1")).toHaveText("Moderate № 2");
+  await expectFits(page);
+  await page.fill("#reason", "Keeping it to the write-up");
+  await page.locator("button", { hasText: "Hide from members" }).click();
+  await expect(page.locator(".flag-hidden")).toBeVisible();
+  await page.goto(threadUrl);
+  await page.locator(".toolbar a", { hasText: "Moderate thread" }).click();
+  await page.fill("#reason-state", "Write-up done");
+  await page.locator("button", { hasText: /^Lock$/ }).click();
+  await page.goto(threadUrl);
+  await expect(page.locator(".thread-meta .flag", { hasText: "Locked" })).toBeVisible();
+  await expectFits(page);
+  // The friend sees neither the reply nor a way to post another.
+  await friendPage.goto(threadUrl);
+  await expect(friendPage.getByText(reply)).toHaveCount(0);
+  await expect(friendPage.locator("#reply-body")).toHaveCount(0);
+  await expect(friendPage.getByText("This thread is locked.")).toBeVisible();
 
   // Someone who isn't on the list is told there is no such thing.
   const otherPage = await loggedIn(browser, other);
