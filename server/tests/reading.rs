@@ -89,10 +89,13 @@ async fn index_latest_list_shows_recent_threads(pool: PgPool) {
 #[sqlx::test]
 async fn index_with_no_spaces_says_so(pool: PgPool) {
     let f = Forum::new(pool);
+    // Visitors get the welcome alone: there is nothing they could read.
     let page = f.page("/").await;
-    assert!(page.contains("There are no spaces yet."));
+    assert!(page.contains("This forum is for its members."), "{page}");
+    assert!(!page.contains("There are no spaces yet."), "{page}");
+    assert!(!page.contains("latest-heading"), "{page}");
     assert!(!page.contains("/spaces/new"));
-    // Members are shown where to make one; visitors aren't.
+    // Members are shown where to make one.
     for (name, role) in [("sam", "admin"), ("jonah", "user")] {
         let user = f.member(name, role, None).await;
         let page = f.page_as("/", &f.session(user).await).await;

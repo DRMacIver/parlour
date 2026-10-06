@@ -1,12 +1,22 @@
 {% extends "base.html" %}
 {%- import "_admin_nav.html" as an -%}
-{% block title %}Terms and privacy · {{ layout.site_name }}{% endblock %}
+{% block title %}Welcome, terms and privacy · {{ layout.site_name }}{% endblock %}
 {% block content %}
 <div class="narrow">
-<h1 class="page-title">Terms and privacy</h1>
+<h1 class="page-title">Welcome, terms and privacy</h1>
 {% call an::admin_nav("pages") %}{% endcall %}
-{% if saved %}<div class="notice notice-success" role="status"><p>Saved. The pages are at <a href="/terms">/terms</a> and <a href="/privacy">/privacy</a>, linked at the foot of every page.</p></div>{% endif %}
+{% if saved %}<div class="notice notice-success" role="status"><p>Saved. Visitors see the welcome on the <a href="/">front page</a>; the pages are at <a href="/terms">/terms</a> and <a href="/privacy">/privacy</a>, linked at the foot of every page.</p></div>{% endif %}
 <form method="post" action="/admin/pages">
+<section class="panel" aria-labelledby="welcome-heading">
+  <h2 class="panel-bar" id="welcome-heading">Welcome</h2>
+  <div class="form">
+    <div class="field">
+      <label for="welcome">What visitors who haven’t logged in read on the front page, in Markdown</label>
+      <textarea id="welcome" name="welcome" rows="6">{{ welcome.md }}</textarea>
+      <span class="field-hint">Members don’t see it. Leave it empty for no welcome. Visitors see the spaces they can read below it, if there are any.</span>
+    </div>
+  </div>
+</section>
 <section class="panel" aria-labelledby="terms-heading">
   <h2 class="panel-bar" id="terms-heading">Terms of use</h2>
   <div class="form">

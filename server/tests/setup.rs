@@ -95,9 +95,9 @@ async fn setup_creates_the_admin_with_the_printed_token(db: PgPool) {
 }
 
 /// Setup makes the first two spaces, Announcements (only staff start
-/// threads) and General, both essential, and the default front page: a
-/// "Forum" section holding them and an empty "Feeds" section (DESIGN.md
-/// §3.5). The admin's own copy follows.
+/// threads) and General, both essential and for members only, and the
+/// default front page: a "Forum" section holding them and an empty
+/// "Feeds" section (DESIGN.md §3.5). The admin's own copy follows.
 #[sqlx::test]
 async fn setup_makes_the_first_spaces_and_the_default_front_page(db: PgPool) {
     let forum = Forum::new(db);
@@ -108,9 +108,10 @@ async fn setup_makes_the_first_spaces_and_the_default_front_page(db: PgPool) {
     assert_eq!(response.status, StatusCode::SEE_OTHER, "{}", response.body);
     let sam = forum.user_id("sam").await;
 
-    let spaces: Vec<(String, String, bool, String, String)> = sqlx::query_as(
-        "SELECT c.slug, c.name, c.essential, st.level, a.level
+    let spaces: Vec<(String, String, bool, String, String, String)> = sqlx::query_as(
+        "SELECT c.slug, c.name, c.essential, r.level, st.level, a.level
          FROM spaces c
+         JOIN space_grants r ON r.space_id = c.id AND r.verb = 'read'
          JOIN space_grants st ON st.space_id = c.id AND st.verb = 'start'
          JOIN space_grants a ON a.space_id = c.id AND a.verb = 'administer'
          WHERE c.kind = 'topic'
@@ -126,6 +127,7 @@ async fn setup_makes_the_first_spaces_and_the_default_front_page(db: PgPool) {
                 "announcements".to_owned(),
                 "Announcements".to_owned(),
                 true,
+                "members".to_owned(),
                 "staff".to_owned(),
                 "staff".to_owned()
             ),
@@ -133,6 +135,7 @@ async fn setup_makes_the_first_spaces_and_the_default_front_page(db: PgPool) {
                 "general".to_owned(),
                 "General".to_owned(),
                 true,
+                "members".to_owned(),
                 "members".to_owned(),
                 "staff".to_owned()
             ),
@@ -178,15 +181,22 @@ async fn setup_makes_the_first_spaces_and_the_default_front_page(db: PgPool) {
     let mine = layouts::member_id(&forum.db, sam).await.unwrap().unwrap();
     assert_eq!(shape(mine).await, expected);
 
-    // The front page shows them, to the admin and to visitors alike.
+    // The front page shows them to the admin.
     let cookie = cookie_set_by(&response).unwrap();
-    for page in [forum.page("/").await, forum.page_as("/", &cookie).await] {
-        let announcements = page
-            .find("href=\"/c/announcements\"")
-            .expect("announcements");
-        let general = page.find("href=\"/c/general\"").expect("general");
-        assert!(announcements < general, "{page}");
-    }
+    let page = forum.page_as("/", &cookie).await;
+    let announcements = page
+        .find("href=\"/c/announcements\"")
+        .expect("announcements");
+    let general = page.find("href=\"/c/general\"").expect("general");
+    assert!(announcements < general, "{page}");
+    // Visitors get the welcome, and no spaces at all, since there are none
+    // they could read.
+    let page = forum.page("/").await;
+    assert!(page.contains("This forum is for its members."), "{page}");
+    assert!(!page.contains("/c/general"), "{page}");
+    assert!(!page.contains("space-list"), "{page}");
+    assert!(!page.contains("There are no spaces yet."), "{page}");
+    assert!(!page.contains("latest-heading"), "{page}");
     assert!(
         forum
             .page_as("/c/announcements/new", &cookie)

@@ -272,3 +272,33 @@ impl SitePages {
 pub async fn site_pages(db: &Db) -> sqlx::Result<SitePages> {
     Ok(get(db, "pages").await?.unwrap_or_else(SitePages::starting))
 }
+
+/// What visitors who haven't logged in read at the top of the front page,
+/// as the admin wrote it in Markdown and as rendered when saved. Empty
+/// means no welcome at all.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Welcome {
+    pub md: String,
+    pub html: String,
+}
+
+/// The welcome until an admin writes their own, and what its form starts
+/// with.
+pub const DEFAULT_WELCOME: &str = "\
+This forum is for its members. If you have an account, [log in](/login) to read it. \
+New members join by invitation.
+";
+
+impl Welcome {
+    pub fn starting() -> Welcome {
+        Welcome {
+            md: DEFAULT_WELCOME.to_owned(),
+            html: crate::markdown::render(DEFAULT_WELCOME),
+        }
+    }
+}
+
+pub async fn welcome(db: &Db) -> sqlx::Result<Welcome> {
+    Ok(get(db, "welcome").await?.unwrap_or_else(Welcome::starting))
+}

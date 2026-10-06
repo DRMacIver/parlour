@@ -16,7 +16,7 @@ use crate::content::Deps;
 use crate::error::AppError;
 use crate::markdown;
 use crate::ratelimit::{Action, Scope};
-use crate::settings::{self, SitePages};
+use crate::settings::{self, SitePages, Welcome};
 use crate::users::{self, Deletion};
 use crate::viewer::Viewer;
 use crate::web::{self, Layout, Nav, cacheable, render, see_other};
@@ -199,6 +199,7 @@ pub async fn privacy(
 #[template(path = "admin_pages.html")]
 struct AdminPagesTemplate {
     layout: Layout,
+    welcome: Welcome,
     pages: SitePages,
     saved: bool,
 }
@@ -218,6 +219,7 @@ pub async fn admin_pages_page(
         StatusCode::OK,
         &AdminPagesTemplate {
             layout: Layout::load(&state, &viewer, Nav::Admin).await?,
+            welcome: settings::welcome(state.db()).await?,
             pages: settings::site_pages(state.db()).await?,
             saved: uri.query() == Some("saved"),
         },
@@ -227,6 +229,7 @@ pub async fn admin_pages_page(
 #[derive(Deserialize, Default)]
 #[serde(default)]
 pub struct PagesForm {
+    welcome: String,
     terms: String,
     privacy: String,
 }
@@ -245,9 +248,10 @@ pub async fn save_admin_pages(
     if !viewer.is_admin() {
         return web::forbidden(&state, &viewer).await;
     }
+    let welcome = crate::writing::clean_body(&form.welcome);
     let terms = crate::writing::clean_body(&form.terms);
     let privacy = crate::writing::clean_body(&form.privacy);
-    for text in [&terms, &privacy] {
+    for text in [&welcome, &terms, &privacy] {
         if text.chars().count() > MAX_PAGE_CHARS
             || markdown::nesting_depth(text) > markdown::MAX_NESTING
         {
@@ -268,7 +272,14 @@ pub async fn save_admin_pages(
         terms_md: terms,
         privacy_md: privacy,
     };
-    settings::set(state.db(), "pages", &pages).await?;
+    let welcome = Welcome {
+        html: markdown::render(&welcome),
+        md: welcome,
+    };
+    let mut tx = state.db().begin().await?;
+    settings::set(&mut tx, "welcome", &welcome).await?;
+    settings::set(&mut tx, "pages", &pages).await?;
+    tx.commit().await?;
     state.changed(Change::SiteChanged).await?;
     Ok(see_other("/admin/pages?saved"))
 }

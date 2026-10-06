@@ -659,8 +659,11 @@ async fn archived_and_unreadable_spaces_are_left_off_the_front_page(pool: PgPool
 #[sqlx::test]
 async fn a_front_page_with_nothing_on_it_says_so(pool: PgPool) {
     let f = Forum::new(pool);
+    // A visitor is told nothing about spaces while there are none they
+    // could read.
     let page = f.page("/").await;
-    assert!(page.contains("There are no spaces yet."));
+    assert!(!page.contains("There are no spaces yet."), "{page}");
+    assert!(!page.contains("See every space"), "{page}");
     // Spaces exist, but none is on the front page.
     f.unlisted_space("games", "public").await;
     let page = f.page("/").await;

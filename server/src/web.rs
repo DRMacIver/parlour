@@ -61,13 +61,17 @@ pub struct Layout {
     /// The islands' files, for logged-in members only (DESIGN.md §5:
     /// anonymous pages load no island JavaScript).
     pub islands: Option<crate::islands::IslandAssets>,
+    /// For a visitor on the front page, the welcome an admin wrote, if
+    /// there is one.
+    pub welcome: Option<String>,
 }
 
 impl Layout {
     /// Everything the header needs, in one query: the site's name and, for
     /// a member, their counts and any restriction on them.
     pub async fn load(state: &AppState, viewer: &Viewer, nav: Nav) -> sqlx::Result<Layout> {
-        let header = crate::db::header::load(state.db(), viewer).await?;
+        let welcome = nav == Nav::Index && viewer.user().is_none();
+        let header = crate::db::header::load(state.db(), viewer, welcome).await?;
         let user = viewer.user().map(|user| NavUser {
             username: user.username.clone(),
             is_admin: viewer.is_admin(),
@@ -101,6 +105,7 @@ impl Layout {
             nav,
             user,
             restriction,
+            welcome: header.welcome,
         })
     }
 }

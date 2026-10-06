@@ -106,7 +106,7 @@ test("an admin sees the site settings, members and reactions", async ({ page }) 
   await expect(page.locator(".reaction-types button[value=disable]").first()).toBeVisible();
   await expectFits(page);
   await page.goto("/admin/pages");
-  await expect(page.locator("h1")).toHaveText("Terms and privacy");
+  await expect(page.locator("h1")).toHaveText("Welcome, terms and privacy");
   await expectFits(page);
 });
 

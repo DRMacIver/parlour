@@ -294,7 +294,7 @@ const FIRST_SPACES: [(&str, &str, &str, bool); 2] = [
 
 /// The first two spaces and the default front page (DESIGN.md §3.5):
 /// Announcements, in which only staff start threads, and General, both
-/// essential and open for anyone to read, in a section called "Forum",
+/// essential and for members to read, in a section called "Forum",
 /// followed by an empty "Feeds" section. Site staff run them. A topic
 /// space whose address is taken already (the database was not quite
 /// empty) is used as it is; one at a member's name (and so their feed's
@@ -312,7 +312,7 @@ async fn first_spaces(tx: &mut crate::db::Tx, admin_id: i64) -> Result<(), AppEr
             slug: slug.to_owned(),
             name: name.to_owned(),
             description: description.to_owned(),
-            read: Grant::public(),
+            read: Grant::members(),
             start,
             administer: Grant::staff(),
             ..SpaceSettings::default()

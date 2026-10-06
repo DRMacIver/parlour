@@ -102,7 +102,10 @@ Run `cargo run` against an empty database instead of seeding it. The server
 logs a one-time link, `http://localhost:8080/setup?token=…`, which walks
 through creating the admin account, the email settings (with a test
 send) and the first invitations, and makes the first two spaces,
-Announcements and General. Any member can make more from the Spaces page.
+Announcements and General, which only members can read. Visitors who
+haven't logged in see a welcome on the front page instead, which admins
+edit at Admin → Welcome, terms and privacy. Any member can make more
+spaces from the Spaces page.
 Admin → Spaces shows the default front page, the sections members start
 from; staff put a space on it from the space's settings. By default
 each new member's first 2 posts are held for a moderator to approve; change

@@ -44,7 +44,10 @@ On its first start Parlour prints a one-time setup link. Find it with
 
 and open it in a browser. The setup wizard makes the admin account, names
 the site, checks the email settings, creates the first spaces and the
-default front page, and makes your first invites.
+default front page, and makes your first invites. The first spaces,
+Announcements and General, are for members only; visitors who haven't
+logged in see just a welcome, which you can change under Admin → Welcome,
+terms and privacy.
 
 ## The database and its roles
 

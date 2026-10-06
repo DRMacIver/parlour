@@ -85,6 +85,17 @@ test("a new forum is set up, and its first members talk", async ({ page, browser
   // Setup made Announcements and General, on the front page for everyone.
   await expect(page.locator(".space-list a[href='/c/announcements']")).toBeVisible();
   await expect(page.locator(".space-list a[href='/c/general']")).toBeVisible();
+  // They are for members: a visitor gets the welcome and no spaces.
+  const visitorContext = await browser.newContext({ ...test.info().project.use });
+  const visitor = await visitorContext.newPage();
+  await ownAddress(visitor);
+  await visitor.goto("/");
+  await expect(visitor.locator(".welcome")).toContainText("This forum is for its members.");
+  await expect(visitor.locator(".welcome a[href='/login']")).toBeVisible();
+  await expect(visitor.locator(".space-list")).toHaveCount(0);
+  await expect(visitor.locator("#latest-heading")).toHaveCount(0);
+  await expectFits(visitor);
+  await visitorContext.close();
   // General's settings are the admin's to change; a save keeps it as it is.
   await page.goto("/c/general/settings");
   await expect(page.locator("input[name=essential]")).toBeChecked();

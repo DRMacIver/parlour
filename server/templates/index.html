@@ -48,8 +48,14 @@
 
 {% block content %}
 <h1 class="page-title visually-hidden">Front page</h1>
-<div class="index-layout">
+<div class="index-layout{% if !shows_spaces() %} index-layout-alone{% endif %}">
   <div class="index-main">
+  {% if let Some(welcome) = layout.welcome %}
+    <section class="panel welcome" aria-label="Welcome">
+      <div class="post-body site-page">{{ welcome|safe }}</div>
+    </section>
+  {% endif %}
+  {% if shows_spaces() %}
   {% if front.is_empty() %}
     <section class="panel">
       <h2 class="panel-bar">Spaces</h2>
@@ -71,7 +77,9 @@
   {% if layout.user.is_some() %}
     <p class="index-arrange"><a href="/settings/layout">Arrange your front page</a></p>
   {% endif %}
+  {% endif %}
   </div>
+  {% if shows_spaces() %}
   <aside class="panel latest" aria-labelledby="latest-heading">
     <h2 class="panel-bar" id="latest-heading">Latest</h2>
     {% if latest.is_empty() %}
@@ -88,5 +96,6 @@
     {% endif %}
     <p class="panel-foot"><a href="/latest">All recent threads →</a></p>
   </aside>
+  {% endif %}
 </div>
 {% endblock %}

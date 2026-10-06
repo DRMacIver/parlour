@@ -84,6 +84,15 @@ struct IndexTemplate {
     latest: Vec<ThreadRow>,
 }
 
+impl IndexTemplate {
+    /// Whether to show the spaces and the latest threads: always to a
+    /// member, but to a visitor only if there is a space they could read,
+    /// so that a forum with nothing public shows them just its welcome.
+    fn shows_spaces(&self) -> bool {
+        self.layout.user.is_some() || self.front.any_spaces
+    }
+}
+
 pub async fn index(
     State(state): State<AppState>,
     viewer: Viewer,

@@ -449,6 +449,70 @@ async fn admins_edit_the_terms_and_privacy_pages(pool: PgPool) {
     );
 }
 
+/// Visitors who haven't logged in get a welcome on the front page, which
+/// admins write in Markdown beside the terms and privacy pages. Members
+/// don't see it.
+#[sqlx::test]
+async fn admins_write_the_welcome_visitors_see(pool: PgPool) {
+    let f = Forum::new(pool);
+    let sam = f.member("sam", "admin", None).await;
+    let ruth = f.member("ruth", "user", None).await;
+    let admin = f.session(sam).await;
+    let member = f.session(ruth).await;
+    // Until an admin writes one, visitors get the default.
+    let page = f.page("/").await;
+    assert!(page.contains("This forum is for its members."), "{page}");
+    assert!(page.contains("href=\"/login\""), "{page}");
+    let page = f.page_as("/", &member).await;
+    assert!(!page.contains("This forum is for its members."), "{page}");
+    let form = f.page_as("/admin/pages", &admin).await;
+    assert!(form.contains("name=\"welcome\""), "{form}");
+    assert!(form.contains("This forum is for its members."), "{form}");
+
+    let response = f
+        .submit(
+            "/admin/pages",
+            &[
+                ("welcome", "Come **in**. <script>x</script>"),
+                ("terms", ""),
+                ("privacy", ""),
+            ],
+            Some(&admin),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    // The cached front page changes straight away.
+    let page = f.page("/").await;
+    assert!(page.contains("Come <strong>in</strong>."), "{page}");
+    assert!(!page.contains("<script>x"), "{page}");
+    assert!(!page.contains("This forum is for its members."), "{page}");
+    assert!(!f.page_as("/", &member).await.contains("Come <strong>in"));
+    assert!(
+        f.page_as("/admin/pages", &admin)
+            .await
+            .contains("Come **in**.")
+    );
+    // With a space they can read, visitors get the welcome and the spaces.
+    f.space("games", "public", None, 0).await;
+    let page = f.page("/").await;
+    assert!(page.contains("Come <strong>in</strong>."), "{page}");
+    assert!(page.contains("href=\"/c/games\""), "{page}");
+    assert!(page.contains("latest-heading"), "{page}");
+
+    // An admin who clears it leaves visitors with no welcome at all.
+    let response = f
+        .submit(
+            "/admin/pages",
+            &[("welcome", " "), ("terms", ""), ("privacy", "")],
+            Some(&admin),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    let page = f.page("/").await;
+    assert!(!page.contains("class=\"panel welcome\""), "{page}");
+    assert!(!page.contains("Come <strong>in"), "{page}");
+}
+
 /// After deletion, nothing that identified the member is anywhere in the
 /// database except in what they posted.
 #[sqlx::test]
